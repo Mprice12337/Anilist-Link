@@ -1,0 +1,1 @@
+"""SQLite/aiosqlite connection management."""

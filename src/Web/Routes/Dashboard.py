@@ -1,0 +1,1 @@
+"""Dashboard and statistics endpoints."""

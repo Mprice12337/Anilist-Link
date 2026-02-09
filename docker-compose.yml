@@ -1,0 +1,39 @@
+services:
+  AnilistLink:
+    build: .
+    container_name: AnilistLink
+    restart: unless-stopped
+
+    # Binhex standard volume mappings
+    volumes:
+      - ./config:/config
+      - ./data:/data
+
+    # Binhex standard environment variables
+    environment:
+      # User/Group Management
+      - PUID=1000
+      - PGID=1000
+      - UMASK=002
+
+      # System Configuration
+      - TZ=America/New_York
+      - DEBUG=false
+
+      # Application Variables
+      - PLEX_URL=http://192.168.1.100:32400
+      - PLEX_TOKEN=your-plex-token
+      - JELLYFIN_URL=http://192.168.1.100:8096
+      - JELLYFIN_API_KEY=your-jellyfin-api-key
+      - ANILIST_CLIENT_ID=your-anilist-client-id
+      - ANILIST_CLIENT_SECRET=your-anilist-client-secret
+
+    ports:
+      - "9876:9876"
+
+    networks:
+      - AnilistNetwork
+
+networks:
+  AnilistNetwork:
+    driver: bridge
