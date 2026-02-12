@@ -4,6 +4,9 @@ services:
     container_name: AnilistLink
     restart: unless-stopped
 
+    # Shared memory for Chrome
+    shm_size: "2g"
+
     # Binhex standard volume mappings
     volumes:
       - ./config:/config
@@ -20,13 +23,28 @@ services:
       - TZ=America/New_York
       - DEBUG=false
 
-      # Application Variables
-      - PLEX_URL=http://192.168.1.100:32400
-      - PLEX_TOKEN=your-plex-token
-      - JELLYFIN_URL=http://192.168.1.100:8096
-      - JELLYFIN_API_KEY=your-jellyfin-api-key
+      # AniList OAuth2
       - ANILIST_CLIENT_ID=your-anilist-client-id
       - ANILIST_CLIENT_SECRET=your-anilist-client-secret
+
+      # Crunchyroll (optional)
+      - CRUNCHYROLL_EMAIL=
+      - CRUNCHYROLL_PASSWORD=
+      - HEADLESS_MODE=true
+      - MAX_PAGES=10
+      # - FLARESOLVERR_URL=http://flaresolverr:8191
+
+      # Plex (Phase 2)
+      - PLEX_URL=http://192.168.1.100:32400
+      - PLEX_TOKEN=your-plex-token
+
+      # Jellyfin (Phase 2)
+      - JELLYFIN_URL=http://192.168.1.100:8096
+      - JELLYFIN_API_KEY=your-jellyfin-api-key
+
+      # Scheduler
+      - SCAN_INTERVAL=24
+      - SYNC_INTERVAL=15
 
     ports:
       - "9876:9876"

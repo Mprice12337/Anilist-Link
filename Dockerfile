@@ -1,5 +1,8 @@
-# Multi-stage build for smaller image
-FROM python:3.11-alpine AS BuildStage
+# Multi-stage build for Anilist-Link
+# Using slim-bookworm for Chromium compatibility (required for Crunchyroll client)
+
+# ---- Build stage ----
+FROM python:3.11-slim-bookworm AS BuildStage
 
 WORKDIR /app
 
@@ -7,13 +10,29 @@ WORKDIR /app
 COPY pyproject.toml ./
 RUN pip install --no-cache-dir .
 
-# Then application code
-COPY src/ ./src/
-
-# Final stage
-FROM python:3.11-alpine
+# ---- Final stage ----
+FROM python:3.11-slim-bookworm
 
 WORKDIR /app
+
+# Install Chromium and chromedriver for Crunchyroll Selenium auth
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium chromium-driver \
+    fonts-liberation \
+    libnss3 \
+    libxss1 \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libgtk-3-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy installed Python packages from build stage
+COPY --from=BuildStage /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=BuildStage /usr/local/bin /usr/local/bin
+
+# Copy application code
+COPY src/ ./src/
+COPY pyproject.toml ./
 
 # Binhex standard volumes
 VOLUME ["/config", "/data"]
@@ -23,10 +42,9 @@ ENV PUID=99 \
     PGID=100 \
     UMASK=000 \
     TZ=UTC \
-    DEBUG=false
-
-# Copy application from build stage
-COPY --from=BuildStage /app .
+    DEBUG=false \
+    CHROME_BIN=/usr/bin/chromium \
+    CHROMEDRIVER_PATH=/usr/bin/chromedriver
 
 # Create standard directories
 RUN mkdir -p /config /data

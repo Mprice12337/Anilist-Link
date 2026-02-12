@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Anilist-Link{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <a href="/">Anilist-Link</a>
+        </div>
+        <div class="nav-links">
+            <a href="/">Dashboard</a>
+            <a href="/settings">Settings</a>
+            <a href="/api/status">API Status</a>
+        </div>
+    </nav>
+
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+        <p>Anilist-Link v{{ version | default("0.1.0") }}</p>
+    </footer>
+</body>
+</html>
