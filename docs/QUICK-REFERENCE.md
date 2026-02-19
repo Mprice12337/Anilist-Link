@@ -276,6 +276,55 @@ CMD ["python", "-m", "src.Main"]
 
 ---
 
+## Local Manual Testing
+
+### Starting the App
+```bash
+# Activate venv and run
+.venv/bin/python -m src.Main
+
+# Or with hot reload (development)
+.venv/bin/uvicorn src.Web.App:app --reload --port 9876
+```
+
+### Verifying Endpoints
+```bash
+# Dashboard
+curl -s -o /dev/null -w "%{http_code}" http://localhost:9876/
+# Expected: 200
+
+# Settings page
+curl -s -o /dev/null -w "%{http_code}" http://localhost:9876/settings
+# Expected: 200
+
+# API status
+curl -s http://localhost:9876/api/status | python3 -m json.tool
+# Expected: JSON with status, version, mapping_count, etc.
+
+# Plex scan preview (requires Plex configured, otherwise 303 redirect)
+curl -s -X POST -o /dev/null -w "%{http_code}" -H "Accept: text/html" http://localhost:9876/scan/plex/preview
+# Expected: 200 (Plex configured) or 303 (not configured)
+
+# Plex scan (no preview, background)
+curl -s -X POST -o /dev/null -w "%{http_code}" -H "Accept: text/html" http://localhost:9876/api/scan/plex
+# Expected: 303 redirect to dashboard with message
+
+# Static assets
+curl -s -o /dev/null -w "%{http_code}" http://localhost:9876/static/style.css
+# Expected: 200
+```
+
+### Testing Plex Scan Preview Flow
+1. Go to **Settings** (`http://localhost:9876/settings`)
+2. Enter Plex URL and Token, save
+3. Reload Settings — anime library checkboxes should appear under "Anime Libraries"
+4. Select desired libraries, save again
+5. Go to **Dashboard** (`http://localhost:9876/`)
+6. Click **Preview Scan** — should show matched/unmatched/skipped tables
+7. Click **Apply All** — writes metadata and redirects to dashboard with success message
+
+---
+
 ## Testing Best Practices
 
 ### Running Tests

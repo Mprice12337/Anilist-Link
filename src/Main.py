@@ -9,8 +9,11 @@ from dotenv import load_dotenv
 
 from src.Clients.AnilistClient import AniListClient
 from src.Clients.CrunchyrollClient import CrunchyrollClient
+from src.Clients.PlexClient import PlexClient
 from src.Database.Connection import DatabaseManager
 from src.Matching.TitleMatcher import TitleMatcher
+from src.Scanner.MetadataScanner import MetadataScanner
+from src.Scanner.SeriesGroupBuilder import SeriesGroupBuilder
 from src.Scheduler.Jobs import JobScheduler
 from src.Sync.WatchSyncer import WatchSyncer
 from src.Utils.Config import AppConfig, load_config, load_config_from_db_settings
@@ -59,6 +62,43 @@ async def crunchyroll_sync_task(
         await cr_client.cleanup()
 
 
+async def plex_metadata_scan_task(
+    config: AppConfig,
+    db: DatabaseManager,
+    anilist_client: AniListClient,
+    dry_run: bool = False,
+    library_keys: list[str] | None = None,
+) -> None:
+    """Run a single Plex metadata scan cycle."""
+    if not config.plex.url or not config.plex.token:
+        logger.debug("Plex scan skipped — no URL or token configured")
+        return
+
+    logger.info("Starting Plex metadata scan%s", " (DRY RUN)" if dry_run else "")
+    plex_client = PlexClient(url=config.plex.url, token=config.plex.token)
+    title_matcher = TitleMatcher(similarity_threshold=0.75)
+    group_builder = SeriesGroupBuilder(db, anilist_client)
+    scanner = MetadataScanner(
+        db,
+        anilist_client,
+        title_matcher,
+        plex_client,
+        config,
+        group_builder=group_builder,
+    )
+
+    # Use explicit library_keys if provided, else fall back to config
+    if library_keys is None and config.plex.anime_library_keys:
+        library_keys = list(config.plex.anime_library_keys)
+
+    try:
+        await scanner.run_scan(dry_run=dry_run, library_keys=library_keys)
+    except Exception:
+        logger.exception("Plex metadata scan error")
+    finally:
+        await plex_client.close()
+
+
 async def main() -> None:
     """Application startup sequence."""
     load_dotenv()
@@ -96,11 +136,26 @@ async def main() -> None:
     async def _cr_sync() -> None:
         await crunchyroll_sync_task(app.state.config, db, app.state.anilist_client)
 
-    scheduler.register_jobs(crunchyroll_sync_func=_cr_sync)
+    async def _plex_scan() -> None:
+        await plex_metadata_scan_task(app.state.config, db, app.state.anilist_client)
 
-    # Expose a callable for ad-hoc sync (used by dry-run endpoint)
+    scheduler.register_jobs(
+        crunchyroll_sync_func=_cr_sync,
+        plex_scan_func=_plex_scan,
+    )
+
+    # Expose callables for ad-hoc triggering (used by dry-run endpoints)
     app.state.cr_sync_task = lambda dry_run=False: crunchyroll_sync_task(
         app.state.config, db, app.state.anilist_client, dry_run=dry_run
+    )
+    app.state.plex_scan_task = (
+        lambda dry_run=False, library_keys=None: plex_metadata_scan_task(
+            app.state.config,
+            db,
+            app.state.anilist_client,
+            dry_run=dry_run,
+            library_keys=library_keys,
+        )
     )
 
     # Start uvicorn

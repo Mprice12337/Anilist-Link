@@ -14,6 +14,22 @@
         <h2>{{ group_name }}</h2>
         {% if group_name == "AniList" %}
         <p class="text-muted hint">Set your AniList app's redirect URL to: <code>{{ anilist_callback_url }}</code></p>
+        {% elif group_name == "Library Restructuring" %}
+        <p class="text-muted hint">Map Plex's file paths to local paths (e.g. Plex sees <code>/data/anime</code>, local is <code>/mnt/media/anime</code>). Leave blank if paths are the same.</p>
+        {% elif group_name == "Naming Templates" %}
+        <p class="text-muted hint">Customize how files and folders are named during restructuring. Use tokens like <code>{title}</code>, <code>{year}</code>, <code>{season}</code>, <code>{episode}</code>, <code>{quality}</code>.</p>
+        <div class="naming-presets" style="margin-bottom:1rem">
+            <span class="text-muted" style="font-size:0.85rem;margin-right:0.5rem">Presets:</span>
+            {% for preset_name, preset in naming_presets.items() %}
+            <button type="button" class="btn btn-secondary btn-sm naming-preset-btn"
+                    data-file="{{ preset.file }}"
+                    data-folder="{{ preset.folder }}"
+                    data-season="{{ preset.season_folder }}"
+                    style="margin-right:0.25rem;margin-bottom:0.25rem;padding:0.25rem 0.6rem;font-size:0.8rem">
+                {{ preset_name.replace('_', ' ').title() }}
+            </button>
+            {% endfor %}
+        </div>
         {% endif %}
         <div class="form-grid">
             {% for key, label, input_type in fields %}
@@ -25,7 +41,33 @@
                     {% endif %}
                 </label>
 
-                {% if input_type == "checkbox" %}
+                {% if input_type == "plex_library_select" %}
+                {% if plex_libraries %}
+                <div class="library-checkboxes">
+                    {% for lib in plex_libraries %}
+                    <label class="toggle">
+                        <input type="checkbox" name="{{ key }}" value="{{ lib.key }}"
+                               {% if lib.key in selected_library_keys %}checked{% endif %}>
+                        <span class="toggle-label">{{ lib.title }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <span class="text-muted" style="font-size:0.85rem">Save a Plex URL and Token first, then reload to see libraries.</span>
+                {% endif %}
+
+                {% elif input_type == "select" %}
+                <select name="{{ key }}" id="{{ key }}"
+                        {% if key in env_overrides %}disabled{% endif %}>
+                    {% if key == "app.title_display" %}
+                    <option value="romaji" {% if display.get(key, "romaji") == "romaji" %}selected{% endif %}>Romaji</option>
+                    <option value="english" {% if display.get(key) == "english" %}selected{% endif %}>English</option>
+                    <option value="both_romaji_primary" {% if display.get(key) == "both_romaji_primary" %}selected{% endif %}>Both (Romaji primary)</option>
+                    <option value="both_english_primary" {% if display.get(key) == "both_english_primary" %}selected{% endif %}>Both (English primary)</option>
+                    {% endif %}
+                </select>
+
+                {% elif input_type == "checkbox" %}
                 <label class="toggle">
                     <input type="checkbox" name="{{ key }}" id="{{ key }}"
                            {% if display.get(key, "false") in ("true", "1", "yes") %}checked{% endif %}
@@ -49,11 +91,38 @@
                 {% else %}
                 <input type="{{ input_type }}" name="{{ key }}" id="{{ key }}"
                        value="{{ display.get(key, '') }}"
-                       {% if key in env_overrides %}disabled{% endif %}>
+                       {% if key in env_overrides %}disabled{% endif %}
+                       {% if group_name == "Naming Templates" %}class="naming-input"{% endif %}>
                 {% endif %}
             </div>
             {% endfor %}
         </div>
+        {% if group_name == "Naming Templates" %}
+        <div class="naming-preview" style="margin-top:1rem;padding:0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius)">
+            <div class="text-muted" style="font-size:0.8rem;margin-bottom:0.5rem">Preview</div>
+            <div style="font-size:0.85rem">
+                <div><span class="text-muted">Folder:</span> <code id="naming-preview-folder"></code></div>
+                <div><span class="text-muted">Season:</span> <code id="naming-preview-season"></code></div>
+                <div><span class="text-muted">File:</span> <code id="naming-preview-file"></code></div>
+            </div>
+        </div>
+        <details style="margin-top:0.75rem">
+            <summary class="text-muted" style="font-size:0.85rem;cursor:pointer">Available tokens</summary>
+            <div style="margin-top:0.5rem;font-size:0.8rem;columns:2;column-gap:2rem">
+                <div><code>{title}</code> — Display title</div>
+                <div><code>{title.romaji}</code> — Romaji title</div>
+                <div><code>{title.english}</code> — English title</div>
+                <div><code>{year}</code> — Year (e.g. 2013)</div>
+                <div><code>{season}</code> — Season number (zero-padded)</div>
+                <div><code>{episode}</code> — Episode number (zero-padded)</div>
+                <div><code>{episode.title}</code> — Episode title (future)</div>
+                <div><code>{quality}</code> — Full quality (e.g. 1080p BluRay x265)</div>
+                <div><code>{quality.resolution}</code> — Resolution only</div>
+                <div><code>{quality.source}</code> — Source only</div>
+                <div><code>{season.name}</code> — Season AniList title</div>
+            </div>
+        </details>
+        {% endif %}
     </div>
     {% endfor %}
 
@@ -62,4 +131,72 @@
         <a href="/" class="btn btn-secondary">Cancel</a>
     </div>
 </form>
+
+<script>
+(function() {
+    var sampleTokens = {
+        'title': 'Attack on Titan',
+        'title.romaji': 'Shingeki no Kyojin',
+        'title.english': 'Attack on Titan',
+        'year': '2013',
+        'season': '01',
+        'episode': '05',
+        'episode.title': '',
+        'quality': '1080p BluRay x265',
+        'quality.resolution': '1080p',
+        'quality.source': 'BluRay',
+        'season.name': 'Shingeki no Kyojin Season 2'
+    };
+
+    function renderTemplate(template, tokens) {
+        var result = template.replace(/\{([a-z]+(?:\.[a-z]+)?)\}/g, function(m, key) {
+            return tokens[key] || '';
+        });
+        // Clean empty brackets/parens
+        result = result.replace(/\[\s*\]/g, '').replace(/\(\s*\)/g, '');
+        // Collapse repeated separators
+        result = result.replace(/(\s*-\s*){2,}/g, ' - ');
+        result = result.replace(/\.{2,}/g, '.');
+        result = result.replace(/ {2,}/g, ' ');
+        // Strip trailing/leading separators
+        result = result.replace(/[\s.\-]+$/, '').replace(/^[\s.\-]+/, '');
+        return result.trim();
+    }
+
+    function updatePreview() {
+        var fileEl = document.getElementById('naming.file_template');
+        var folderEl = document.getElementById('naming.folder_template');
+        var seasonEl = document.getElementById('naming.season_folder_template');
+        if (!fileEl || !folderEl || !seasonEl) return;
+
+        var pFile = document.getElementById('naming-preview-file');
+        var pFolder = document.getElementById('naming-preview-folder');
+        var pSeason = document.getElementById('naming-preview-season');
+        if (pFile) pFile.textContent = renderTemplate(fileEl.value, sampleTokens) + '.mkv';
+        if (pFolder) pFolder.textContent = renderTemplate(folderEl.value, sampleTokens);
+        if (pSeason) pSeason.textContent = renderTemplate(seasonEl.value, sampleTokens);
+    }
+
+    // Bind input events
+    document.querySelectorAll('.naming-input').forEach(function(el) {
+        el.addEventListener('input', updatePreview);
+    });
+
+    // Preset buttons
+    document.querySelectorAll('.naming-preset-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var fileEl = document.getElementById('naming.file_template');
+            var folderEl = document.getElementById('naming.folder_template');
+            var seasonEl = document.getElementById('naming.season_folder_template');
+            if (fileEl) fileEl.value = btn.dataset.file;
+            if (folderEl) folderEl.value = btn.dataset.folder;
+            if (seasonEl) seasonEl.value = btn.dataset.season;
+            updatePreview();
+        });
+    });
+
+    // Initial render
+    updatePreview();
+})();
+</script>
 {% endblock %}

@@ -20,8 +20,33 @@ class MediaMapping:
     match_confidence: float = 0.0
     match_method: str = ""  # "fuzzy", "manual", "exact"
     media_type: str = "ANIME"
+    series_group_id: int | None = None
+    season_number: int | None = None
     created_at: str = ""
     updated_at: str = ""
+
+
+@dataclass
+class SeriesGroup:
+    id: int = 0
+    root_anilist_id: int = 0
+    display_title: str = ""
+    entry_count: int = 0
+    created_at: str = ""
+    updated_at: str = ""
+
+
+@dataclass
+class SeriesGroupEntry:
+    id: int = 0
+    group_id: int = 0
+    anilist_id: int = 0
+    season_order: int = 0
+    display_title: str = ""
+    format: str = ""
+    episodes: int | None = None
+    start_date: str = ""
+    created_at: str = ""
 
 
 @dataclass
@@ -57,8 +82,35 @@ class AniListCache:
     description: str = ""
     genres: str = ""  # JSON array stored as string
     status: str = ""
+    year: int = 0
     cached_at: str = ""
     expires_at: str = ""
+
+
+@dataclass
+class PlexMedia:
+    rating_key: str = ""
+    title: str = ""
+    year: int | None = None
+    thumb: str = ""
+    summary: str = ""
+    library_key: str = ""
+    library_title: str = ""
+    folder_name: str = ""
+    added_at: str = ""
+    updated_at: str = ""
+
+
+@dataclass
+class RestructureLogEntry:
+    id: int = 0
+    group_title: str = ""
+    source_path: str = ""
+    destination_path: str = ""
+    operation: str = "move"
+    status: str = "success"
+    error_message: str = ""
+    executed_at: str = ""
 
 
 @dataclass
@@ -135,6 +187,7 @@ TABLES: dict[str, str] = {
             description TEXT NOT NULL DEFAULT '',
             genres TEXT NOT NULL DEFAULT '[]',
             status TEXT NOT NULL DEFAULT '',
+            year INTEGER NOT NULL DEFAULT 0,
             cached_at TEXT NOT NULL DEFAULT (datetime('now')),
             expires_at TEXT NOT NULL DEFAULT (datetime('now', '+7 days'))
         )
@@ -169,6 +222,57 @@ TABLES: dict[str, str] = {
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
     """,
+    "plex_media": """
+        CREATE TABLE IF NOT EXISTS plex_media (
+            rating_key TEXT NOT NULL UNIQUE,
+            title TEXT NOT NULL DEFAULT '',
+            year INTEGER,
+            thumb TEXT NOT NULL DEFAULT '',
+            summary TEXT NOT NULL DEFAULT '',
+            library_key TEXT NOT NULL DEFAULT '',
+            library_title TEXT NOT NULL DEFAULT '',
+            folder_name TEXT NOT NULL DEFAULT '',
+            added_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """,
+    "series_groups": """
+        CREATE TABLE IF NOT EXISTS series_groups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            root_anilist_id INTEGER NOT NULL UNIQUE,
+            display_title TEXT NOT NULL DEFAULT '',
+            entry_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """,
+    "restructure_log": """
+        CREATE TABLE IF NOT EXISTS restructure_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_title TEXT NOT NULL DEFAULT '',
+            source_path TEXT NOT NULL DEFAULT '',
+            destination_path TEXT NOT NULL DEFAULT '',
+            operation TEXT NOT NULL DEFAULT 'move',
+            status TEXT NOT NULL DEFAULT 'success',
+            error_message TEXT NOT NULL DEFAULT '',
+            executed_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """,
+    "series_group_entries": """
+        CREATE TABLE IF NOT EXISTS series_group_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            anilist_id INTEGER NOT NULL,
+            season_order INTEGER NOT NULL DEFAULT 0,
+            display_title TEXT NOT NULL DEFAULT '',
+            format TEXT NOT NULL DEFAULT '',
+            episodes INTEGER,
+            start_date TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (group_id) REFERENCES series_groups(id) ON DELETE CASCADE,
+            UNIQUE(group_id, anilist_id)
+        )
+    """,
 }
 
 INDEXES: list[str] = [
@@ -179,4 +283,5 @@ INDEXES: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_media_mappings_anilist"
     " ON media_mappings(anilist_id)",
     "CREATE INDEX IF NOT EXISTS idx_users_service ON users(service)",
+    "CREATE INDEX IF NOT EXISTS idx_plex_media_library" " ON plex_media(library_key)",
 ]

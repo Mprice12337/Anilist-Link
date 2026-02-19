@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %}Library Restructure — Anilist-Link{% endblock %}
+
+{% block content %}
+<h1>Library Restructuring Wizard</h1>
+
+<div class="card">
+    <h2>What this does</h2>
+    <p>This wizard helps organize your anime library using AniList data. You can rename folders
+       to match AniList titles, standardize episode filenames, or consolidate split series into
+       a single multi-season folder.</p>
+    <p class="text-muted" style="margin-top: 0.5rem; font-size: 0.85rem">
+        For Plex mode, shows must already be matched to AniList (via the Plex Scan).
+        For Local mode, folders are automatically matched by title.
+    </p>
+</div>
+
+{% if request.query_params.get('error') %}
+<div class="alert alert-danger">{{ request.query_params.get('error') }}</div>
+{% endif %}
+
+<form method="post" action="/restructure/analyze">
+    <div class="card">
+        <h2>Source</h2>
+        <div class="library-checkboxes">
+            <label class="toggle">
+                <input type="radio" name="source_mode" value="local" checked onchange="toggleSource()">
+                <span class="toggle-label"><strong>Local Directory</strong><br>
+                <span class="text-muted" style="font-size: 0.85rem">Scan a local folder directly. Each subfolder is treated as one show and matched to AniList.</span></span>
+            </label>
+            <label class="toggle">
+                <input type="radio" name="source_mode" value="plex" {% if not plex_configured %}disabled{% endif %} onchange="toggleSource()">
+                <span class="toggle-label"><strong>Plex Library</strong>
+                {% if not plex_configured %}<span class="text-muted" style="font-size: 0.85rem"> (not configured — <a href="/settings">set up Plex</a>)</span>{% endif %}<br>
+                <span class="text-muted" style="font-size: 0.85rem">Use shows from your Plex libraries. Requires existing AniList matches from a Plex Scan.</span></span>
+            </label>
+        </div>
+    </div>
+
+    <!-- Local Directory Options -->
+    <div id="local-options" class="card">
+        <h2>Directory Path</h2>
+        <div class="form-group">
+            <label for="local_directory">Anime library root folder</label>
+            <input type="text" id="local_directory" name="local_directory" placeholder="/path/to/anime" style="width: 100%">
+            <p class="text-muted" style="font-size: 0.85rem; margin-top: 0.5rem">
+                Each immediate subfolder will be treated as a separate show.
+            </p>
+        </div>
+    </div>
+
+    <!-- Plex Options -->
+    <div id="plex-options" style="display: none">
+        <div class="card">
+            <h2>Path Mapping</h2>
+            <p class="text-muted hint">
+                Plex reports file paths from its own perspective. If the paths differ from how this app
+                sees them, configure the mapping below (or set it in <a href="/settings">Settings</a>).
+            </p>
+            <div class="form-grid" style="margin-bottom: 1rem">
+                <div class="form-group">
+                    <label>Plex path prefix</label>
+                    <input type="text" value="{{ plex_prefix }}" disabled>
+                </div>
+                <div class="form-group">
+                    <label>Local path prefix</label>
+                    <input type="text" value="{{ local_prefix }}" disabled>
+                </div>
+            </div>
+            {% if not plex_prefix and not local_prefix %}
+            <p class="text-muted" style="font-size: 0.85rem">
+                No path mapping configured. If Plex and this app see the same filesystem paths, this is fine.
+                Otherwise, configure the mapping in <a href="/settings">Settings</a>.
+            </p>
+            {% endif %}
+        </div>
+
+        <div class="card">
+            <h2>Select Libraries</h2>
+            {% if plex_libraries %}
+            <div class="library-checkboxes">
+                {% for lib in plex_libraries %}
+                <label class="toggle">
+                    <input type="checkbox" name="library_key" value="{{ lib.key }}">
+                    <span class="toggle-label">{{ lib.title }}</span>
+                </label>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-muted">No libraries found.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Operation Level</h2>
+        <div class="library-checkboxes">
+            <label class="toggle">
+                <input type="radio" name="operation_level" value="folder_rename" checked>
+                <span class="toggle-label"><strong>Level 1 — Folder Rename</strong><br>
+                <span class="text-muted" style="font-size: 0.85rem">Rename show folders to match AniList titles. No file changes, no merging.</span></span>
+            </label>
+            <label class="toggle">
+                <input type="radio" name="operation_level" value="folder_file_rename">
+                <span class="toggle-label"><strong>Level 2 — Folder + File Rename</strong><br>
+                <span class="text-muted" style="font-size: 0.85rem">Rename folders AND episode files to standardized format (e.g., "Show Title - S01E01.mkv"). No merging.</span></span>
+            </label>
+            <label class="toggle">
+                <input type="radio" name="operation_level" value="full_restructure">
+                <span class="toggle-label"><strong>Level 3 — Full Restructure</strong><br>
+                <span class="text-muted" style="font-size: 0.85rem">Consolidate split folders into a single multi-season structure. Only applies to series groups with 2+ entries.</span></span>
+            </label>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Options</h2>
+        <label class="toggle">
+            <input type="checkbox" name="force_rescan" value="on">
+            <span class="toggle-label"><strong>Force Re-scan</strong><br>
+            <span class="text-muted" style="font-size: 0.85rem">Ignore cached AniList matches and re-match every folder from scratch. Use this after fixing matching issues or if previous scan results were incorrect.</span></span>
+        </label>
+    </div>
+
+    <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Analyze Library</button>
+        <a href="/" class="btn btn-secondary">Cancel</a>
+    </div>
+</form>
+
+<script>
+function toggleSource() {
+    var mode = document.querySelector('input[name="source_mode"]:checked').value;
+    document.getElementById('local-options').style.display = mode === 'local' ? '' : 'none';
+    document.getElementById('plex-options').style.display = mode === 'plex' ? '' : 'none';
+}
+// Initialize on page load
+toggleSource();
+</script>
+{% endblock %}

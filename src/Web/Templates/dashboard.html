@@ -97,4 +97,31 @@
         <button type="submit" class="btn btn-secondary">Dry Run</button>
     </form>
 </section>
+
+{% if plex_configured %}
+<section class="card">
+    <h2>Plex Metadata</h2>
+    <p>Scan your Plex show libraries, match titles to AniList, and apply metadata (descriptions, genres, posters, ratings).</p>
+    <form method="post" action="/scan/plex/preview">
+        {% if plex_libraries %}
+        <div class="form-group" style="margin-bottom:1rem">
+            <label>Libraries to scan:</label>
+            <div class="library-checkboxes">
+                {% for lib in plex_libraries %}
+                <label class="toggle">
+                    <input type="checkbox" name="library_key" value="{{ lib.key }}"
+                           {% if lib.key in selected_library_keys or not selected_library_keys %}checked{% endif %}>
+                    <span class="toggle-label">{{ lib.title }} ({{ lib.item_count }} items)</span>
+                </label>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+        <div class="form-actions" style="margin-bottom:0">
+            <button type="submit" class="btn btn-primary">Preview Scan</button>
+            <button type="submit" formaction="/api/scan/plex" class="btn btn-secondary">Scan (no preview)</button>
+        </div>
+    </form>
+</section>
+{% endif %}
 {% endblock %}

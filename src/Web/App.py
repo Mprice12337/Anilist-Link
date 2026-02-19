@@ -65,10 +65,16 @@ def create_app(
     # Register routers
     from src.Web.Routes.Auth import router as auth_router
     from src.Web.Routes.Dashboard import router as dashboard_router
+    from src.Web.Routes.PlexLibrary import router as plex_library_router
+    from src.Web.Routes.PlexScan import router as plex_scan_router
+    from src.Web.Routes.Restructure import router as restructure_router
     from src.Web.Routes.Settings import router as settings_router
 
     app.include_router(auth_router)
     app.include_router(dashboard_router)
+    app.include_router(plex_library_router)
+    app.include_router(plex_scan_router)
+    app.include_router(restructure_router)
     app.include_router(settings_router)
 
     return app

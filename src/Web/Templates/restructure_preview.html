@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}Restructure Preview — Anilist-Link{% endblock %}
+
+{% block content %}
+{% if operation_level == "folder_rename" %}
+<h1>Folder Rename Preview</h1>
+{% elif operation_level == "folder_file_rename" %}
+<h1>Folder + File Rename Preview</h1>
+{% else %}
+<h1>Restructure Preview</h1>
+{% endif %}
+
+{% if request.query_params.get('error') %}
+<div class="alert alert-danger">{{ request.query_params.get('error') }}</div>
+{% endif %}
+
+{% if plan.total_groups == 0 %}
+<div class="card">
+    {% if operation_level == "full_restructure" %}
+    <h2>No restructuring needed</h2>
+    <p>No Structure A series groups with multiple Plex shows were found. Your library
+       is already organized, or the shows have not been matched to AniList yet.</p>
+    {% else %}
+    <h2>No renaming needed</h2>
+    <p>All matched show folders already match their AniList titles, or no matched shows were found.</p>
+    {% endif %}
+    <div class="form-actions">
+        <a href="/restructure" class="btn btn-secondary">Back to Wizard</a>
+        <a href="/" class="btn btn-secondary">Dashboard</a>
+    </div>
+</div>
+{% else %}
+
+<div class="card">
+    <h2>Summary</h2>
+    {% if operation_level == "folder_rename" %}
+    <p>Found <strong>{{ plan.total_groups }}</strong> folder{{ "s" if plan.total_groups != 1 else "" }}
+       to rename. Select the ones you want to rename.</p>
+    {% elif operation_level == "folder_file_rename" %}
+    <p>Found <strong>{{ plan.total_groups }}</strong> show{{ "s" if plan.total_groups != 1 else "" }}
+       to rename with <strong>{{ plan.total_files }}</strong> file{{ "s" if plan.total_files != 1 else "" }} to standardize.
+       Select the shows you want to rename.</p>
+    {% else %}
+    <p>Found <strong>{{ plan.total_groups }}</strong> series group{{ "s" if plan.total_groups != 1 else "" }}
+       with <strong>{{ plan.total_files }}</strong> total files to move.
+       Select the groups you want to restructure.</p>
+    {% endif %}
+</div>
+
+<form method="post" action="/restructure/execute">
+    {% for group in plan.groups %}
+    <div class="card restructure-group">
+        <div class="restructure-group-header">
+            <label class="toggle">
+                <input type="checkbox" name="group_key" value="{{ group.group_key }}" checked>
+                <span class="toggle-label restructure-group-title">{{ group.display_title }}</span>
+            </label>
+            {% if operation_level == "full_restructure" %}
+            <span class="badge badge-muted">{{ group.season_count }} seasons</span>
+            <span class="badge badge-muted">{{ group.file_moves | length }} files</span>
+            {% elif operation_level == "folder_file_rename" %}
+            <span class="badge badge-muted">{{ group.file_moves | length }} file{{ "s" if group.file_moves | length != 1 else "" }}</span>
+            {% endif %}
+        </div>
+
+        <div class="restructure-paths">
+            {% if operation_level == "full_restructure" %}
+            <div class="restructure-path-section">
+                <span class="restructure-path-label">Source folders:</span>
+                {% for folder in group.source_folders %}
+                <code class="restructure-path">{{ folder }}</code>
+                {% endfor %}
+            </div>
+            <div class="restructure-path-section">
+                <span class="restructure-path-label">Target folder:</span>
+                <code class="restructure-path">{{ group.target_folder }}</code>
+            </div>
+            {% else %}
+            <div class="restructure-path-section">
+                <span class="restructure-path-label">Current folder:</span>
+                <code class="restructure-path">{{ group.current_folder }}</code>
+            </div>
+            <div class="restructure-path-section">
+                <span class="restructure-path-label">New folder name:</span>
+                <code class="restructure-path">{{ group.display_title }}</code>
+            </div>
+            {% endif %}
+        </div>
+
+        {% if group.warnings %}
+        <div class="restructure-warnings">
+            {% for w in group.warnings %}
+            <p class="restructure-warning">{{ w }}</p>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if group.file_moves %}
+        <details class="restructure-details">
+            <summary class="text-muted">Show file changes ({{ group.file_moves | length }})</summary>
+            <table class="table" style="margin-top: 0.5rem">
+                <thead>
+                    <tr>
+                        <th>Original</th>
+                        <th>Renamed</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for fm in group.file_moves %}
+                    <tr>
+                        <td><code>{{ fm.original_filename }}</code></td>
+                        <td>
+                            {% if fm.original_filename != fm.renamed_filename %}
+                            <code>{{ fm.renamed_filename }}</code>
+                            {% else %}
+                            <span class="text-muted">{{ fm.renamed_filename }}</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </details>
+        {% endif %}
+    </div>
+    {% endfor %}
+
+    <div class="form-actions">
+        {% if operation_level == "folder_rename" %}
+        <button type="submit" class="btn btn-primary"
+                onclick="return confirm('This will rename folders on disk. Are you sure?')">
+            Rename Folders
+        </button>
+        {% elif operation_level == "folder_file_rename" %}
+        <button type="submit" class="btn btn-primary"
+                onclick="return confirm('This will rename folders and files on disk. Are you sure?')">
+            Rename Folders + Files
+        </button>
+        {% else %}
+        <button type="submit" class="btn btn-primary"
+                onclick="return confirm('This will move files on disk. Are you sure?')">
+            Execute Restructuring
+        </button>
+        {% endif %}
+        <a href="/restructure" class="btn btn-secondary">Cancel</a>
+    </div>
+</form>
+{% endif %}
+{% endblock %}

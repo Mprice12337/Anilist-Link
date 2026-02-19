@@ -4,16 +4,28 @@
 
 ## Project Overview
 
-**Anilist-Link** is a self-hosted Docker container that serves as a centralized bridge between AniList and multiple media platforms (Crunchyroll, Plex, Jellyfin). It syncs watch progress to AniList and acts as an AniList-powered metadata provider for Plex and Jellyfin libraries. The project consolidates and expands the existing Crunchyroll-Anilist-Sync container into a unified, multi-platform service.
+**Anilist-Link** is a self-hosted Docker container that connects AniList with media platforms (Plex, Jellyfin, Crunchyroll) and download managers (Sonarr, Radarr). It delivers four distinct functional pillars, each addressing a different aspect of anime library management. The project consolidates and expands the existing Crunchyroll-Anilist-Sync container into a unified, multi-platform service.
+
+### The 4 Pillars
+
+| # | Pillar | Summary | Priority |
+|---|--------|---------|----------|
+| 2 | **File Organization** | Rename/reorganize anime files into standardized structure using AniList data | 1st |
+| 3 | **Metadata from AniList** | Write AniList metadata (titles, descriptions, posters, genres, ratings) to Plex/Jellyfin | 2nd |
+| 1 | **Watch Status Sync** | Sync watch progress between Crunchyroll/Plex/Jellyfin and AniList | 3rd |
+| 4 | **Download Management** | Send add requests to Sonarr/Radarr with AniList alternative titles | 4th |
+
+Implementation order: **P2 → P3 → P1 → P4**
 
 ### Key Features
-- Sync watch progress from Crunchyroll, Plex, and Jellyfin to AniList
-- Serve as an AniList-powered metadata provider for Plex and Jellyfin anime libraries (titles, descriptions, cover art, genres, ratings, studios, staff)
-- Per-user AniList account linking via OAuth2
-- Web-based configuration dashboard for managing connections, mappings, and sync status
+- **P2 — File Organization**: Library restructure wizard (analyze → preview → execute), series group-aware file renaming
+- **P3 — Metadata**: Full scan/match/apply pipeline for Plex, library browser with mapping management, AniList metadata writing (titles, summaries, posters, genres, ratings)
+- **P1 — Watch Sync**: Crunchyroll→AniList sync with smart pagination and status transitions (Plex/Jellyfin sync planned)
+- **P4 — Downloads**: Sonarr/Radarr integration for add requests with AniList alt titles (planned)
+- **Shared**: AniList OAuth2 account linking, series group builder, fuzzy title matching, web dashboard with GUI settings
 
 ### Project Context
-- **Stage**: MVP (Phase 1 — Foundation & Crunchyroll Merge)
+- **Stage**: Pillar-based development — P2 and P3 partially implemented, P1 Crunchyroll sync done, P4 planned
 - **Team Size**: Solo
 - **Priority Focus**: Functionality first, then polish
 
@@ -187,13 +199,19 @@ Move to `/docs` when:
 ## Core Architecture
 
 ### Primary Models/Components
-- **AniList Client**: GraphQL client with OAuth2 flow, rate limiting (90 req/min), public queries, and authenticated mutations
-- **Plex Client**: Library enumeration, metadata writing, per-user watch tracking via Plex.tv API
-- **Jellyfin Client**: Library access, metadata writing, watch status tracking via open API
-- **Crunchyroll Client**: Reverse-engineered auth + watch history retrieval with session persistence
-- **Title Matching Engine**: rapidfuzz-based multi-algorithm fuzzy matching with anime-specific normalization
-- **Metadata Scanner**: Orchestrates scan → match → cache → apply pipeline across media libraries
-- **Watch Syncer**: Bidirectional watch sync with automatic status transitions (PLANNING → CURRENT → COMPLETED)
+- **AniList Client**: GraphQL client with OAuth2 flow, rate limiting (90 req/min), public queries, and authenticated mutations [implemented]
+- **Plex Client**: Library enumeration, metadata writing, per-user watch tracking via Plex.tv API [implemented]
+- **Jellyfin Client**: Library access, metadata writing, watch status tracking via open API [stub — P3]
+- **Crunchyroll Client**: Reverse-engineered auth + watch history retrieval with session persistence [implemented]
+- **Sonarr Client**: Sonarr API v3 integration for add series requests [planned — P4]
+- **Radarr Client**: Radarr API v3 integration for add movie requests [planned — P4]
+- **Title Matching Engine**: rapidfuzz-based multi-algorithm fuzzy matching with anime-specific normalization [implemented]
+- **Metadata Scanner**: Orchestrates scan → match → cache → apply pipeline across Plex libraries [implemented]
+- **Series Group Builder**: BFS traversal of AniList SEQUEL/PREQUEL graph to build series groups [implemented]
+- **Library Restructurer**: Analyzes and reorganizes Plex library files into Structure A [implemented]
+- **Watch Syncer**: Crunchyroll→AniList watch sync with status transitions (PLANNING → CURRENT → COMPLETED) [implemented]
+- **Plex Watch Syncer**: Plex→AniList watch sync via polling/webhooks [planned — P1]
+- **Download Manager**: Orchestrates AniList→Sonarr/Radarr add requests [planned — P4]
 
 ### Design Patterns Used
 - **Pipeline Pattern**: Metadata Scanner uses scan → match → cache → apply pipeline
@@ -201,8 +219,18 @@ Move to `/docs` when:
 - **Observer Pattern**: Webhook handlers for real-time sync from Plex/Jellyfin
 - **Repository Pattern**: Database layer abstracts SQLite operations behind clean interfaces
 
-### Data Flow
-User configures connections via Web Dashboard → Scheduler triggers periodic scan → Metadata Scanner enumerates media library items → Title Matching Engine matches items to AniList entries → AniList Client fetches metadata → Scanner writes metadata back to Plex/Jellyfin → Watch Syncer detects progress changes → AniList Client updates watch status per linked user
+### Data Flow (Per Pillar)
+- **P2 (File Organization)**: User selects Plex library → Restructurer analyzes shows → matches to AniList → builds series groups → generates move plan → user previews → executes file moves → triggers Plex refresh
+- **P3 (Metadata)**: Scanner enumerates Plex shows → Title Matcher finds AniList entries → Series Group Builder walks relation graph → AniList metadata cached → metadata written to Plex (show + season level)
+- **P1 (Watch Sync)**: Scheduler triggers periodic sync → Crunchyroll watch history fetched → episodes matched to AniList entries → status updated per linked user (Plex/Jellyfin polling + webhooks planned)
+- **P4 (Downloads)**: User selects AniList entry → resolve to TVDB/TMDB IDs → send add request to Sonarr/Radarr with alt titles (planned)
+
+See `ARCHITECTURE.md` for detailed per-pillar architecture.
+
+### Media Mapping Model
+- **Series Group**: Collection of AniList entries linked by SEQUEL/PREQUEL relations, sorted chronologically. Represents one logical "show."
+- **Season Mapping**: Each entry in a series group maps to a Plex season, using the entry's AniList title as the season display name.
+- **Structure Adaptation**: Scanner auto-detects three Plex file structures (split folders, multi-season, absolute numbering) and maps accordingly. See `ARCHITECTURE.md` Section 8 for details.
 
 ---
 
@@ -311,17 +339,33 @@ Application-specific variables:
 - `JELLYFIN_API_KEY` - Jellyfin API key
 - `ANILIST_CLIENT_ID` - AniList OAuth2 application client ID
 - `ANILIST_CLIENT_SECRET` - AniList OAuth2 application client secret
+- `SONARR_URL` - Sonarr server URL (e.g., `http://192.168.1.100:8989`) [P4]
+- `SONARR_API_KEY` - Sonarr API key [P4]
+- `RADARR_URL` - Radarr server URL (e.g., `http://192.168.1.100:7878`) [P4]
+- `RADARR_API_KEY` - Radarr API key [P4]
 
 ---
 
 ## Database
 
-### Schema Overview
-- `media_mappings` - Maps media server library items to AniList IDs with confidence scores, match method, and cached metadata
-- `users` - Plex/Jellyfin users linked to AniList accounts with OAuth tokens
+### Schema Overview (v6)
+Current tables:
+- `media_mappings` - Maps media server library items to AniList IDs with confidence scores, match method, and optional series group reference
+- `users` - Linked AniList accounts with OAuth tokens
 - `sync_state` - Per-user, per-item sync tracking (last synced episode, timestamp, status)
-- `anilist_cache` - Cached AniList metadata with TTL for reducing API calls
+- `anilist_cache` - Cached AniList metadata with 7-day TTL
 - `manual_overrides` - User-specified title-to-AniList-ID overrides
+- `cr_session_cache` - Crunchyroll auth session persistence (30-day TTL)
+- `app_settings` - GUI-managed configuration (encrypted secrets in DB)
+- `plex_media` - Persistent Plex library item snapshot
+- `series_groups` - Groups of AniList entries connected by SEQUEL/PREQUEL relations
+- `series_group_entries` - Individual entries within a series group, ordered chronologically
+- `restructure_log` - File move operation audit trail
+
+Planned tables:
+- `plex_users` - Per-user Plex tokens for watch tracking (P1)
+- `jellyfin_users` - Per-user Jellyfin credentials (P1)
+- `download_requests` - Sonarr/Radarr request tracking (P4)
 
 ### Migration Strategy
 - Schema migrations handled via versioned SQL scripts in `src/Database/Migrations.py`
@@ -343,12 +387,18 @@ Application-specific variables:
 - **Key Endpoints**:
   - `GET /` - Dashboard home page
   - `GET /api/status` - System status and sync statistics
-  - `POST /api/scan` - Trigger manual metadata scan
-  - `POST /api/sync` - Trigger manual watch sync
-  - `GET /api/mappings` - List all media-to-AniList mappings
-  - `PUT /api/mappings/{id}` - Override a mapping manually
+  - `GET /settings` - GUI configuration page
+  - `POST /api/sync` - Trigger manual Crunchyroll watch sync
   - `GET /auth/anilist` - Initiate AniList OAuth2 flow
   - `GET /auth/anilist/callback` - AniList OAuth2 callback handler
+  - `GET /plex` - Plex library browser with mapping management
+  - `POST /plex/scan/preview` - Preview metadata scan for a library
+  - `POST /plex/scan/live` - Execute live metadata scan
+  - `POST /plex/apply-all` - Apply AniList metadata to all matched items
+  - `GET /restructure` - File restructure wizard
+  - `POST /restructure/analyze` - Begin library analysis for restructure
+  - `POST /restructure/execute` - Execute approved file moves
+  - `GET /api/scan/plex/search` - AniList title search for manual rematch
 
 ---
 
@@ -357,12 +407,16 @@ Application-specific variables:
 ### Job System: APScheduler
 
 #### Key Job Categories
-- **Metadata Scan**: Periodic scan of configured media libraries, matching to AniList entries, and metadata application
-- **Watch Sync**: Periodic check for watch progress changes and sync to AniList
+- **Crunchyroll Watch Sync**: Periodic Crunchyroll→AniList watch sync [implemented]
+- **Plex Metadata Scan**: Periodic scan of Plex libraries, matching to AniList, metadata application [triggered manually via UI]
+- **Plex Watch Sync**: Periodic Plex→AniList watch sync [planned — P1]
+- **Jellyfin Metadata Scan**: Periodic Jellyfin library scan [planned — P3]
+- **Jellyfin Watch Sync**: Periodic Jellyfin→AniList watch sync [planned — P1]
 
 #### Important Job Classes
-- `MetadataScanJob` - Runs at configurable interval (default: daily), scans all configured libraries
-- `WatchSyncJob` - Runs at configurable interval (default: every 15 minutes), checks for watch progress updates
+- `crunchyroll_sync` - Scheduled Crunchyroll watch sync at configurable interval [implemented]
+- `plex_metadata_scan` - Plex library scan and metadata application [planned for scheduling]
+- `plex_watch_sync` - Plex watch progress polling [planned — P1]
 
 ---
 
@@ -403,6 +457,10 @@ All containers support these consistent environment variables:
 - `JELLYFIN_API_KEY` - Jellyfin API key
 - `ANILIST_CLIENT_ID` - AniList OAuth2 client ID
 - `ANILIST_CLIENT_SECRET` - AniList OAuth2 client secret
+- `SONARR_URL` - Sonarr server URL [P4]
+- `SONARR_API_KEY` - Sonarr API key [P4]
+- `RADARR_URL` - Radarr server URL [P4]
+- `RADARR_API_KEY` - Radarr API key [P4]
 
 #### Standard Logging
 - **Process Manager**: Supervisord (manages all container processes)
@@ -587,9 +645,28 @@ alias alstop='docker-compose down'           # Stop Anilist-Link
 3. **Plex multi-user tokens**: Per-user tracking requires obtaining individual tokens via Plex.tv API, not just the server admin token.
 
 ### Technical Debt
-- Crunchyroll client needs ongoing maintenance as the unofficial API changes
-- Season-to-AniList-ID relation graph traversal not yet implemented
+**P2 — File Organization**:
+- Rename-only mode not yet implemented (currently only full restructure)
+- Operation level selection not yet in restructure wizard
+
+**P3 — Metadata**:
+- Staff/credits writing to Plex not yet implemented
+- Jellyfin client is a stub (only module docstring)
+- Plex GUID parsing for high-confidence AniDB/TVDB→AniList mapping — not yet implemented
+- Mappings.py route file is a stub (no endpoints for manual override management)
+
+**P1 — Watch Sync**:
+- Plex watch sync (polling + webhook) not yet implemented
+- Jellyfin watch sync not yet implemented
+- AniList backfill syncer (AniList→media server) not yet implemented
 - AniList token auto-refresh not yet wired up
+- `plex_users` and `jellyfin_users` tables not yet created
+
+**P4 — Downloads**:
+- Entire pillar not yet started (Sonarr/Radarr clients, DownloadManager, UI, DB table)
+
+**General**:
+- Crunchyroll client needs ongoing maintenance as the unofficial API changes
 
 ---
 
@@ -600,6 +677,8 @@ alias alstop='docker-compose down'           # Stop Anilist-Link
 - **AniList API Docs**: https://anilist.gitbook.io/anilist-apiv2-docs
 - **Plex API**: https://github.com/Arcanemagus/plex-api/wiki
 - **Jellyfin API**: https://api.jellyfin.org/
+- **Sonarr API**: https://sonarr.tv/docs/api/
+- **Radarr API**: https://radarr.video/docs/api/
 - **rapidfuzz Docs**: https://rapidfuzz.github.io/RapidFuzz/
 
 ---

@@ -13,12 +13,14 @@
         </div>
         <div class="nav-links">
             <a href="/">Dashboard</a>
+            <a href="/plex">Plex</a>
+            <a href="/restructure">Restructure</a>
             <a href="/settings">Settings</a>
             <a href="/api/status">API Status</a>
         </div>
     </nav>
 
-    <main class="container">
+    <main class="{% block container_class %}container{% endblock %}">
         {% block content %}{% endblock %}
     </main>
 

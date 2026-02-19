@@ -82,17 +82,22 @@ class DatabaseManager:
         match_confidence: float = 0.0,
         match_method: str = "",
         media_type: str = "ANIME",
+        series_group_id: int | None = None,
+        season_number: int | None = None,
     ) -> int:
         cursor = await self.execute(
             """INSERT INTO media_mappings
                    (source, source_id, source_title, anilist_id, anilist_title,
-                    match_confidence, match_method, media_type)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    match_confidence, match_method, media_type,
+                    series_group_id, season_number)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(source, source_id) DO UPDATE SET
                    anilist_id=excluded.anilist_id,
                    anilist_title=excluded.anilist_title,
                    match_confidence=excluded.match_confidence,
                    match_method=excluded.match_method,
+                   series_group_id=excluded.series_group_id,
+                   season_number=excluded.season_number,
                    updated_at=datetime('now')
             """,
             (
@@ -104,6 +109,8 @@ class DatabaseManager:
                 match_confidence,
                 match_method,
                 media_type,
+                series_group_id,
+                season_number,
             ),
         )
         return cursor.lastrowid or 0
@@ -228,12 +235,13 @@ class DatabaseManager:
         description: str = "",
         genres: str = "[]",
         status: str = "",
+        year: int = 0,
     ) -> None:
         await self.execute(
             """INSERT INTO anilist_cache
                    (anilist_id, title_romaji, title_english, title_native,
-                    episodes, cover_image, description, genres, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    episodes, cover_image, description, genres, status, year)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(anilist_id) DO UPDATE SET
                    title_romaji=excluded.title_romaji,
                    title_english=excluded.title_english,
@@ -243,6 +251,7 @@ class DatabaseManager:
                    description=excluded.description,
                    genres=excluded.genres,
                    status=excluded.status,
+                   year=excluded.year,
                    cached_at=datetime('now'),
                    expires_at=datetime('now', '+7 days')
             """,
@@ -256,6 +265,7 @@ class DatabaseManager:
                 description,
                 genres,
                 status,
+                year,
             ),
         )
 
@@ -362,3 +372,275 @@ class DatabaseManager:
             r["key"]: {"value": r["value"], "is_secret": bool(r["is_secret"])}
             for r in rows
         }
+
+    # ------------------------------------------------------------------
+    # Series Groups
+    # ------------------------------------------------------------------
+
+    async def upsert_series_group(
+        self,
+        root_anilist_id: int,
+        display_title: str,
+        entry_count: int,
+    ) -> int:
+        """Insert or update a series group. Returns the group id."""
+        cursor = await self.execute(
+            """INSERT INTO series_groups
+                   (root_anilist_id, display_title, entry_count)
+               VALUES (?, ?, ?)
+               ON CONFLICT(root_anilist_id) DO UPDATE SET
+                   display_title=excluded.display_title,
+                   entry_count=excluded.entry_count,
+                   updated_at=datetime('now')
+            """,
+            (root_anilist_id, display_title, entry_count),
+        )
+        # ON CONFLICT UPDATE does not set lastrowid; fetch the id explicitly
+        row = await self.fetch_one(
+            "SELECT id FROM series_groups WHERE root_anilist_id=?",
+            (root_anilist_id,),
+        )
+        return row["id"] if row else (cursor.lastrowid or 0)
+
+    async def get_series_group_by_root(
+        self, root_anilist_id: int
+    ) -> dict[str, Any] | None:
+        """Return a series group by its root AniList ID."""
+        return await self.fetch_one(
+            "SELECT * FROM series_groups WHERE root_anilist_id=?",
+            (root_anilist_id,),
+        )
+
+    async def get_series_group_by_anilist_id(
+        self, anilist_id: int
+    ) -> dict[str, Any] | None:
+        """Return the series group that contains a given AniList ID."""
+        return await self.fetch_one(
+            """SELECT sg.* FROM series_groups sg
+               JOIN series_group_entries sge ON sge.group_id = sg.id
+               WHERE sge.anilist_id = ?""",
+            (anilist_id,),
+        )
+
+    async def is_series_group_fresh(
+        self, root_anilist_id: int, max_age_hours: int = 168
+    ) -> bool:
+        """Check if a series group was updated within max_age_hours."""
+        row = await self.fetch_one(
+            """SELECT updated_at FROM series_groups
+               WHERE root_anilist_id = ?
+               AND updated_at > datetime('now', ? || ' hours')""",
+            (root_anilist_id, f"-{max_age_hours}"),
+        )
+        return row is not None
+
+    async def upsert_series_group_entry(
+        self,
+        group_id: int,
+        anilist_id: int,
+        season_order: int,
+        display_title: str = "",
+        format: str = "",
+        episodes: int | None = None,
+        start_date: str = "",
+    ) -> None:
+        """Insert or update a single entry in a series group."""
+        await self.execute(
+            """INSERT INTO series_group_entries
+                   (group_id, anilist_id, season_order, display_title,
+                    format, episodes, start_date)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(group_id, anilist_id) DO UPDATE SET
+                   season_order=excluded.season_order,
+                   display_title=excluded.display_title,
+                   format=excluded.format,
+                   episodes=excluded.episodes,
+                   start_date=excluded.start_date
+            """,
+            (
+                group_id,
+                anilist_id,
+                season_order,
+                display_title,
+                format,
+                episodes,
+                start_date,
+            ),
+        )
+
+    async def get_series_group_entries(self, group_id: int) -> list[dict[str, Any]]:
+        """Return all entries in a series group, ordered by season_order."""
+        return await self.fetch_all(
+            "SELECT * FROM series_group_entries WHERE group_id=? ORDER BY season_order",
+            (group_id,),
+        )
+
+    async def clear_series_group_entries(self, group_id: int) -> None:
+        """Delete all entries for a series group (before re-populating)."""
+        await self.execute(
+            "DELETE FROM series_group_entries WHERE group_id=?",
+            (group_id,),
+        )
+
+    # ------------------------------------------------------------------
+    # Plex Media
+    # ------------------------------------------------------------------
+
+    async def upsert_plex_media(
+        self,
+        rating_key: str,
+        title: str,
+        year: int | None,
+        thumb: str,
+        summary: str,
+        library_key: str,
+        library_title: str,
+        folder_name: str,
+    ) -> None:
+        """Insert or update a Plex media entry."""
+        await self.execute(
+            """INSERT INTO plex_media
+                   (rating_key, title, year, thumb, summary,
+                    library_key, library_title, folder_name)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(rating_key) DO UPDATE SET
+                   title=excluded.title,
+                   year=excluded.year,
+                   thumb=excluded.thumb,
+                   summary=excluded.summary,
+                   library_key=excluded.library_key,
+                   library_title=excluded.library_title,
+                   folder_name=excluded.folder_name,
+                   updated_at=datetime('now')
+            """,
+            (
+                rating_key,
+                title,
+                year,
+                thumb,
+                summary,
+                library_key,
+                library_title,
+                folder_name,
+            ),
+        )
+
+    async def get_plex_media_with_mappings(
+        self, library_key: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Return plex_media LEFT JOINed with media_mappings and anilist_cache."""
+        sql = """
+            SELECT
+                pm.rating_key, pm.title AS plex_title, pm.year AS plex_year,
+                pm.thumb, pm.summary, pm.library_key, pm.library_title,
+                pm.folder_name,
+                mm.anilist_id, mm.match_confidence, mm.match_method,
+                ac.title_romaji, ac.title_english, ac.cover_image
+            FROM plex_media pm
+            LEFT JOIN media_mappings mm
+                ON mm.source = 'plex' AND mm.source_id = pm.rating_key
+            LEFT JOIN anilist_cache ac
+                ON ac.anilist_id = mm.anilist_id
+                AND ac.expires_at > datetime('now')
+        """
+        params: tuple[Any, ...] = ()
+        if library_key:
+            sql += " WHERE pm.library_key = ?"
+            params = (library_key,)
+        sql += " ORDER BY pm.title COLLATE NOCASE"
+        return await self.fetch_all(sql, params)
+
+    async def get_plex_media_count(self) -> int:
+        """Return the total number of plex_media rows."""
+        row = await self.fetch_one("SELECT COUNT(*) as cnt FROM plex_media")
+        return row["cnt"] if row else 0
+
+    async def delete_mapping_by_source(self, source: str, source_id: str) -> None:
+        """Delete a media_mappings row by source and source_id."""
+        await self.execute(
+            "DELETE FROM media_mappings WHERE source=? AND source_id=?",
+            (source, source_id),
+        )
+
+    # ------------------------------------------------------------------
+    # Restructure Log
+    # ------------------------------------------------------------------
+
+    async def log_restructure_operation(
+        self,
+        group_title: str,
+        source_path: str,
+        destination_path: str,
+        operation: str = "move",
+        status: str = "success",
+        error_message: str = "",
+    ) -> None:
+        """Log a single file restructure operation."""
+        await self.execute(
+            """INSERT INTO restructure_log
+                   (group_title, source_path, destination_path,
+                    operation, status, error_message)
+               VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                group_title,
+                source_path,
+                destination_path,
+                operation,
+                status,
+                error_message,
+            ),
+        )
+
+    async def get_restructure_log(self, limit: int = 200) -> list[dict[str, Any]]:
+        """Return recent restructure log entries."""
+        return await self.fetch_all(
+            "SELECT * FROM restructure_log ORDER BY executed_at DESC LIMIT ?",
+            (limit,),
+        )
+
+    async def delete_plex_media_by_rating_key(self, rating_key: str) -> None:
+        """Delete a single plex_media row and its media_mappings."""
+        await self.db.execute(
+            "DELETE FROM media_mappings WHERE source='plex'"
+            " AND (source_id=? OR source_id LIKE ?)",
+            (rating_key, f"{rating_key}:S%"),
+        )
+        await self.db.execute(
+            "DELETE FROM plex_media WHERE rating_key=?",
+            (rating_key,),
+        )
+        await self.db.commit()
+
+    async def delete_plex_library_data(self, library_key: str) -> int:
+        """Delete all plex_media and associated media_mappings for a library.
+
+        Returns the number of plex_media rows deleted.
+        sync_state rows cascade-delete via FK on media_mappings.
+        """
+        # Get all rating_keys for this library
+        rows = await self.fetch_all(
+            "SELECT rating_key FROM plex_media WHERE library_key=?",
+            (library_key,),
+        )
+        rating_keys = [r["rating_key"] for r in rows]
+        if not rating_keys:
+            return 0
+
+        # Delete media_mappings for these shows (including Structure B
+        # season-level mappings like "12345:S2")
+        for rk in rating_keys:
+            await self.db.execute(
+                "DELETE FROM media_mappings WHERE source='plex'"
+                " AND (source_id=? OR source_id LIKE ?)",
+                (rk, f"{rk}:S%"),
+            )
+
+        # Delete plex_media rows
+        await self.db.execute(
+            "DELETE FROM plex_media WHERE library_key=?",
+            (library_key,),
+        )
+
+        await self.db.commit()
+        return len(rating_keys)

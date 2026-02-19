@@ -40,8 +40,19 @@ class TitleMatcher:
         target_title: str,
         candidates: list[dict[str, Any]],
         target_season: int = 1,
+        year_hint: int = 0,
+        include_all_formats: bool = False,
     ) -> tuple[dict[str, Any], float, int] | None:
         """Find the best AniList match for *target_title* with season awareness.
+
+        When *year_hint* is provided (e.g. extracted from ``[2022]`` in folder
+        name), candidates whose ``seasonYear`` matches get a +0.15 boost while
+        those off by 2+ years get a -0.1 penalty.  This helps disambiguate
+        multi-season entries like "Uzaki-chan S1 [2020]" vs "S2 [2022]".
+
+        When *include_all_formats* is True, MOVIE/OVA/ONA/SPECIAL formats are
+        not filtered out.  Use this for local directory scanning where any
+        format may appear as a folder.
 
         Returns ``(matched_entry, similarity, detected_season)`` or ``None``.
         """
@@ -57,7 +68,7 @@ class TitleMatcher:
 
         for candidate in candidates:
             format_type = (candidate.get("format", "") or "").upper()
-            if format_type in self.MOVIE_FORMATS:
+            if not include_all_formats and format_type in self.MOVIE_FORMATS:
                 continue
 
             similarity = self.calculate_title_similarity(target_title, candidate)
@@ -65,6 +76,19 @@ class TitleMatcher:
 
             if detected_season == target_season:
                 similarity += 0.1
+
+            # Year-based disambiguation
+            if year_hint:
+                candidate_year = candidate.get("seasonYear") or (
+                    (candidate.get("startDate") or {}).get("year") or 0
+                )
+                if candidate_year:
+                    if candidate_year == year_hint:
+                        similarity += 0.15
+                    elif abs(candidate_year - year_hint) == 1:
+                        pass  # close enough, no adjustment
+                    else:
+                        similarity -= 0.1
 
             if similarity > best_similarity and similarity >= self.similarity_threshold:
                 best_similarity = similarity

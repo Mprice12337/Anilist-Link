@@ -1,0 +1,371 @@
+{% extends "base.html" %}
+{% block title %}Plex Library — Anilist-Link{% endblock %}
+{% block container_class %}container-wide{% endblock %}
+
+{# ── Title rendering macro ── #}
+{% macro render_title(item, title_display) %}
+{% set romaji = item.title_romaji or "" %}
+{% set english = item.title_english or "" %}
+{% set plex = item.plex_title or "" %}
+{% if title_display == "english" %}
+    <span class="title-romaji">{{ english or romaji or plex }}</span>
+{% elif title_display == "both_romaji_primary" %}
+    <span class="title-romaji">{{ romaji or plex }}</span>
+    {% if english and english != (romaji or plex) %}
+    <span class="title-english">{{ english }}</span>
+    {% endif %}
+{% elif title_display == "both_english_primary" %}
+    <span class="title-romaji">{{ english or romaji or plex }}</span>
+    {% if romaji and romaji != (english or plex) %}
+    <span class="title-english">{{ romaji }}</span>
+    {% endif %}
+{% else %}{# romaji (default) #}
+    <span class="title-romaji">{{ romaji or plex }}</span>
+{% endif %}
+{% endmacro %}
+
+{% block content %}
+<h1>Plex Library</h1>
+
+{% if message %}
+<div class="alert alert-success">{{ message | replace("+", " ") }}</div>
+{% endif %}
+{% if error %}
+<div class="alert alert-danger">{{ error | replace("+", " ") }}</div>
+{% endif %}
+
+{# ── Action Bar ── #}
+<div class="card action-bar">
+    <div class="action-bar-row">
+        <span class="action-bar-label">Scan</span>
+        <form method="post" action="/plex/scan/preview" style="display:inline">
+            {% for lib in plex_libraries %}
+            {% if not anime_library_keys or lib.key in anime_library_keys %}
+            <input type="hidden" name="library_key" value="{{ lib.key }}">
+            {% endif %}
+            {% endfor %}
+            <button type="submit" class="btn btn-primary btn-sm" {% if not plex_configured %}disabled{% endif %}>Preview Scan</button>
+        </form>
+        <form method="post" action="/plex/scan/live" style="display:inline">
+            {% for lib in plex_libraries %}
+            {% if not anime_library_keys or lib.key in anime_library_keys %}
+            <input type="hidden" name="library_key" value="{{ lib.key }}">
+            {% endif %}
+            {% endfor %}
+            <button type="submit" class="btn btn-sm btn-secondary" {% if not plex_configured %}disabled{% endif %}>Live Scan</button>
+        </form>
+        {% if has_scan_results %}
+        <a href="/plex/scan/results" class="btn btn-sm btn-secondary">View Last Results</a>
+        {% endif %}
+        {% if scan_in_progress %}
+        <a href="/plex/scan/progress" class="btn btn-sm btn-secondary">Scan In Progress...</a>
+        {% endif %}
+    </div>
+    <div class="action-bar-row">
+        <span class="action-bar-label">Apply to Plex</span>
+        <form method="post" action="/plex/apply-all" style="display:inline">
+            <button type="submit" class="btn btn-primary btn-sm"
+                    {% if not plex_configured or matched_count == 0 %}disabled{% endif %}>
+                Apply All Matched ({{ matched_count }} item{{ "s" if matched_count != 1 else "" }})
+            </button>
+        </form>
+    </div>
+    {% if not plex_configured %}
+    <p class="text-muted" style="margin-top:0.5rem;font-size:0.85rem">Plex is not configured. <a href="/settings">Go to Settings</a>.</p>
+    {% endif %}
+</div>
+
+{% if items %}
+<div class="card library-toolbar">
+    <div class="toolbar-left">
+        <form method="get" action="/plex" class="library-filter-form">
+            <select name="library" onchange="this.form.submit()">
+                <option value="">All Libraries</option>
+                {% for lib in plex_libraries %}
+                <option value="{{ lib.key }}" {% if selected_library == lib.key %}selected{% endif %}>{{ lib.title }}</option>
+                {% endfor %}
+            </select>
+        </form>
+        <span class="text-muted">{{ item_count }} item{{ "s" if item_count != 1 else "" }}</span>
+        {% if selected_library %}
+        <form method="post" action="/plex/remove-library" style="display:inline" onsubmit="return confirm('Remove all {{ item_count }} items from this library?\n\nThis will delete all scanned media and their AniList mappings for this library. This cannot be undone.')">
+            <input type="hidden" name="library_key" value="{{ selected_library }}">
+            <button type="submit" class="btn btn-sm btn-danger">Remove Library</button>
+        </form>
+        {% endif %}
+    </div>
+    <div class="toolbar-right">
+        <button class="btn btn-sm view-toggle" data-view="grid" title="Grid view">&#9638;</button>
+        <button class="btn btn-sm view-toggle" data-view="list" title="List view">&#9776;</button>
+    </div>
+</div>
+
+<!-- Grid View -->
+<div class="library-grid" id="view-grid">
+    {% for item in items %}
+    <div class="library-card {% if item.anilist_id %}matched{% else %}unmatched{% endif %}"
+         data-rating-key="{{ item.rating_key }}"
+         data-plex-title="{{ item.plex_title }}"
+         data-anilist-id="{{ item.anilist_id or '' }}"
+         data-folder-name="{{ item.folder_name or '' }}">
+        <div class="library-card-poster">
+            {% if item.anilist_id and item.cover_image %}
+            <img src="{{ item.cover_image }}" alt="{{ item.plex_title }}" loading="lazy">
+            {% elif item.thumb %}
+            <img src="/api/plex/thumb?path={{ item.thumb }}" alt="{{ item.plex_title }}" loading="lazy">
+            {% else %}
+            <div class="poster-placeholder"></div>
+            {% endif %}
+            <span class="badge {% if item.anilist_id %}badge-success{% else %}badge-warning{% endif %} library-card-badge">
+                {{ "Matched" if item.anilist_id else "Unmatched" }}
+            </span>
+            <div class="library-card-actions">
+                <button class="btn btn-sm btn-primary" onclick="openEditModal(this.closest('.library-card'))">
+                    {{ "Edit" if item.anilist_id else "Match" }}
+                </button>
+                {% if item.anilist_id %}
+                <button class="btn btn-sm btn-secondary library-card-apply" onclick="applySingle('{{ item.rating_key }}', this)">
+                    Apply
+                </button>
+                {% endif %}
+            </div>
+        </div>
+        <div class="library-card-info">
+            {% if item.anilist_id %}
+            {{ render_title(item, title_display) }}
+            {% else %}
+            <span class="title-romaji">{{ item.plex_title }}</span>
+            {% endif %}
+            {% if item.folder_name and item.folder_name != item.plex_title %}
+            <span class="library-card-folder">{{ item.folder_name }}</span>
+            {% endif %}
+            {% if item.plex_year %}<span class="library-card-year">{{ item.plex_year }}</span>{% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- List View -->
+<div class="library-list" id="view-list" style="display:none">
+    {% for item in items %}
+    <div class="library-list-row {% if item.anilist_id %}matched{% else %}unmatched{% endif %}"
+         data-rating-key="{{ item.rating_key }}"
+         data-plex-title="{{ item.plex_title }}"
+         data-anilist-id="{{ item.anilist_id or '' }}"
+         data-folder-name="{{ item.folder_name or '' }}">
+        {% if item.anilist_id and item.cover_image %}
+        <img class="library-list-poster" src="{{ item.cover_image }}" alt="" loading="lazy">
+        {% elif item.thumb %}
+        <img class="library-list-poster" src="/api/plex/thumb?path={{ item.thumb }}" alt="" loading="lazy">
+        {% else %}
+        <div class="library-list-poster poster-placeholder"></div>
+        {% endif %}
+        <div class="library-list-info">
+            {% if item.anilist_id %}
+            {{ render_title(item, title_display) }}
+            {% else %}
+            <span class="title-romaji">{{ item.plex_title }}</span>
+            {% endif %}
+            {% if item.folder_name and item.folder_name != item.plex_title %}
+            <span class="library-card-folder">{{ item.folder_name }}</span>
+            {% endif %}
+            {% if item.plex_year %}<span class="library-card-year">{{ item.plex_year }}</span>{% endif %}
+        </div>
+        <span class="badge {% if item.anilist_id %}badge-success{% else %}badge-warning{% endif %}">
+            {{ "Matched" if item.anilist_id else "Unmatched" }}
+        </span>
+        {% if item.anilist_id %}
+        <button class="btn btn-sm btn-secondary" onclick="applySingle('{{ item.rating_key }}', this)">Apply</button>
+        {% endif %}
+        <button class="btn btn-sm btn-primary" onclick="openEditModal(this.closest('.library-list-row'))">
+            {{ "Edit" if item.anilist_id else "Match" }}
+        </button>
+    </div>
+    {% endfor %}
+</div>
+
+{% else %}
+<div class="card">
+    {% if plex_configured %}
+    <p class="text-muted">No Plex media found. Use the scan buttons above to populate your library.</p>
+    {% else %}
+    <p class="text-muted">Plex is not configured. <a href="/settings">Go to Settings</a> to add your Plex server.</p>
+    {% endif %}
+</div>
+{% endif %}
+
+<!-- Edit Match Modal -->
+<div class="modal" id="editModal" style="display:none">
+    <div class="modal-backdrop" onclick="closeEditModal()"></div>
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="editModalTitle">Edit Match</h3>
+            <div id="editModalFolder" class="text-muted" style="font-size:0.85rem"></div>
+            <button class="modal-close" onclick="closeEditModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="search-bar">
+                <input type="text" id="editSearchInput" placeholder="Search AniList...">
+                <button class="btn btn-primary btn-sm" onclick="doEditSearch()">Search</button>
+            </div>
+            <div id="editSearchResults"></div>
+            <div id="editRemoveSection" style="display:none; margin-top:1rem; border-top:1px solid var(--border); padding-top:1rem;">
+                <button class="btn btn-danger btn-sm" onclick="removeMatch()">Remove Match</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// View toggle
+const viewGrid = document.getElementById('view-grid');
+const viewList = document.getElementById('view-list');
+const toggleBtns = document.querySelectorAll('.view-toggle');
+
+function setView(view) {
+    if (view === 'list') {
+        viewGrid.style.display = 'none';
+        viewList.style.display = '';
+    } else {
+        viewGrid.style.display = '';
+        viewList.style.display = 'none';
+    }
+    toggleBtns.forEach(b => b.classList.toggle('active', b.dataset.view === view));
+    localStorage.setItem('plex_library_view', view);
+}
+
+toggleBtns.forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
+setView(localStorage.getItem('plex_library_view') || 'grid');
+
+// Edit Modal
+let currentRatingKey = '';
+let currentPlexTitle = '';
+let currentAnilistId = '';
+
+function openEditModal(el) {
+    currentRatingKey = el.dataset.ratingKey;
+    currentPlexTitle = el.dataset.plexTitle;
+    currentAnilistId = el.dataset.anilistId || '';
+    const folderName = el.dataset.folderName || '';
+    document.getElementById('editModalTitle').textContent = currentPlexTitle;
+    const folderEl = document.getElementById('editModalFolder');
+    if (folderName && folderName !== currentPlexTitle) {
+        folderEl.textContent = folderName;
+        folderEl.style.display = '';
+    } else {
+        folderEl.style.display = 'none';
+    }
+    document.getElementById('editSearchInput').value = currentPlexTitle;
+    document.getElementById('editSearchResults').innerHTML = '';
+    document.getElementById('editRemoveSection').style.display = currentAnilistId ? '' : 'none';
+    document.getElementById('editModal').style.display = '';
+    doEditSearch();
+}
+
+function closeEditModal() {
+    document.getElementById('editModal').style.display = 'none';
+}
+
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeEditModal();
+});
+
+document.getElementById('editSearchInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); doEditSearch(); }
+});
+
+async function doEditSearch() {
+    const q = document.getElementById('editSearchInput').value.trim();
+    if (!q) return;
+    const container = document.getElementById('editSearchResults');
+    container.innerHTML = '<p class="text-muted">Searching...</p>';
+    try {
+        const resp = await fetch('/api/scan/plex/search?q=' + encodeURIComponent(q));
+        const data = await resp.json();
+        if (!data.length) {
+            container.innerHTML = '<p class="text-muted">No results found.</p>';
+            return;
+        }
+        container.innerHTML = data.map(r => `
+            <div class="search-result">
+                ${r.cover_image
+                    ? `<img class="search-result-cover" src="${r.cover_image}" alt="">`
+                    : `<div class="search-result-cover-placeholder"></div>`}
+                <div class="search-result-info">
+                    <div class="title-romaji">${r.title_romaji || ''}</div>
+                    ${r.title_english ? `<div class="title-english">${r.title_english}</div>` : ''}
+                    <div class="search-result-meta text-muted">
+                        ${[r.season, r.year, r.format, r.episodes ? r.episodes + ' ep' : ''].filter(Boolean).join(' · ')}
+                    </div>
+                </div>
+                <button class="btn btn-sm btn-primary" onclick="selectMatch(${r.id})">Select</button>
+            </div>
+        `).join('');
+    } catch (err) {
+        container.innerHTML = '<p class="text-muted">Search failed.</p>';
+    }
+}
+
+async function selectMatch(anilistId) {
+    try {
+        const resp = await fetch('/plex/update-match', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                rating_key: currentRatingKey,
+                anilist_id: anilistId,
+                plex_title: currentPlexTitle,
+            }),
+        });
+        if (resp.ok) location.reload();
+    } catch (err) {
+        alert('Failed to save match.');
+    }
+}
+
+async function removeMatch() {
+    try {
+        const resp = await fetch('/plex/remove-match', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({rating_key: currentRatingKey}),
+        });
+        if (resp.ok) location.reload();
+    } catch (err) {
+        alert('Failed to remove match.');
+    }
+}
+
+// Apply single item
+async function applySingle(ratingKey, btn) {
+    const origText = btn.textContent;
+    btn.textContent = '...';
+    btn.disabled = true;
+    try {
+        const resp = await fetch('/plex/apply-single', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({rating_key: ratingKey}),
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            btn.textContent = 'Applied!';
+            btn.classList.remove('btn-secondary');
+            btn.classList.add('btn-primary');
+            setTimeout(() => {
+                btn.textContent = 'Apply';
+                btn.classList.remove('btn-primary');
+                btn.classList.add('btn-secondary');
+                btn.disabled = false;
+            }, 2000);
+        } else {
+            btn.textContent = 'Error';
+            setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 2000);
+        }
+    } catch (err) {
+        btn.textContent = 'Error';
+        setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 2000);
+    }
+}
+</script>
+{% endblock %}

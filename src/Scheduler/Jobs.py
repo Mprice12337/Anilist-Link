@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 JOB_CRUNCHYROLL_SYNC = "crunchyroll_sync"
 JOB_METADATA_SCAN = "metadata_scan"
+JOB_PLEX_METADATA_SCAN = "plex_metadata_scan"
 JOB_WATCH_SYNC = "watch_sync"
 
 
@@ -31,6 +32,7 @@ class JobScheduler:
         crunchyroll_sync_func: Callable[[], Awaitable[None]] | None = None,
         metadata_scan_func: Callable[[], Awaitable[None]] | None = None,
         watch_sync_func: Callable[[], Awaitable[None]] | None = None,
+        plex_scan_func: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """Register job callables with configured intervals."""
         if crunchyroll_sync_func:
@@ -75,6 +77,20 @@ class JobScheduler:
                 self._config.sync_interval_minutes,
             )
 
+        if plex_scan_func:
+            self._scheduler.add_job(
+                plex_scan_func,
+                trigger=IntervalTrigger(hours=self._config.scan_interval_hours),
+                id=JOB_PLEX_METADATA_SCAN,
+                name="Plex Metadata Scan",
+                replace_existing=True,
+            )
+            logger.info(
+                "Registered %s job (every %d hr)",
+                JOB_PLEX_METADATA_SCAN,
+                self._config.scan_interval_hours,
+            )
+
     def start(self) -> None:
         if not self._scheduler.running:
             self._scheduler.start()
@@ -109,16 +125,17 @@ class JobScheduler:
                     )
 
         if new_config.scan_interval_hours != old.scan_interval_hours:
-            job = self._scheduler.get_job(JOB_METADATA_SCAN)
-            if job:
-                job.reschedule(
-                    trigger=IntervalTrigger(hours=new_config.scan_interval_hours)
-                )
-                logger.info(
-                    "Rescheduled %s to every %d hr",
-                    JOB_METADATA_SCAN,
-                    new_config.scan_interval_hours,
-                )
+            for job_id in (JOB_METADATA_SCAN, JOB_PLEX_METADATA_SCAN):
+                job = self._scheduler.get_job(job_id)
+                if job:
+                    job.reschedule(
+                        trigger=IntervalTrigger(hours=new_config.scan_interval_hours)
+                    )
+                    logger.info(
+                        "Rescheduled %s to every %d hr",
+                        job_id,
+                        new_config.scan_interval_hours,
+                    )
 
     def trigger_job(self, job_id: str) -> bool:
         """Manually trigger a job by ID. Returns True if the job exists."""

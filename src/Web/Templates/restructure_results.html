@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Restructure Results — Anilist-Link{% endblock %}
+
+{% block content %}
+{% if operation_level == "folder_rename" %}
+<h1>Folder Rename Results</h1>
+{% elif operation_level == "folder_file_rename" %}
+<h1>Rename Results</h1>
+{% else %}
+<h1>Restructure Results</h1>
+{% endif %}
+
+<div class="card">
+    <h2>Summary</h2>
+    <div class="stats-grid">
+        <div class="stat">
+            <span class="stat-value">{{ stats.groups }}</span>
+            {% if operation_level == "folder_rename" %}
+            <span class="stat-label">Folders Renamed</span>
+            {% elif operation_level == "folder_file_rename" %}
+            <span class="stat-label">Shows Renamed</span>
+            {% else %}
+            <span class="stat-label">Groups Restructured</span>
+            {% endif %}
+        </div>
+        <div class="stat">
+            <span class="stat-value">{{ stats.files_moved }}</span>
+            {% if operation_level == "folder_rename" %}
+            <span class="stat-label">—</span>
+            {% elif operation_level == "folder_file_rename" %}
+            <span class="stat-label">Files Renamed</span>
+            {% else %}
+            <span class="stat-label">Files Moved</span>
+            {% endif %}
+        </div>
+        <div class="stat">
+            <span class="stat-value">{{ stats.errors }}</span>
+            <span class="stat-label">Errors</span>
+        </div>
+    </div>
+</div>
+
+{% if plan %}
+<div class="card">
+    <h2>Per-Group Results</h2>
+    {% for group in plan.groups %}
+    {% if group.enabled %}
+    <div class="restructure-result-item">
+        <span class="restructure-group-title">{{ group.display_title }}</span>
+        {% if operation_level == "folder_rename" %}
+        <span class="text-muted"> — folder renamed</span>
+        {% elif operation_level == "folder_file_rename" %}
+        <span class="text-muted"> — {{ group.file_moves | length }} file{{ "s" if group.file_moves | length != 1 else "" }} renamed</span>
+        {% else %}
+        <span class="text-muted"> — {{ group.file_moves | length }} files,
+            {{ group.season_count }} seasons</span>
+        {% endif %}
+        <br>
+        <code class="text-muted" style="font-size: 0.8rem">{{ group.target_folder }}</code>
+    </div>
+    {% endif %}
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if stats.errors > 0 %}
+<div class="alert alert-danger">
+    {% if operation_level == "full_restructure" %}
+    {{ stats.errors }} file(s) failed to move. Check the application logs for details.
+    {% else %}
+    {{ stats.errors }} rename(s) failed. Check the application logs for details.
+    {% endif %}
+</div>
+{% endif %}
+
+<div class="form-actions">
+    {% if source_mode == "plex" %}
+    <a href="/plex" class="btn btn-primary">View Plex Library</a>
+    {% endif %}
+    <a href="/" class="btn btn-secondary">Dashboard</a>
+    <a href="/restructure" class="btn btn-secondary">Restructure Again</a>
+</div>
+{% endblock %}

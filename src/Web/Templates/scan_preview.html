@@ -1,0 +1,371 @@
+{% extends "base.html" %}
+{% block title %}Plex Scan Preview — Anilist-Link{% endblock %}
+
+{% block content %}
+<h1>Plex Scan Preview</h1>
+
+<section class="card">
+    <h2>Summary</h2>
+    <div class="stats-grid">
+        <div class="stat">
+            <span class="stat-value">{{ results.matched }}</span>
+            <span class="stat-label">Matched</span>
+        </div>
+        <div class="stat">
+            <span class="stat-value">{{ results.skipped }}</span>
+            <span class="stat-label">Already Mapped</span>
+        </div>
+        <div class="stat">
+            <span class="stat-value">{{ results.failed }}</span>
+            <span class="stat-label">Unmatched</span>
+        </div>
+    </div>
+</section>
+
+{% if matched_items %}
+<section class="card">
+    <h2>Matched Shows</h2>
+    <p class="text-muted hint">These shows will have their metadata updated from AniList.</p>
+    <form method="post" action="/scan/plex/apply">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th><input type="checkbox" id="select-all" checked title="Select / deselect all"></th>
+                    <th>Source Folder</th>
+                    <th>AniList Match</th>
+                    <th>Year / Season</th>
+                    <th>Confidence</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in matched_items %}
+                <tr>
+                    <td>
+                        <input type="checkbox" name="apply_item" checked
+                               value="{{ item.rating_key }}|{{ item.anilist_id }}|{{ item.confidence }}|{{ item.plex_title }}">
+                    </td>
+                    <td>
+                        <span class="folder-name">{{ item.folder_name or item.plex_title }}</span>
+                        {% if item.folder_name and item.folder_name != item.plex_title %}
+                        <br><span class="text-muted" style="font-size:0.8rem">Plex: {{ item.plex_title }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if item.anilist_id %}
+                        <a href="https://anilist.co/anime/{{ item.anilist_id }}" target="_blank" rel="noopener" class="title-romaji">
+                            {{ item.anilist_title_romaji or item.anilist_title or ("AniList #" ~ item.anilist_id) }}
+                        </a>
+                        {% if item.anilist_title_english and item.anilist_title_english != item.anilist_title_romaji %}
+                        <br><span class="title-english">{{ item.anilist_title_english }}</span>
+                        {% endif %}
+                        {% else %}
+                        —
+                        {% endif %}
+                    </td>
+                    <td class="text-muted" style="font-size:0.85rem">
+                        {% if item.anilist_season and item.anilist_year %}
+                        {{ item.anilist_season | capitalize }} {{ item.anilist_year }}
+                        {% elif item.anilist_year %}
+                        {{ item.anilist_year }}
+                        {% elif item.plex_year %}
+                        {{ item.plex_year }}
+                        {% endif %}
+                        {% if item.anilist_format %}
+                        <br><span class="badge badge-muted">{{ item.anilist_format }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if item.confidence is not none %}
+                        {% if item.confidence >= 0.9 %}
+                        <span class="badge badge-success">{{ "%.0f"|format(item.confidence * 100) }}%</span>
+                        {% elif item.confidence >= 0.75 %}
+                        <span class="badge badge-warning">{{ "%.0f"|format(item.confidence * 100) }}%</span>
+                        {% else %}
+                        <span class="badge badge-danger">{{ "%.0f"|format(item.confidence * 100) }}%</span>
+                        {% endif %}
+                        {% endif %}
+                    </td>
+                    <td>
+                        <button type="button" class="btn btn-secondary btn-sm"
+                                onclick="openFixMatch('{{ item.rating_key }}', '{{ (item.folder_name or item.plex_title) | e }}', '{{ item.plex_title | e }}', '{{ item.plex_year or '' }}', '{{ item.library_title | e }}')">
+                            Fix Match
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Apply Selected</button>
+            <a href="{{ return_url | default('/') }}" class="btn btn-secondary">Cancel</a>
+        </div>
+    </form>
+</section>
+{% endif %}
+
+{% if failed_items %}
+<section class="card">
+    <h2>Unmatched / Failed</h2>
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Source Folder</th>
+                <th>Reason</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in failed_items %}
+            <tr>
+                <td>
+                    <span class="folder-name">{{ item.folder_name or item.plex_title }}</span>
+                    {% if item.folder_name and item.folder_name != item.plex_title %}
+                    <br><span class="text-muted" style="font-size:0.8rem">Plex: {{ item.plex_title }}</span>
+                    {% endif %}
+                </td>
+                <td class="text-muted">{{ item.reason }}</td>
+                <td>
+                    <button type="button" class="btn btn-secondary btn-sm"
+                            onclick="openFixMatch('{{ item.rating_key }}', '{{ (item.folder_name or item.plex_title) | e }}', '{{ item.plex_title | e }}', '{{ item.plex_year or '' }}', '{{ item.library_title | e }}')">
+                        Fix Match
+                    </button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+
+{% if skipped_items %}
+<section class="card">
+    <h2>Already Mapped (Skipped)</h2>
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Source Folder</th>
+                <th>Existing AniList ID</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in skipped_items %}
+            <tr>
+                <td>
+                    <span class="folder-name">{{ item.folder_name or item.plex_title }}</span>
+                    {% if item.folder_name and item.folder_name != item.plex_title %}
+                    <br><span class="text-muted" style="font-size:0.8rem">Plex: {{ item.plex_title }}</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if item.anilist_id %}
+                    <a href="https://anilist.co/anime/{{ item.anilist_id }}" target="_blank" rel="noopener">
+                        {{ item.anilist_title or ("AniList #" ~ item.anilist_id) }}
+                    </a>
+                    {% else %}
+                    —
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+
+{% if not matched_items and not failed_items and not skipped_items %}
+<section class="card">
+    <p class="text-muted">No shows found in the selected libraries.</p>
+    <a href="{{ return_url | default('/') }}" class="btn btn-secondary">Back</a>
+</section>
+{% endif %}
+
+{% if results.errors %}
+<section class="card">
+    <h2>Errors</h2>
+    {% for err in results.errors %}
+    <div class="alert alert-danger">{{ err }}</div>
+    {% endfor %}
+</section>
+{% endif %}
+
+<!-- Fix Match Modal -->
+<div id="fix-match-modal" class="modal" style="display:none">
+    <div class="modal-backdrop" onclick="closeFixMatch()"></div>
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Fix Match: <span id="modal-source-title"></span></h3>
+            <button class="modal-close" onclick="closeFixMatch()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="search-bar">
+                <input type="text" id="modal-search-input" placeholder="Search AniList...">
+                <button class="btn btn-primary btn-sm" id="modal-search-btn" onclick="searchAniList()">Search</button>
+            </div>
+            <div id="modal-loading" class="text-muted" style="display:none;padding:1rem 0">Searching...</div>
+            <div id="modal-results"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    // Select-all checkbox
+    var selectAll = document.getElementById('select-all');
+    if (!selectAll) return;
+
+    var checkboxes = document.querySelectorAll('input[name="apply_item"]');
+
+    selectAll.addEventListener('change', function() {
+        for (var i = 0; i < checkboxes.length; i++) {
+            checkboxes[i].checked = selectAll.checked;
+        }
+    });
+
+    for (var i = 0; i < checkboxes.length; i++) {
+        checkboxes[i].addEventListener('change', function() {
+            var allChecked = true;
+            for (var j = 0; j < checkboxes.length; j++) {
+                if (!checkboxes[j].checked) { allChecked = false; break; }
+            }
+            selectAll.checked = allChecked;
+        });
+    }
+})();
+
+// Fix Match modal state
+var _fixMatchState = {};
+
+function openFixMatch(ratingKey, folderName, plexTitle, plexYear, libraryTitle) {
+    _fixMatchState = {
+        ratingKey: ratingKey,
+        folderName: folderName,
+        plexTitle: plexTitle,
+        plexYear: plexYear,
+        libraryTitle: libraryTitle
+    };
+
+    document.getElementById('modal-source-title').textContent = folderName;
+    var input = document.getElementById('modal-search-input');
+    input.value = folderName;
+    document.getElementById('modal-results').innerHTML = '';
+    document.getElementById('fix-match-modal').style.display = 'flex';
+
+    // Auto-search on open
+    searchAniList();
+
+    // Focus input
+    setTimeout(function() { input.focus(); input.select(); }, 100);
+}
+
+function closeFixMatch() {
+    document.getElementById('fix-match-modal').style.display = 'none';
+    _fixMatchState = {};
+}
+
+// Close on Escape
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeFixMatch();
+});
+
+// Search on Enter
+document.addEventListener('DOMContentLoaded', function() {
+    var input = document.getElementById('modal-search-input');
+    if (input) {
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') { e.preventDefault(); searchAniList(); }
+        });
+    }
+});
+
+function searchAniList() {
+    var q = document.getElementById('modal-search-input').value.trim();
+    if (!q) return;
+
+    var resultsDiv = document.getElementById('modal-results');
+    var loadingDiv = document.getElementById('modal-loading');
+    resultsDiv.innerHTML = '';
+    loadingDiv.style.display = 'block';
+
+    fetch('/api/scan/plex/search?q=' + encodeURIComponent(q))
+        .then(function(resp) { return resp.json(); })
+        .then(function(data) {
+            loadingDiv.style.display = 'none';
+            if (!data || data.length === 0) {
+                resultsDiv.innerHTML = '<p class="text-muted" style="padding:1rem 0">No results found.</p>';
+                return;
+            }
+            var html = '';
+            for (var i = 0; i < data.length; i++) {
+                var c = data[i];
+                var seasonStr = '';
+                if (c.season && c.year) {
+                    seasonStr = c.season.charAt(0) + c.season.slice(1).toLowerCase() + ' ' + c.year;
+                } else if (c.year) {
+                    seasonStr = '' + c.year;
+                }
+                var formatStr = c.format || '';
+                var epStr = c.episodes ? (c.episodes + ' ep') : '';
+                var meta = [seasonStr, formatStr, epStr].filter(Boolean).join(' · ');
+
+                html += '<div class="search-result">';
+                if (c.cover_image) {
+                    html += '<img class="search-result-cover" src="' + c.cover_image + '" alt="">';
+                } else {
+                    html += '<div class="search-result-cover search-result-cover-placeholder"></div>';
+                }
+                html += '<div class="search-result-info">';
+                html += '<div class="title-romaji">' + escapeHtml(c.title_romaji) + '</div>';
+                if (c.title_english && c.title_english !== c.title_romaji) {
+                    html += '<div class="title-english">' + escapeHtml(c.title_english) + '</div>';
+                }
+                if (meta) {
+                    html += '<div class="search-result-meta text-muted">' + escapeHtml(meta) + '</div>';
+                }
+                html += '</div>';
+                html += '<button type="button" class="btn btn-primary btn-sm" onclick="selectMatch(' + c.id + ')">Select</button>';
+                html += '</div>';
+            }
+            resultsDiv.innerHTML = html;
+        })
+        .catch(function(err) {
+            loadingDiv.style.display = 'none';
+            resultsDiv.innerHTML = '<p class="text-muted" style="padding:1rem 0">Search failed.</p>';
+        });
+}
+
+function selectMatch(anilistId) {
+    // Submit a hidden form to the rematch endpoint
+    var form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '/scan/plex/rematch';
+
+    var fields = {
+        'rating_key': _fixMatchState.ratingKey,
+        'anilist_id': '' + anilistId,
+        'plex_title': _fixMatchState.plexTitle,
+        'plex_year': _fixMatchState.plexYear,
+        'library_title': _fixMatchState.libraryTitle,
+        'folder_name': _fixMatchState.folderName
+    };
+
+    for (var key in fields) {
+        var input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = key;
+        input.value = fields[key];
+        form.appendChild(input);
+    }
+
+    document.body.appendChild(form);
+    form.submit();
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    var div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+</script>
+{% endblock %}

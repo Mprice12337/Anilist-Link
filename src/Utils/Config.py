@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,7 @@ class CrunchyrollConfig:
 class PlexConfig:
     url: str = ""
     token: str = ""
+    anime_library_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -79,11 +81,16 @@ def _env_int(key: str, default: int) -> int:
     return default
 
 
+def _project_root() -> Path:
+    """Return the project root directory (parent of src/)."""
+    return Path(__file__).resolve().parent.parent.parent
+
+
 def _resolve_db_path() -> Path:
     config_dir = Path("/config")
     if config_dir.exists() and config_dir.is_dir():
         return config_dir / "anilist_link.db"
-    local = Path("./data")
+    local = _project_root() / "data"
     local.mkdir(parents=True, exist_ok=True)
     return local / "anilist_link.db"
 
@@ -92,7 +99,9 @@ def _resolve_log_path() -> Path | None:
     config_dir = Path("/config")
     if config_dir.exists() and config_dir.is_dir():
         return config_dir / "anilist_link.log"
-    return None
+    log_dir = _project_root() / "data"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir / "anilist_link.log"
 
 
 def _redirect_host(bind_host: str) -> str:
@@ -104,6 +113,17 @@ def _redirect_host(bind_host: str) -> str:
     if bind_host in ("0.0.0.0", "::", ""):
         return "localhost"
     return bind_host
+
+
+def _parse_json_list(raw: str) -> tuple[str, ...]:
+    """Parse a JSON list string into a tuple of strings."""
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return tuple(str(v) for v in parsed)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return ()
 
 
 def load_config() -> AppConfig:
@@ -133,6 +153,7 @@ def load_config() -> AppConfig:
         plex=PlexConfig(
             url=_env("PLEX_URL"),
             token=_env("PLEX_TOKEN"),
+            anime_library_keys=_parse_json_list(_env("PLEX_ANIME_LIBRARIES", "[]")),
         ),
         jellyfin=JellyfinConfig(
             url=_env("JELLYFIN_URL"),
@@ -161,11 +182,21 @@ SETTINGS_MAP: dict[str, tuple[str, str]] = {
     "anilist.client_secret": ("ANILIST_CLIENT_SECRET", ""),
     "plex.url": ("PLEX_URL", ""),
     "plex.token": ("PLEX_TOKEN", ""),
+    "plex.anime_library_keys": ("PLEX_ANIME_LIBRARIES", "[]"),
     "jellyfin.url": ("JELLYFIN_URL", ""),
     "jellyfin.api_key": ("JELLYFIN_API_KEY", ""),
     "scheduler.sync_interval_minutes": ("SYNC_INTERVAL", "15"),
     "scheduler.scan_interval_hours": ("SCAN_INTERVAL", "24"),
     "app.debug": ("DEBUG", "false"),
+    "app.title_display": ("TITLE_DISPLAY", "romaji"),
+    "restructure.plex_path_prefix": ("RESTRUCTURE_PLEX_PREFIX", ""),
+    "restructure.local_path_prefix": ("RESTRUCTURE_LOCAL_PREFIX", ""),
+    "naming.file_template": ("NAMING_FILE_TEMPLATE", "{title} - S{season}E{episode}"),
+    "naming.folder_template": ("NAMING_FOLDER_TEMPLATE", "{title}"),
+    "naming.season_folder_template": (
+        "NAMING_SEASON_FOLDER_TEMPLATE",
+        "Season {season}",
+    ),
 }
 
 # Keys that represent secret values (passwords, tokens, api keys)
@@ -237,6 +268,7 @@ def load_config_from_db_settings(
         plex=PlexConfig(
             url=r("plex.url"),
             token=r("plex.token"),
+            anime_library_keys=_parse_json_list(r("plex.anime_library_keys")),
         ),
         jellyfin=JellyfinConfig(
             url=r("jellyfin.url"),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 
@@ -9,12 +10,14 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from src.Clients.AnilistClient import AniListClient
+from src.Clients.PlexClient import PlexClient
 from src.Utils.Config import (
     SECRET_KEYS,
     SETTINGS_MAP,
     get_env_overrides,
     load_config_from_db_settings,
 )
+from src.Utils.NamingTemplate import NAMING_PRESETS
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +48,7 @@ FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
         [
             ("plex.url", "Server URL", "url"),
             ("plex.token", "Token", "password"),
+            ("plex.anime_library_keys", "Anime Libraries", "plex_library_select"),
         ],
     ),
     (
@@ -60,6 +64,22 @@ FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
             ("scheduler.sync_interval_minutes", "Sync interval (minutes)", "number"),
             ("scheduler.scan_interval_hours", "Scan interval (hours)", "number"),
             ("app.debug", "Debug logging", "checkbox"),
+            ("app.title_display", "Title display", "select"),
+        ],
+    ),
+    (
+        "Library Restructuring",
+        [
+            ("restructure.plex_path_prefix", "Plex path prefix", "text"),
+            ("restructure.local_path_prefix", "Local path prefix", "text"),
+        ],
+    ),
+    (
+        "Naming Templates",
+        [
+            ("naming.file_template", "Episode file naming", "text"),
+            ("naming.folder_template", "Show folder naming", "text"),
+            ("naming.season_folder_template", "Season folder naming", "text"),
         ],
     ),
 ]
@@ -96,6 +116,24 @@ async def settings_page(request: Request, saved: int = 0) -> HTMLResponse:
     # knows exactly what to register on AniList's developer page.
     anilist_callback_url = str(request.url_for("anilist_callback"))
 
+    # Fetch Plex show libraries for the anime-library selector
+    plex_libraries: list[dict[str, str]] = []
+    selected_library_keys: list[str] = []
+    config = request.app.state.config
+    if config.plex.url and config.plex.token:
+        try:
+            plex_client = PlexClient(url=config.plex.url, token=config.plex.token)
+            libs = await plex_client.get_libraries()
+            plex_libraries = [
+                {"key": lib.key, "title": lib.title}
+                for lib in libs
+                if lib.type in ("show", "movie")
+            ]
+            await plex_client.close()
+        except Exception:
+            logger.warning("Could not fetch Plex libraries for settings page")
+        selected_library_keys = list(config.plex.anime_library_keys)
+
     return templates.TemplateResponse(
         "settings.html",
         {
@@ -109,6 +147,9 @@ async def settings_page(request: Request, saved: int = 0) -> HTMLResponse:
             },
             "saved": bool(saved),
             "anilist_callback_url": anilist_callback_url,
+            "plex_libraries": plex_libraries,
+            "selected_library_keys": selected_library_keys,
+            "naming_presets": NAMING_PRESETS,
         },
     )
 
@@ -126,7 +167,11 @@ async def settings_save(request: Request) -> RedirectResponse:
         is_secret = key in SECRET_KEYS
         input_type = _get_input_type(key)
 
-        if input_type == "checkbox":
+        if input_type == "plex_library_select":
+            # Multi-valued checkboxes: serialize selected keys as JSON list
+            selected = form.getlist(key)
+            value = json.dumps([str(v) for v in selected])
+        elif input_type == "checkbox":
             # Checkbox: present in form = true, absent = false
             value = "true" if form.get(key) else "false"
         else:

@@ -51,9 +51,48 @@ def extract_base_title(title: str) -> str:
     return base.strip()
 
 
+def extract_year_from_name(title: str) -> int:
+    """Extract a year from a folder/file name. Returns 0 if none found.
+
+    Recognises these formats (in priority order):
+      [2020]  (2020)  {2020}          — bracketed
+      Title - 2020  Title.2020        — separator then year
+      Title 2020                      — bare year at end of string
+    """
+    # 1. Bracketed: [2020] (2020) {2020}
+    m = re.search(r"[\[\(\{](\d{4})[\]\)\}]", title)
+    if m:
+        year = int(m.group(1))
+        if 1950 <= year <= 2100:
+            return year
+
+    # 2. After a separator (- or .) near the end, or bare trailing year
+    m = re.search(r"(?:[\s.\-]+)(\d{4})\s*$", title)
+    if m:
+        year = int(m.group(1))
+        if 1950 <= year <= 2100:
+            return year
+
+    return 0
+
+
+def strip_bracket_tags(title: str) -> str:
+    """Strip only bracketed year/quality tags, preserving season qualifiers."""
+    clean = title
+    clean = re.sub(r"\s*\[\d{4}\]", "", clean)
+    clean = re.sub(r"\s*\(\d{4}\)", "", clean)
+    clean = re.sub(r"\s*\{\d{4}\}", "", clean)
+    clean = re.sub(r"\s*\[\d{3,4}p[^\]]*\]", "", clean, flags=re.IGNORECASE)
+    # Strip bare trailing year (e.g. "Title - 2020", "Title.2020", "Title 2020")
+    clean = re.sub(r"[\s.\-]+\d{4}\s*$", "", clean)
+    return clean.strip()
+
+
 def clean_title_for_search(title: str) -> str:
-    """Remove season/part qualifiers so AniList returns broader results."""
-    clean = re.sub(r"\s*-?\s*Season\s*\d+", "", title, flags=re.IGNORECASE)
+    """Remove season/part qualifiers and bracketed tags for broader AniList results."""
+    clean = strip_bracket_tags(title)
+    # Strip season/part qualifiers
+    clean = re.sub(r"\s*-?\s*Season\s*\d+", "", clean, flags=re.IGNORECASE)
     clean = re.sub(r"\s*-?\s*S\d+", "", clean, flags=re.IGNORECASE)
     clean = re.sub(r"\s*-?\s*Part\s*\d+", "", clean, flags=re.IGNORECASE)
     clean = re.sub(

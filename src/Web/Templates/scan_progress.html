@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Scanning... — Anilist-Link{% endblock %}
+
+{% block content %}
+<h1>Plex Scan Preview</h1>
+
+<section class="card" id="progress-card">
+    <h2>Scanning Plex Library...</h2>
+    <div class="progress-bar-container">
+        <div class="progress-bar" id="progress-bar" style="width: 0%"></div>
+    </div>
+    <p class="progress-text">
+        <span id="progress-count">0</span> / <span id="progress-total">?</span> shows scanned
+    </p>
+    <p class="text-muted" id="current-title">Connecting to Plex...</p>
+    <p class="text-muted" id="eta-text"></p>
+</section>
+
+<script>
+(function() {
+    var bar = document.getElementById('progress-bar');
+    var count = document.getElementById('progress-count');
+    var total = document.getElementById('progress-total');
+    var title = document.getElementById('current-title');
+    var heading = document.querySelector('#progress-card h2');
+    var etaText = document.getElementById('eta-text');
+
+    function formatTime(seconds) {
+        if (seconds < 60) return Math.round(seconds) + 's';
+        var m = Math.floor(seconds / 60);
+        var s = Math.round(seconds % 60);
+        return m + 'm ' + s + 's';
+    }
+
+    async function poll() {
+        try {
+            var resp = await fetch('/api/scan/plex/progress');
+            var data = await resp.json();
+
+            if (data.status === 'complete') {
+                bar.style.width = '100%';
+                heading.textContent = 'Scan complete! Loading results...';
+                title.textContent = '';
+                etaText.textContent = '';
+                window.location.href = '{{ results_url | default("/scan/plex/results") }}';
+                return;
+            }
+
+            if (data.status === 'error') {
+                heading.textContent = 'Scan failed';
+                title.textContent = data.error_message || 'An unexpected error occurred.';
+                etaText.textContent = '';
+                bar.style.width = '100%';
+                bar.classList.add('progress-bar-error');
+                return;
+            }
+
+            // Update progress
+            count.textContent = data.scanned;
+            if (data.total > 0) {
+                total.textContent = data.total;
+                var pct = Math.min(100, Math.round((data.scanned / data.total) * 100));
+                bar.style.width = pct + '%';
+            }
+            if (data.current_title) {
+                title.textContent = 'Processing: ' + data.current_title;
+            }
+
+            // ETA calculation
+            if (data.scanned > 0 && data.total > 0 && data.elapsed_seconds > 0) {
+                var avgPerItem = data.elapsed_seconds / data.scanned;
+                var remaining = data.total - data.scanned;
+                var etaSeconds = avgPerItem * remaining;
+                etaText.textContent = 'Estimated time remaining: ' + formatTime(etaSeconds) +
+                    ' (elapsed: ' + formatTime(data.elapsed_seconds) + ')';
+            } else {
+                etaText.textContent = '';
+            }
+        } catch (e) {
+            // Network error, keep polling
+        }
+        setTimeout(poll, 1000);
+    }
+
+    poll();
+})();
+</script>
+{% endblock %}
