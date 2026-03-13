@@ -49,6 +49,39 @@ class SchedulerConfig:
 
 
 @dataclass(frozen=True)
+class SonarrConfig:
+    url: str = ""
+    api_key: str = ""
+
+
+@dataclass(frozen=True)
+class RadarrConfig:
+    url: str = ""
+    api_key: str = ""
+
+
+@dataclass(frozen=True)
+class ProwlarrConfig:
+    url: str = ""
+    api_key: str = ""
+
+
+@dataclass(frozen=True)
+class QBittorrentConfig:
+    url: str = ""
+    username: str = "admin"
+    password: str = "adminadmin"
+
+
+@dataclass(frozen=True)
+class DownloadSyncConfig:
+    auto_statuses: tuple[str, ...] = ("CURRENT",)
+    monitor_mode: str = "future"
+    auto_search: bool = False
+    sync_interval_minutes: int = 60
+
+
+@dataclass(frozen=True)
 class AppConfig:
     debug: bool = False
     timezone: str = "UTC"
@@ -61,6 +94,11 @@ class AppConfig:
     jellyfin: JellyfinConfig = JellyfinConfig()
     database: DatabaseConfig = DatabaseConfig()
     scheduler: SchedulerConfig = SchedulerConfig()
+    sonarr: SonarrConfig = SonarrConfig()
+    radarr: RadarrConfig = RadarrConfig()
+    prowlarr: ProwlarrConfig = ProwlarrConfig()
+    qbittorrent: QBittorrentConfig = QBittorrentConfig()
+    download_sync: DownloadSyncConfig = DownloadSyncConfig()
 
 
 def _env(key: str, default: str = "") -> str:
@@ -164,6 +202,33 @@ def load_config() -> AppConfig:
             scan_interval_hours=_env_int("SCAN_INTERVAL", 24),
             sync_interval_minutes=_env_int("SYNC_INTERVAL", 15),
         ),
+        sonarr=SonarrConfig(
+            url=_env("SONARR_URL"),
+            api_key=_env("SONARR_API_KEY"),
+        ),
+        radarr=RadarrConfig(
+            url=_env("RADARR_URL"),
+            api_key=_env("RADARR_API_KEY"),
+        ),
+        prowlarr=ProwlarrConfig(
+            url=_env("PROWLARR_URL"),
+            api_key=_env("PROWLARR_API_KEY"),
+        ),
+        qbittorrent=QBittorrentConfig(
+            url=_env("QBITTORRENT_URL"),
+            username=_env("QBITTORRENT_USERNAME", "admin"),
+            password=_env("QBITTORRENT_PASSWORD", "adminadmin"),
+        ),
+        download_sync=DownloadSyncConfig(
+            auto_statuses=tuple(
+                s.strip()
+                for s in _env("DOWNLOAD_AUTO_STATUSES", "CURRENT").split(",")
+                if s.strip()
+            ),
+            monitor_mode=_env("DOWNLOAD_MONITOR_MODE", "future"),
+            auto_search=_env_bool("DOWNLOAD_AUTO_SEARCH", False),
+            sync_interval_minutes=_env_int("DOWNLOAD_SYNC_INTERVAL", 60),
+        ),
     )
 
 
@@ -197,6 +262,19 @@ SETTINGS_MAP: dict[str, tuple[str, str]] = {
         "NAMING_SEASON_FOLDER_TEMPLATE",
         "Season {season}",
     ),
+    "sonarr.url": ("SONARR_URL", ""),
+    "sonarr.api_key": ("SONARR_API_KEY", ""),
+    "radarr.url": ("RADARR_URL", ""),
+    "radarr.api_key": ("RADARR_API_KEY", ""),
+    "prowlarr.url": ("PROWLARR_URL", ""),
+    "prowlarr.api_key": ("PROWLARR_API_KEY", ""),
+    "qbittorrent.url": ("QBITTORRENT_URL", ""),
+    "qbittorrent.username": ("QBITTORRENT_USERNAME", "admin"),
+    "qbittorrent.password": ("QBITTORRENT_PASSWORD", "adminadmin"),
+    "downloads.auto_statuses": ("DOWNLOAD_AUTO_STATUSES", "CURRENT"),
+    "downloads.monitor_mode": ("DOWNLOAD_MONITOR_MODE", "future"),
+    "downloads.auto_search": ("DOWNLOAD_AUTO_SEARCH", "false"),
+    "downloads.sync_interval_minutes": ("DOWNLOAD_SYNC_INTERVAL", "60"),
 }
 
 # Keys that represent secret values (passwords, tokens, api keys)
@@ -205,6 +283,10 @@ SECRET_KEYS: set[str] = {
     "anilist.client_secret",
     "plex.token",
     "jellyfin.api_key",
+    "sonarr.api_key",
+    "radarr.api_key",
+    "prowlarr.api_key",
+    "qbittorrent.password",
 }
 
 
@@ -278,5 +360,33 @@ def load_config_from_db_settings(
         scheduler=SchedulerConfig(
             scan_interval_hours=int(r("scheduler.scan_interval_hours") or "24"),
             sync_interval_minutes=int(r("scheduler.sync_interval_minutes") or "15"),
+        ),
+        sonarr=SonarrConfig(
+            url=r("sonarr.url"),
+            api_key=r("sonarr.api_key"),
+        ),
+        radarr=RadarrConfig(
+            url=r("radarr.url"),
+            api_key=r("radarr.api_key"),
+        ),
+        prowlarr=ProwlarrConfig(
+            url=r("prowlarr.url"),
+            api_key=r("prowlarr.api_key"),
+        ),
+        qbittorrent=QBittorrentConfig(
+            url=r("qbittorrent.url"),
+            username=r("qbittorrent.username") or "admin",
+            password=r("qbittorrent.password") or "adminadmin",
+        ),
+        download_sync=DownloadSyncConfig(
+            auto_statuses=tuple(
+                s.strip()
+                for s in (r("downloads.auto_statuses") or "CURRENT").split(",")
+                if s.strip()
+            ),
+            monitor_mode=r("downloads.monitor_mode") or "future",
+            auto_search=(r("downloads.auto_search") or "false").lower()
+            in ("true", "1", "yes"),
+            sync_interval_minutes=int(r("downloads.sync_interval_minutes") or "60"),
         ),
     )

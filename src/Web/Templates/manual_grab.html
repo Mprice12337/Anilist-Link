@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% block title %}Find: {{ anilist_title }} — Anilist-Link{% endblock %}
+
+{% block content %}
+<style>
+  .grab-header { display: flex; align-items: flex-start; gap: 1rem; margin-bottom: 1.5rem; }
+  .grab-cover { width: 60px; height: 85px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
+  .grab-cover-placeholder { width: 60px; height: 85px; background: var(--bg-secondary, #e9ecef); border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 0.7rem; color: var(--text-muted, #999); flex-shrink: 0; }
+  .grab-meta h1 { margin: 0 0 0.25rem; font-size: 1.4rem; }
+  .grab-meta .sub { font-size: 0.85rem; color: var(--text-muted, #777); }
+  .results-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  .results-table th { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 2px solid var(--border-color, #ddd); font-weight: 600; white-space: nowrap; cursor: pointer; user-select: none; }
+  .results-table th:hover { background: var(--bg-secondary, #f5f5f5); }
+  .results-table td { padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--border-color, #eee); vertical-align: middle; }
+  .results-table tr:hover td { background: var(--bg-secondary, #f8f9fa); }
+  .badge-quality { display: inline-block; padding: 0.15rem 0.45rem; border-radius: 3px; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; }
+  .q-4k { background: #6a1b9a; color: #fff; }
+  .q-1080p { background: #1565c0; color: #fff; }
+  .q-720p { background: #2e7d32; color: #fff; }
+  .q-480p, .q-unknown { background: #555; color: #fff; }
+  .seeders-cell { color: #2e7d32; font-weight: 600; }
+  .leechers-cell { color: #c62828; }
+  .size-cell { color: var(--text-muted, #666); white-space: nowrap; }
+  .release-title { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .spinner-large { display: block; width: 2.5rem; height: 2.5rem; border: 3px solid rgba(0,0,0,0.08); border-top-color: #4a90d9; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 3rem auto; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .toast-container { position: fixed; top: 1rem; right: 1rem; z-index: 9999; display: flex; flex-direction: column; gap: 0.5rem; }
+  .toast { padding: 0.75rem 1.25rem; border-radius: 6px; font-size: 0.9rem; box-shadow: 0 2px 8px rgba(0,0,0,0.15); opacity: 0; animation: fadeIn 0.3s forwards; max-width: 360px; }
+  .toast-success { background: #2e7d32; color: #fff; }
+  .toast-error { background: #c62828; color: #fff; }
+  @keyframes fadeIn { to { opacity: 1; } }
+  .sort-indicator { margin-left: 4px; opacity: 0.5; }
+  .sort-active .sort-indicator { opacity: 1; }
+  .no-results { text-align: center; padding: 3rem; color: var(--text-muted, #777); }
+  .search-bar { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; }
+  .filter-input { padding: 0.4rem 0.75rem; border: 1px solid var(--border-color, #ddd); border-radius: 4px; font-size: 0.9rem; background: var(--bg-primary, #fff); color: inherit; width: 260px; }
+  .result-count { font-size: 0.85rem; color: var(--text-muted, #777); }
+</style>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<div class="grab-header">
+  {% if cover_image %}
+  <img src="{{ cover_image }}" alt="{{ anilist_title }}" class="grab-cover">
+  {% else %}
+  <div class="grab-cover-placeholder">?</div>
+  {% endif %}
+  <div class="grab-meta">
+    <h1>Find: {{ anilist_title }}</h1>
+    <p class="sub">
+      AniList #{{ anilist_id }}
+      {% if anilist_format %} &bull; {{ anilist_format }}{% endif %}
+      &bull; <a href="https://anilist.co/anime/{{ anilist_id }}" target="_blank" rel="noopener">View on AniList</a>
+    </p>
+  </div>
+</div>
+
+<div id="loadingState">
+  <span class="spinner-large"></span>
+  <p style="text-align:center;color:var(--text-muted,#777)">Searching indexers…</p>
+</div>
+
+<div id="resultsState" style="display:none">
+  <div class="search-bar">
+    <input type="text" class="filter-input" id="titleFilter" placeholder="Filter results…" oninput="filterTable()">
+    <span class="result-count" id="resultCount"></span>
+  </div>
+  <div style="overflow-x:auto">
+    <table class="results-table" id="resultsTable">
+      <thead>
+        <tr>
+          <th onclick="sortTable('title')" class="sort-col" data-col="title">Title <span class="sort-indicator">↕</span></th>
+          <th onclick="sortTable('quality')" class="sort-col" data-col="quality">Quality <span class="sort-indicator">↕</span></th>
+          <th onclick="sortTable('size_mb')" class="sort-col sort-active" data-col="size_mb">Size <span class="sort-indicator">↓</span></th>
+          <th onclick="sortTable('seeders')" class="sort-col" data-col="seeders">Seeds <span class="sort-indicator">↕</span></th>
+          <th onclick="sortTable('leechers')" class="sort-col" data-col="leechers">Peers <span class="sort-indicator">↕</span></th>
+          <th>Indexer</th>
+          <th onclick="sortTable('publish_date')" class="sort-col" data-col="publish_date">Age <span class="sort-indicator">↕</span></th>
+          <th>Download</th>
+        </tr>
+      </thead>
+      <tbody id="resultsBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div id="errorState" style="display:none" class="alert alert-danger"></div>
+<div id="emptyState" style="display:none" class="no-results">No releases found. Try refreshing your watchlist or checking Prowlarr indexers.</div>
+
+<p style="margin-top:1.5rem"><a href="/library" class="btn btn-secondary">&larr; Back to Library</a></p>
+
+<script>
+(function() {
+  var ANILIST_ID = {{ anilist_id }};
+  var allResults = [];
+  var sortCol = 'seeders';
+  var sortAsc = false;
+
+  function showToast(msg, type) {
+    var c = document.getElementById('toastContainer');
+    var t = document.createElement('div');
+    t.className = 'toast toast-' + (type || 'success');
+    t.textContent = msg;
+    c.appendChild(t);
+    setTimeout(function() { t.remove(); }, 5000);
+  }
+
+  function qualityClass(q) {
+    var map = { '4K': 'q-4k', '1080p': 'q-1080p', '720p': 'q-720p', '480p': 'q-480p' };
+    return map[q] || 'q-unknown';
+  }
+
+  function formatSize(mb) {
+    if (!mb) return '-';
+    if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
+    return mb.toFixed(0) + ' MB';
+  }
+
+  function formatAge(dateStr) {
+    if (!dateStr) return '-';
+    var then = new Date(dateStr);
+    var diff = Date.now() - then.getTime();
+    var days = Math.floor(diff / 86400000);
+    if (days < 1) return 'Today';
+    if (days < 7) return days + 'd';
+    if (days < 30) return Math.floor(days / 7) + 'w';
+    if (days < 365) return Math.floor(days / 30) + 'mo';
+    return Math.floor(days / 365) + 'y';
+  }
+
+  function renderRow(r) {
+    var url = r.magnet_url || r.download_url || '';
+    var isMagnet = url.startsWith('magnet:');
+    return '<tr data-title="' + escAttr(r.title.toLowerCase()) + '">'
+      + '<td class="release-title" title="' + escAttr(r.title) + '">' + esc(r.title) + '</td>'
+      + '<td><span class="badge-quality ' + qualityClass(r.quality) + '">' + esc(r.quality) + '</span></td>'
+      + '<td class="size-cell">' + formatSize(r.size_mb) + '</td>'
+      + '<td class="seeders-cell">' + (r.seeders || 0) + '</td>'
+      + '<td class="leechers-cell">' + (r.leechers || 0) + '</td>'
+      + '<td>' + esc(r.indexer || '-') + '</td>'
+      + '<td>' + formatAge(r.publish_date) + '</td>'
+      + '<td><button class="btn btn-primary btn-sm" onclick="download(' + escAttr(JSON.stringify(r)) + ')">Download</button></td>'
+      + '</tr>';
+  }
+
+  function esc(s) { var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+  function escAttr(s) { return String(s || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+
+  function renderTable() {
+    var filter = document.getElementById('titleFilter').value.toLowerCase();
+    var sorted = allResults.slice().sort(function(a, b) {
+      var va = a[sortCol] || 0, vb = b[sortCol] || 0;
+      if (typeof va === 'string') va = va.toLowerCase();
+      if (typeof vb === 'string') vb = vb.toLowerCase();
+      if (va < vb) return sortAsc ? -1 : 1;
+      if (va > vb) return sortAsc ? 1 : -1;
+      return 0;
+    });
+    var filtered = filter ? sorted.filter(function(r) { return r.title.toLowerCase().includes(filter); }) : sorted;
+    var tbody = document.getElementById('resultsBody');
+    tbody.innerHTML = filtered.map(renderRow).join('');
+    document.getElementById('resultCount').textContent = filtered.length + ' of ' + allResults.length + ' results';
+    document.getElementById('emptyState').style.display = filtered.length === 0 && allResults.length === 0 ? '' : 'none';
+  }
+
+  window.sortTable = function(col) {
+    if (sortCol === col) { sortAsc = !sortAsc; }
+    else { sortCol = col; sortAsc = col === 'title'; }
+    document.querySelectorAll('.sort-col').forEach(function(th) {
+      th.classList.remove('sort-active');
+      var ind = th.querySelector('.sort-indicator');
+      if (ind) ind.textContent = '↕';
+    });
+    var active = document.querySelector('[data-col="' + col + '"]');
+    if (active) {
+      active.classList.add('sort-active');
+      var ind = active.querySelector('.sort-indicator');
+      if (ind) ind.textContent = sortAsc ? '↑' : '↓';
+    }
+    renderTable();
+  };
+
+  window.filterTable = function() { renderTable(); };
+
+  window.download = function(rStr) {
+    var r = typeof rStr === 'string' ? JSON.parse(rStr) : rStr;
+    var url = r.magnet_url || r.download_url || '';
+    if (!url) { showToast('No download URL available', 'error'); return; }
+    fetch('/api/grab/download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ anilist_id: ANILIST_ID, download_url_or_magnet: url, magnet_url: r.magnet_url || '', title: r.title })
+    }).then(function(res) { return res.json(); })
+      .then(function(data) {
+        if (data.ok) {
+          showToast('Added to qBittorrent: ' + r.title, 'success');
+        } else {
+          showToast('Error: ' + (data.error || 'Unknown error'), 'error');
+        }
+      })
+      .catch(function(e) { showToast('Request failed: ' + e.message, 'error'); });
+  };
+
+  // Auto-search on load
+  fetch('/api/grab/search?anilist_id=' + ANILIST_ID)
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      document.getElementById('loadingState').style.display = 'none';
+      if (data.error) {
+        var el = document.getElementById('errorState');
+        el.textContent = 'Search failed: ' + data.error;
+        el.style.display = '';
+        return;
+      }
+      allResults = data.results || [];
+      document.getElementById('resultsState').style.display = '';
+      renderTable();
+    })
+    .catch(function(e) {
+      document.getElementById('loadingState').style.display = 'none';
+      var el = document.getElementById('errorState');
+      el.textContent = 'Request failed: ' + e.message;
+      el.style.display = '';
+    });
+})();
+</script>
+{% endblock %}

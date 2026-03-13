@@ -612,6 +612,111 @@ class DatabaseManager:
         )
         await self.db.commit()
 
+    # ------------------------------------------------------------------
+    # User Watchlist
+    # ------------------------------------------------------------------
+
+    async def upsert_watchlist_entry(
+        self,
+        user_id: str,
+        anilist_id: int,
+        list_status: str = "",
+        progress: int = 0,
+        score: float = 0.0,
+        anilist_title: str = "",
+        anilist_format: str = "",
+        anilist_episodes: int | None = None,
+        cover_image: str = "",
+        airing_status: str = "",
+        start_year: int | None = None,
+    ) -> None:
+        """Insert or update a single watchlist entry."""
+        await self.execute(
+            """INSERT INTO user_watchlist
+                   (user_id, anilist_id, list_status, progress, score,
+                    anilist_title, anilist_format, anilist_episodes,
+                    cover_image, airing_status, start_year, last_synced_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(user_id, anilist_id) DO UPDATE SET
+                   list_status=excluded.list_status,
+                   progress=excluded.progress,
+                   score=excluded.score,
+                   anilist_title=excluded.anilist_title,
+                   anilist_format=excluded.anilist_format,
+                   anilist_episodes=excluded.anilist_episodes,
+                   cover_image=excluded.cover_image,
+                   airing_status=excluded.airing_status,
+                   start_year=excluded.start_year,
+                   last_synced_at=datetime('now')
+            """,
+            (
+                user_id,
+                anilist_id,
+                list_status,
+                progress,
+                score,
+                anilist_title,
+                anilist_format,
+                anilist_episodes,
+                cover_image,
+                airing_status,
+                start_year,
+            ),
+        )
+
+    async def bulk_upsert_watchlist(
+        self, user_id: str, entries: list[dict[str, Any]]
+    ) -> int:
+        """Bulk upsert watchlist entries. Returns number of rows processed."""
+        for entry in entries:
+            await self.upsert_watchlist_entry(
+                user_id=user_id,
+                anilist_id=entry["anilist_id"],
+                list_status=entry.get("list_status", ""),
+                progress=entry.get("progress", 0),
+                score=entry.get("score", 0.0),
+                anilist_title=entry.get("title", ""),
+                anilist_format=entry.get("format", ""),
+                anilist_episodes=entry.get("episodes"),
+                cover_image=entry.get("cover_image", ""),
+                airing_status=entry.get("airing_status", ""),
+                start_year=entry.get("start_year"),
+            )
+        return len(entries)
+
+    async def get_watchlist(
+        self,
+        user_id: str,
+        list_statuses: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return watchlist entries for a user, optionally filtered by status."""
+        if list_statuses:
+            placeholders = ",".join("?" for _ in list_statuses)
+            return await self.fetch_all(
+                f"SELECT * FROM user_watchlist WHERE user_id=?"
+                f" AND list_status IN ({placeholders})"
+                f" ORDER BY anilist_title COLLATE NOCASE",
+                tuple([user_id] + list(list_statuses)),
+            )
+        return await self.fetch_all(
+            "SELECT * FROM user_watchlist WHERE user_id=?"
+            " ORDER BY anilist_title COLLATE NOCASE",
+            (user_id,),
+        )
+
+    async def get_watchlist_entry(
+        self, user_id: str, anilist_id: int
+    ) -> dict[str, Any] | None:
+        """Return a single watchlist entry."""
+        return await self.fetch_one(
+            "SELECT * FROM user_watchlist WHERE user_id=? AND anilist_id=?",
+            (user_id, anilist_id),
+        )
+
+    async def clear_watchlist(self, user_id: str) -> None:
+        """Delete all watchlist entries for a user."""
+        await self.execute("DELETE FROM user_watchlist WHERE user_id=?", (user_id,))
+
     async def delete_plex_library_data(self, library_key: str) -> int:
         """Delete all plex_media and associated media_mappings for a library.
 

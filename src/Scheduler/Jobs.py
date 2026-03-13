@@ -18,6 +18,7 @@ JOB_CRUNCHYROLL_SYNC = "crunchyroll_sync"
 JOB_METADATA_SCAN = "metadata_scan"
 JOB_PLEX_METADATA_SCAN = "plex_metadata_scan"
 JOB_WATCH_SYNC = "watch_sync"
+JOB_DOWNLOAD_SYNC = "download_sync"
 
 
 class JobScheduler:
@@ -33,6 +34,8 @@ class JobScheduler:
         metadata_scan_func: Callable[[], Awaitable[None]] | None = None,
         watch_sync_func: Callable[[], Awaitable[None]] | None = None,
         plex_scan_func: Callable[[], Awaitable[None]] | None = None,
+        download_sync_func: Callable[[], Awaitable[None]] | None = None,
+        download_sync_interval_minutes: int = 60,
     ) -> None:
         """Register job callables with configured intervals."""
         if crunchyroll_sync_func:
@@ -89,6 +92,20 @@ class JobScheduler:
                 "Registered %s job (every %d hr)",
                 JOB_PLEX_METADATA_SCAN,
                 self._config.scan_interval_hours,
+            )
+
+        if download_sync_func:
+            self._scheduler.add_job(
+                download_sync_func,
+                trigger=IntervalTrigger(minutes=download_sync_interval_minutes),
+                id=JOB_DOWNLOAD_SYNC,
+                name="Download Auto-Sync",
+                replace_existing=True,
+            )
+            logger.info(
+                "Registered %s job (every %d min)",
+                JOB_DOWNLOAD_SYNC,
+                download_sync_interval_minutes,
             )
 
     def start(self) -> None:

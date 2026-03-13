@@ -15,6 +15,7 @@ from src.Matching.TitleMatcher import TitleMatcher
 from src.Scanner.MetadataScanner import MetadataScanner
 from src.Scanner.SeriesGroupBuilder import SeriesGroupBuilder
 from src.Scheduler.Jobs import JobScheduler
+from src.Sync.DownloadSyncer import DownloadSyncer
 from src.Sync.WatchSyncer import WatchSyncer
 from src.Utils.Config import AppConfig, load_config, load_config_from_db_settings
 from src.Utils.Logging import get_logger, setup_logging
@@ -60,6 +61,27 @@ async def crunchyroll_sync_task(
         logger.exception("Crunchyroll sync error")
     finally:
         await cr_client.cleanup()
+
+
+async def download_sync_task(
+    config: AppConfig,
+    db: DatabaseManager,
+    anilist_client: AniListClient,
+) -> None:
+    """Run a single download auto-sync cycle."""
+    logger.info("Starting download auto-sync")
+    syncer = DownloadSyncer(db, anilist_client, config)
+    try:
+        result = await syncer.run_sync()
+        logger.info(
+            "Download sync complete: +%d sonarr, +%d radarr, %d skipped, %d errors",
+            result.added_to_sonarr,
+            result.added_to_radarr,
+            result.skipped,
+            result.errors,
+        )
+    except Exception:
+        logger.exception("Download sync error")
 
 
 async def plex_metadata_scan_task(
@@ -139,9 +161,14 @@ async def main() -> None:
     async def _plex_scan() -> None:
         await plex_metadata_scan_task(app.state.config, db, app.state.anilist_client)
 
+    async def _download_sync() -> None:
+        await download_sync_task(app.state.config, db, app.state.anilist_client)
+
     scheduler.register_jobs(
         crunchyroll_sync_func=_cr_sync,
         plex_scan_func=_plex_scan,
+        download_sync_func=_download_sync,
+        download_sync_interval_minutes=config.download_sync.sync_interval_minutes,
     )
 
     # Expose callables for ad-hoc triggering (used by dry-run endpoints)
@@ -156,6 +183,9 @@ async def main() -> None:
             dry_run=dry_run,
             library_keys=library_keys,
         )
+    )
+    app.state.download_sync_task = lambda: download_sync_task(
+        app.state.config, db, app.state.anilist_client
     )
 
     # Start uvicorn

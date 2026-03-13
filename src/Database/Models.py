@@ -124,6 +124,77 @@ class ManualOverride:
     created_at: str = ""
 
 
+@dataclass
+class AnilistSonarrMapping:
+    id: int = 0
+    anilist_id: int = 0
+    tvdb_id: int = 0
+    sonarr_id: int = 0
+    title: str = ""
+    in_sonarr: bool = False
+    sonarr_monitored: bool = False
+    created_at: str = ""
+    updated_at: str = ""
+
+
+@dataclass
+class AnilistRadarrMapping:
+    id: int = 0
+    anilist_id: int = 0
+    tmdb_id: int = 0
+    radarr_id: int = 0
+    title: str = ""
+    in_radarr: bool = False
+    radarr_monitored: bool = False
+    created_at: str = ""
+    updated_at: str = ""
+
+
+@dataclass
+class SonarrSeriesCache:
+    id: int = 0
+    tvdb_id: int = 0
+    sonarr_id: int = 0
+    title: str = ""
+    status: str = ""
+    monitored: bool = False
+    path: str = ""
+    quality_profile_id: int = 0
+    root_folder: str = ""
+    cached_at: str = ""
+
+
+@dataclass
+class RadarrMovieCache:
+    id: int = 0
+    tmdb_id: int = 0
+    radarr_id: int = 0
+    title: str = ""
+    status: str = ""
+    monitored: bool = False
+    path: str = ""
+    quality_profile_id: int = 0
+    root_folder: str = ""
+    cached_at: str = ""
+
+
+@dataclass
+class UserWatchlist:
+    id: int = 0
+    user_id: str = ""
+    anilist_id: int = 0
+    list_status: str = ""
+    progress: int = 0
+    score: float = 0.0
+    anilist_title: str = ""
+    anilist_format: str = ""
+    anilist_episodes: int | None = None
+    cover_image: str = ""
+    airing_status: str = ""
+    start_year: int | None = None
+    last_synced_at: str = ""
+
+
 # ---------------------------------------------------------------------------
 # SQL Schema
 # ---------------------------------------------------------------------------
@@ -271,6 +342,78 @@ TABLES: dict[str, str] = {
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             FOREIGN KEY (group_id) REFERENCES series_groups(id) ON DELETE CASCADE,
             UNIQUE(group_id, anilist_id)
+        )
+    """,
+    "anilist_sonarr_mapping": """
+        CREATE TABLE IF NOT EXISTS anilist_sonarr_mapping (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            anilist_id INTEGER NOT NULL UNIQUE,
+            tvdb_id INTEGER NOT NULL DEFAULT 0,
+            sonarr_id INTEGER NOT NULL DEFAULT 0,
+            title TEXT NOT NULL DEFAULT '',
+            in_sonarr INTEGER NOT NULL DEFAULT 0,
+            sonarr_monitored INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """,
+    "anilist_radarr_mapping": """
+        CREATE TABLE IF NOT EXISTS anilist_radarr_mapping (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            anilist_id INTEGER NOT NULL UNIQUE,
+            tmdb_id INTEGER NOT NULL DEFAULT 0,
+            radarr_id INTEGER NOT NULL DEFAULT 0,
+            title TEXT NOT NULL DEFAULT '',
+            in_radarr INTEGER NOT NULL DEFAULT 0,
+            radarr_monitored INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """,
+    "sonarr_series_cache": """
+        CREATE TABLE IF NOT EXISTS sonarr_series_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tvdb_id INTEGER NOT NULL UNIQUE,
+            sonarr_id INTEGER NOT NULL DEFAULT 0,
+            title TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT '',
+            monitored INTEGER NOT NULL DEFAULT 0,
+            path TEXT NOT NULL DEFAULT '',
+            quality_profile_id INTEGER NOT NULL DEFAULT 0,
+            root_folder TEXT NOT NULL DEFAULT '',
+            cached_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """,
+    "radarr_movie_cache": """
+        CREATE TABLE IF NOT EXISTS radarr_movie_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tmdb_id INTEGER NOT NULL UNIQUE,
+            radarr_id INTEGER NOT NULL DEFAULT 0,
+            title TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT '',
+            monitored INTEGER NOT NULL DEFAULT 0,
+            path TEXT NOT NULL DEFAULT '',
+            quality_profile_id INTEGER NOT NULL DEFAULT 0,
+            root_folder TEXT NOT NULL DEFAULT '',
+            cached_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """,
+    "user_watchlist": """
+        CREATE TABLE IF NOT EXISTS user_watchlist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            anilist_id INTEGER NOT NULL,
+            list_status TEXT NOT NULL DEFAULT '',
+            progress INTEGER NOT NULL DEFAULT 0,
+            score REAL NOT NULL DEFAULT 0,
+            anilist_title TEXT NOT NULL DEFAULT '',
+            anilist_format TEXT NOT NULL DEFAULT '',
+            anilist_episodes INTEGER,
+            cover_image TEXT NOT NULL DEFAULT '',
+            airing_status TEXT NOT NULL DEFAULT '',
+            start_year INTEGER,
+            last_synced_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(user_id, anilist_id)
         )
     """,
 }
