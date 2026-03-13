@@ -131,6 +131,31 @@ query ($userId: Int) {
 }
 """
 
+USER_WATCHLIST_QUERY = """
+query ($userId: Int) {
+  MediaListCollection(userId: $userId, type: ANIME) {
+    lists {
+      status
+      entries {
+        mediaId
+        status
+        progress
+        score
+        media {
+          id
+          title { romaji english native }
+          format
+          episodes
+          status
+          startDate { year }
+          coverImage { medium }
+        }
+      }
+    }
+  }
+}
+"""
+
 GET_ANIME_LIST_ENTRY_QUERY = """
 query ($mediaId: Int, $userId: Int) {
   MediaList(mediaId: $mediaId, userId: $userId) {
@@ -351,6 +376,52 @@ class AniListClient:
         )
         collection = data.get("MediaListCollection", {})
         return collection.get("lists", [])
+
+    async def get_user_watchlist(
+        self, anilist_user_id: int, access_token: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Fetch the user's full anime list and return a flat list of entries.
+
+        Each entry has shape:
+        {anilist_id, list_status, progress, score, title, format,
+         episodes, airing_status, start_year, cover_image}
+        """
+        data = await self._execute_query(
+            USER_WATCHLIST_QUERY,
+            {"userId": anilist_user_id},
+            access_token,
+        )
+        collection = data.get("MediaListCollection", {})
+        lists = collection.get("lists", [])
+
+        flat: list[dict[str, Any]] = []
+        for lst in lists:
+            for entry in lst.get("entries", []):
+                media = entry.get("media") or {}
+                title_obj = media.get("title") or {}
+                start_date = media.get("startDate") or {}
+                flat.append(
+                    {
+                        "anilist_id": media.get("id") or entry.get("mediaId", 0),
+                        "list_status": entry.get("status", ""),
+                        "progress": entry.get("progress", 0),
+                        "score": entry.get("score", 0.0),
+                        "title": (
+                            title_obj.get("romaji")
+                            or title_obj.get("english")
+                            or title_obj.get("native")
+                            or ""
+                        ),
+                        "format": media.get("format", ""),
+                        "episodes": media.get("episodes"),
+                        "airing_status": media.get("status", ""),
+                        "start_year": start_date.get("year"),
+                        "cover_image": (media.get("coverImage") or {}).get(
+                            "medium", ""
+                        ),
+                    }
+                )
+        return flat
 
     async def get_anime_list_entry(
         self, anime_id: int, access_token: str, user_id: int

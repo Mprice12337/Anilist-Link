@@ -1,0 +1,258 @@
+{% extends "base.html" %}
+{% block title %}My Library — Anilist-Link{% endblock %}
+
+{% block content %}
+<style>
+  .library-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 0.75rem; }
+  .library-controls { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+  .filter-tabs { display: flex; gap: 0.25rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .filter-tab { padding: 0.35rem 0.75rem; border: 1px solid var(--border-color, #ddd); border-radius: 4px; cursor: pointer; font-size: 0.85rem; background: var(--bg-secondary, #f8f9fa); color: inherit; text-decoration: none; }
+  .filter-tab.active, .filter-tab:hover { background: var(--accent, #4a90d9); color: #fff; border-color: var(--accent, #4a90d9); }
+  .status-bar { font-size: 0.85rem; color: var(--text-muted, #666); margin-bottom: 1rem; }
+  .search-row { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; }
+  .search-input { flex: 1; max-width: 320px; padding: 0.4rem 0.75rem; border: 1px solid var(--border-color, #ddd); border-radius: 4px; font-size: 0.9rem; background: var(--bg-primary, #fff); color: inherit; }
+  .missing-toggle { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; cursor: pointer; white-space: nowrap; }
+  .library-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+  .library-table th { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 2px solid var(--border-color, #ddd); font-weight: 600; white-space: nowrap; }
+  .library-table td { padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--border-color, #eee); vertical-align: middle; }
+  .library-table tr:hover td { background: var(--bg-secondary, #f8f9fa); }
+  .cover-img { width: 40px; height: 56px; object-fit: cover; border-radius: 3px; display: block; }
+  .cover-placeholder { width: 40px; height: 56px; background: var(--bg-secondary, #e9ecef); border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; color: var(--text-muted, #999); }
+  .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 3px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; white-space: nowrap; }
+  .badge-tv { background: #1565c0; color: #fff; }
+  .badge-movie { background: #e65100; color: #fff; }
+  .badge-ona, .badge-ova { background: #6a1b9a; color: #fff; }
+  .badge-special { background: #555; color: #fff; }
+  .badge-unknown { background: #888; color: #fff; }
+  .badge-releasing { background: #2e7d32; color: #fff; }
+  .badge-finished { background: #546e7a; color: #fff; }
+  .badge-upcoming { background: #f9a825; color: #000; }
+  .badge-cancelled { background: #b71c1c; color: #fff; }
+  .local-have { color: #2e7d32; font-weight: 600; }
+  .local-missing { color: #c62828; font-weight: 600; }
+  .sonarr-monitored { background: #1565c0; color: #fff; }
+  .sonarr-in { background: #546e7a; color: #fff; }
+  .entry-title a { font-weight: 500; color: inherit; text-decoration: none; }
+  .entry-title a:hover { text-decoration: underline; }
+  .progress-cell { white-space: nowrap; color: var(--text-muted, #666); }
+  .btn-xs { padding: 0.2rem 0.5rem; font-size: 0.75rem; }
+  .action-btns { display: flex; gap: 0.3rem; align-items: center; flex-wrap: nowrap; }
+  .spinner { display: inline-block; width: 1rem; height: 1rem; border: 2px solid rgba(0,0,0,0.1); border-top-color: #4a90d9; border-radius: 50%; animation: spin 0.7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .toast-container { position: fixed; top: 1rem; right: 1rem; z-index: 9999; display: flex; flex-direction: column; gap: 0.5rem; }
+  .toast { padding: 0.75rem 1.25rem; border-radius: 6px; font-size: 0.9rem; box-shadow: 0 2px 8px rgba(0,0,0,0.15); opacity: 0; animation: fadeIn 0.3s forwards; max-width: 320px; }
+  .toast-success { background: #2e7d32; color: #fff; }
+  .toast-error { background: #c62828; color: #fff; }
+  @keyframes fadeIn { to { opacity: 1; } }
+  .summary-row { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.75rem; font-size: 0.85rem; }
+  .summary-chip { background: var(--bg-secondary, #e9ecef); border-radius: 12px; padding: 0.2rem 0.65rem; white-space: nowrap; }
+  .year-cell, .eps-cell { color: var(--text-muted, #777); }
+  .hidden { display: none !important; }
+</style>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<div class="library-header">
+  <h1>My Library</h1>
+  <div class="library-controls">
+    <button class="btn btn-primary" id="refreshBtn" onclick="refreshWatchlist()">
+      Refresh from AniList
+    </button>
+  </div>
+</div>
+
+{% if not user %}
+<div class="alert alert-warning">No AniList account linked. <a href="/auth/anilist">Link your account</a> to see your library.</div>
+{% else %}
+
+<!-- Summary -->
+<div class="summary-row" id="summaryRow">
+  {% for status, count in status_counts.items() %}
+  <span class="summary-chip" data-status="{{ status }}">{{ status }}: <strong>{{ count }}</strong></span>
+  {% endfor %}
+  <span class="summary-chip">Total: <strong id="totalCount">{{ total_count }}</strong></span>
+</div>
+
+<!-- Filter tabs -->
+<div class="filter-tabs">
+  <button class="filter-tab active" data-filter="ALL" onclick="setFilter(this, 'ALL')">All ({{ total_count }})</button>
+  {% for status in ['CURRENT','PLANNING','COMPLETED','PAUSED','REPEATING','DROPPED'] %}
+  <button class="filter-tab" data-filter="{{ status }}" onclick="setFilter(this, '{{ status }}')">
+    {{ status.title() }} ({{ status_counts.get(status, 0) }})
+  </button>
+  {% endfor %}
+</div>
+
+<!-- Search / controls -->
+<div class="search-row">
+  <input type="text" class="search-input" id="searchInput" placeholder="Search titles…" oninput="applyFilters()">
+  <label class="missing-toggle">
+    <input type="checkbox" id="missingOnly" onchange="applyFilters()">
+    Missing only
+  </label>
+</div>
+
+<!-- Table -->
+<div style="overflow-x: auto;">
+<table class="library-table" id="libraryTable">
+  <thead>
+    <tr>
+      <th></th>
+      <th>Title</th>
+      <th>Format</th>
+      <th>Year</th>
+      <th>Episodes</th>
+      <th>Status</th>
+      <th>Progress</th>
+      <th>Local</th>
+      <th>Sonarr</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody id="tableBody">
+    {% for entry in entries %}
+    {% set aid = entry.anilist_id %}
+    {% set ls = entry.list_status %}
+    {% set fmt = entry.anilist_format or '' %}
+    {% set fmt_lower = fmt.lower().replace('_short','') %}
+    {% set airing = entry.airing_status or '' %}
+    {% set airing_lower = airing.lower() %}
+    <tr
+      data-status="{{ ls }}"
+      data-local="{{ entry.local_status }}"
+      data-sonarr="{{ entry.sonarr_status }}"
+      data-title="{{ entry.anilist_title | lower }}"
+    >
+      <td>
+        {% if entry.cover_image %}
+        <img src="{{ entry.cover_image }}" alt="" class="cover-img">
+        {% else %}
+        <div class="cover-placeholder">?</div>
+        {% endif %}
+      </td>
+      <td class="entry-title">
+        <a href="https://anilist.co/anime/{{ aid }}" target="_blank" rel="noopener">
+          {{ entry.anilist_title or '(untitled)' }}
+        </a>
+      </td>
+      <td>
+        <span class="badge badge-{{ fmt_lower or 'unknown' }}">{{ fmt or '?' }}</span>
+      </td>
+      <td class="year-cell">{{ entry.start_year or '' }}</td>
+      <td class="eps-cell">{{ entry.anilist_episodes or '?' }}</td>
+      <td>
+        {% if airing_lower == 'releasing' %}
+        <span class="badge badge-releasing">Airing</span>
+        {% elif airing_lower == 'finished' or airing_lower == 'finished_airing' %}
+        <span class="badge badge-finished">Finished</span>
+        {% elif airing_lower == 'not_yet_released' %}
+        <span class="badge badge-upcoming">Upcoming</span>
+        {% elif airing_lower == 'cancelled' %}
+        <span class="badge badge-cancelled">Cancelled</span>
+        {% else %}
+        <span class="badge badge-unknown">{{ airing or '?' }}</span>
+        {% endif %}
+      </td>
+      <td class="progress-cell">
+        {% if entry.anilist_episodes %}
+        {{ entry.progress }}/{{ entry.anilist_episodes }} eps
+        {% else %}
+        {{ entry.progress }} eps
+        {% endif %}
+      </td>
+      <td>
+        {% if entry.local_status == 'have' %}
+        <span class="local-have">Have</span>
+        {% else %}
+        <span class="local-missing">Missing</span>
+        {% endif %}
+      </td>
+      <td>
+        {% if entry.sonarr_status == 'monitored' %}
+        <span class="badge sonarr-monitored">Monitored</span>
+        {% elif entry.sonarr_status == 'in_sonarr' %}
+        <span class="badge sonarr-in">In Sonarr</span>
+        {% endif %}
+      </td>
+      <td>
+        <div class="action-btns">
+          <a href="/grab/{{ aid }}" class="btn btn-secondary btn-xs" title="Find torrent">Grab</a>
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<p style="margin-top: 1rem; font-size: 0.85rem; color: var(--text-muted, #777);" id="noResults" class="hidden">No entries match your filters.</p>
+
+{% endif %}
+
+<script>
+(function() {
+  var currentFilter = 'ALL';
+
+  window.setFilter = function(btn, filter) {
+    document.querySelectorAll('.filter-tab').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    currentFilter = filter;
+    applyFilters();
+  };
+
+  window.applyFilters = function() {
+    var search = document.getElementById('searchInput').value.toLowerCase();
+    var missingOnly = document.getElementById('missingOnly').checked;
+    var rows = document.querySelectorAll('#tableBody tr');
+    var visible = 0;
+    rows.forEach(function(row) {
+      var status = row.getAttribute('data-status') || '';
+      var local = row.getAttribute('data-local') || '';
+      var title = row.getAttribute('data-title') || '';
+      var show = true;
+      if (currentFilter !== 'ALL' && status !== currentFilter) show = false;
+      if (missingOnly && local !== 'missing') show = false;
+      if (search && !title.includes(search)) show = false;
+      row.style.display = show ? '' : 'none';
+      if (show) visible++;
+    });
+    var noResults = document.getElementById('noResults');
+    if (noResults) noResults.classList.toggle('hidden', visible > 0);
+    var totalEl = document.getElementById('totalCount');
+    if (totalEl) totalEl.textContent = visible;
+  };
+
+  window.refreshWatchlist = function() {
+    var btn = document.getElementById('refreshBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Refreshing…';
+    fetch('/api/library/watchlist/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.ok) {
+          showToast('Refreshed ' + data.count + ' entries. Reloading…', 'success');
+          setTimeout(function() { window.location.reload(); }, 1500);
+        } else {
+          showToast('Error: ' + (data.error || 'unknown'), 'error');
+          btn.disabled = false;
+          btn.textContent = 'Refresh from AniList';
+        }
+      })
+      .catch(function(e) {
+        showToast('Request failed: ' + e.message, 'error');
+        btn.disabled = false;
+        btn.textContent = 'Refresh from AniList';
+      });
+  };
+
+  function showToast(msg, type) {
+    var container = document.getElementById('toastContainer');
+    var toast = document.createElement('div');
+    toast.className = 'toast toast-' + (type || 'success');
+    toast.textContent = msg;
+    container.appendChild(toast);
+    setTimeout(function() { toast.remove(); }, 4000);
+  }
+})();
+</script>
+{% endblock %}

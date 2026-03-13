@@ -82,6 +82,56 @@ FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
             ("naming.season_folder_template", "Season folder naming", "text"),
         ],
     ),
+    (
+        "Sonarr",
+        [
+            ("sonarr.url", "Server URL", "url"),
+            ("sonarr.api_key", "API Key", "password"),
+        ],
+    ),
+    (
+        "Radarr",
+        [
+            ("radarr.url", "Server URL", "url"),
+            ("radarr.api_key", "API Key", "password"),
+        ],
+    ),
+    (
+        "Prowlarr",
+        [
+            ("prowlarr.url", "Server URL", "url"),
+            ("prowlarr.api_key", "API Key", "password"),
+        ],
+    ),
+    (
+        "qBittorrent",
+        [
+            ("qbittorrent.url", "Web UI URL", "url"),
+            ("qbittorrent.username", "Username", "text"),
+            ("qbittorrent.password", "Password", "password"),
+        ],
+    ),
+    (
+        "Downloads",
+        [
+            (
+                "downloads.auto_statuses",
+                "Auto-sync list statuses (comma-separated: CURRENT,PLANNING)",
+                "text",
+            ),
+            (
+                "downloads.monitor_mode",
+                "Sonarr monitor mode (future/all/firstSeason/latestSeason)",
+                "text",
+            ),
+            ("downloads.auto_search", "Search immediately on add", "checkbox"),
+            (
+                "downloads.sync_interval_minutes",
+                "Auto-sync interval (minutes)",
+                "number",
+            ),
+        ],
+    ),
 ]
 
 
