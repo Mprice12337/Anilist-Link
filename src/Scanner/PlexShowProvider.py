@@ -67,6 +67,8 @@ class PlexShowProvider:
                 year = 0
                 romaji = ""
                 english = ""
+                anilist_format = ""
+                anilist_episodes = None
                 mapping = await self._db.get_mapping_by_source("plex", show.rating_key)
                 if mapping and mapping.get("anilist_id"):
                     anilist_id = mapping["anilist_id"]
@@ -76,6 +78,15 @@ class PlexShowProvider:
                         year = cache.get("year", 0) or 0
                         romaji = cache.get("title_romaji", "")
                         english = cache.get("title_english", "")
+                    # Get format/episodes from series_group_entries
+                    sge_row = await self._db.fetch_one(
+                        "SELECT format, episodes FROM series_group_entries"
+                        " WHERE anilist_id=? LIMIT 1",
+                        (anilist_id,),
+                    )
+                    if sge_row:
+                        anilist_format = sge_row.get("format", "") or ""
+                        anilist_episodes = sge_row.get("episodes")
 
                 results.append(
                     ShowInput(
@@ -87,6 +98,8 @@ class PlexShowProvider:
                         year=year,
                         anilist_title_romaji=romaji,
                         anilist_title_english=english,
+                        anilist_format=anilist_format,
+                        anilist_episodes=anilist_episodes,
                     )
                 )
 

@@ -101,23 +101,27 @@ class DownloadSyncer:
 
         if sonarr_client:
             try:
-                roots = await sonarr_client.get_root_folders()
-                if roots:
-                    sonarr_root = roots[0].get("path", "")
                 profiles = await sonarr_client.get_quality_profiles()
                 if profiles:
                     sonarr_quality_id = profiles[0].get("id", 1)
+                sonarr_root = self._config.sonarr.anime_root_folder
+                if not sonarr_root:
+                    roots = await sonarr_client.get_root_folders()
+                    if roots:
+                        sonarr_root = roots[0].get("path", "")
             except Exception:
                 logger.warning("Could not fetch Sonarr root folders/quality profiles")
 
         if radarr_client:
             try:
-                roots = await radarr_client.get_root_folders()
-                if roots:
-                    radarr_root = roots[0].get("path", "")
                 profiles = await radarr_client.get_quality_profiles()
                 if profiles:
                     radarr_quality_id = profiles[0].get("id", 1)
+                radarr_root = self._config.radarr.anime_root_folder
+                if not radarr_root:
+                    roots = await radarr_client.get_root_folders()
+                    if roots:
+                        radarr_root = roots[0].get("path", "")
             except Exception:
                 logger.warning("Could not fetch Radarr root folders/quality profiles")
 
@@ -142,12 +146,16 @@ class DownloadSyncer:
                 anilist_format: str = entry.get("anilist_format", "") or ""
                 title: str = entry.get("anilist_title", "") or ""
 
-                # Skip if already mapped
+                # Skip if already mapped or recently failed resolution
                 is_movie = is_movie_format(anilist_format)
                 already_mapped = await self._is_already_mapped(
                     entry_anilist_id, is_movie
                 )
                 if already_mapped:
+                    result.skipped += 1
+                    continue
+
+                if await self._is_skip_cached(entry_anilist_id):
                     result.skipped += 1
                     continue
 
@@ -181,6 +189,7 @@ class DownloadSyncer:
                         monitored=True,
                         monitor_strategy=monitor_mode,
                         search_immediately=auto_search,
+                        use_title_chain=False,
                     )
                     if add_result.ok:
                         if add_result.service == "sonarr":
@@ -192,6 +201,16 @@ class DownloadSyncer:
                             entry_anilist_id,
                             title,
                             add_result.service,
+                        )
+                    elif add_result.needs_disambiguation:
+                        # Can't resolve without human input — cache skip for 24h
+                        await self._cache_skip(entry_anilist_id, "no_external_id")
+                        result.skipped += 1
+                        logger.debug(
+                            "Auto-sync skipped anilist_id=%d (%s): "
+                            "no external ID on AniList (cached 24h)",
+                            entry_anilist_id,
+                            title,
                         )
                     else:
                         result.errors += 1
@@ -254,6 +273,26 @@ class DownloadSyncer:
                 )
             except Exception:
                 logger.warning("Could not refresh watchlist for user_id=%s", user_id)
+
+    async def _is_skip_cached(self, anilist_id: int) -> bool:
+        """Return True if this entry failed resolution within the last 24 hours."""
+        row = await self._db.fetch_one(
+            "SELECT 1 FROM anilist_arr_skip WHERE anilist_id=?"
+            " AND skipped_at > datetime('now', '-1 day')",
+            (anilist_id,),
+        )
+        return row is not None
+
+    async def _cache_skip(self, anilist_id: int, reason: str) -> None:
+        """Record a failed resolution so it's not retried for 24 hours."""
+        await self._db.execute(
+            """INSERT INTO anilist_arr_skip (anilist_id, reason, skipped_at)
+               VALUES (?, ?, datetime('now'))
+               ON CONFLICT(anilist_id) DO UPDATE SET
+                   reason=excluded.reason,
+                   skipped_at=excluded.skipped_at""",
+            (anilist_id, reason),
+        )
 
     async def _is_already_mapped(self, anilist_id: int, is_movie: bool) -> bool:
         """Return True if this entry is already tracked in the *arr mapping tables."""

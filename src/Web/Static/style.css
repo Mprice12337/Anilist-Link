@@ -11,6 +11,14 @@
     --danger-hover: #d14960;
     --border: #2a3a4a;
     --radius: 8px;
+    /* Aliases for template compatibility */
+    --bg-primary: #0f1923;
+    --bg-secondary: #1a2736;
+    --border-color: #2a3a4a;
+    --card-bg: #1a2736;
+    --bg-alt: #1a2736;
+    --success: #4caf50;
+    --text-secondary: #8899aa;
 }
 
 * {
@@ -18,6 +26,8 @@
     padding: 0;
     box-sizing: border-box;
 }
+
+.hidden { display: none !important; }
 
 body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, sans-serif;
@@ -44,6 +54,16 @@ body {
     text-decoration: none;
     font-size: 1.25rem;
     font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.nav-brand-logo {
+    width: 1.4rem;
+    height: 1.4rem;
+    object-fit: contain;
+    flex-shrink: 0;
 }
 
 .nav-links a {
@@ -54,13 +74,28 @@ body {
     transition: color 0.2s;
 }
 
-.nav-links a:hover {
+.nav-links a:hover,
+.nav-links a.active {
     color: var(--accent);
+}
+
+.nav-links a.active {
+    font-weight: 600;
+    border-bottom: 2px solid var(--accent);
+    padding-bottom: 2px;
 }
 
 /* Container */
 .container {
     max-width: 960px;
+    margin: 2rem auto;
+    padding: 0 1.5rem;
+    flex: 1;
+    width: 100%;
+}
+
+.container-wide {
+    max-width: 1400px;
     margin: 2rem auto;
     padding: 0 1.5rem;
     flex: 1;
@@ -304,6 +339,28 @@ input:disabled {
     color: var(--danger);
 }
 
+.badge-plex {
+    background: rgba(229, 160, 13, 0.2);
+    color: #e5a00d;
+}
+
+/* Plex button */
+.btn-plex {
+    background: #e5a00d;
+    color: #1a1a1a;
+    font-weight: 600;
+}
+
+.btn-plex:hover {
+    background: #cc8e0b;
+}
+
+/* Temporary success feedback */
+.btn-success-temp {
+    background: #4caf50 !important;
+    color: #fff !important;
+}
+
 /* Buttons — secondary */
 .btn-secondary {
     background: transparent;
@@ -523,6 +580,77 @@ code {
     border-top: 1px solid var(--border);
 }
 
+/* form-control alias (Bootstrap-style class used in some templates) */
+.form-control {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.55rem 0.75rem;
+    font-size: 0.9rem;
+    width: 100%;
+    transition: border-color 0.2s;
+}
+
+.form-control:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+input[type="search"] {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.55rem 0.75rem;
+    font-size: 0.9rem;
+    width: 100%;
+    transition: border-color 0.2s;
+}
+
+input[type="search"]:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+/* data-table alias */
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1rem;
+}
+
+.data-table th,
+.data-table td {
+    padding: 0.6rem 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+}
+
+.data-table th {
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.data-table tbody tr:hover {
+    background: rgba(61, 180, 242, 0.05);
+}
+
+/* alert-warning */
+.alert-warning {
+    background: rgba(255, 183, 77, 0.1);
+    border: 1px solid #ffb74d;
+    color: #ffb74d;
+}
+
+.alert-warning a {
+    color: #ffb74d;
+    text-decoration: underline;
+}
+
 /* Select elements */
 select {
     background: var(--bg);
@@ -565,6 +693,17 @@ select:disabled {
     display: flex;
     align-items: center;
     gap: 1rem;
+}
+
+.toolbar-controls {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.toolbar-controls select {
+    font-size: 0.85rem;
+    padding: 0.3rem 0.5rem;
 }
 
 .toolbar-right {
@@ -766,6 +905,101 @@ select:disabled {
     text-overflow: ellipsis;
 }
 
+/* Library Index Grid */
+.library-index-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.library-index-card {
+    text-decoration: none;
+    color: inherit;
+    transition: border-color 0.2s;
+    cursor: pointer;
+    display: block;
+}
+
+.library-index-card:hover {
+    border-color: var(--accent);
+}
+
+.library-index-card h3 {
+    margin: 0 0 0.5rem;
+    font-size: 1.05rem;
+    color: var(--text);
+}
+
+.library-index-stats {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.5rem;
+}
+
+.stat-pill {
+    font-size: 0.75rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    background: rgba(136, 153, 170, 0.15);
+    color: var(--text-muted);
+}
+
+.stat-pill-matched {
+    background: rgba(76, 175, 80, 0.15);
+    color: #4caf50;
+}
+
+.stat-pill-unmatched {
+    background: rgba(255, 183, 77, 0.15);
+    color: #ffb74d;
+}
+
+.library-index-paths {
+    font-size: 0.8rem;
+}
+
+.library-index-path {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Change Banner */
+.change-banner {
+    background: rgba(255, 183, 77, 0.1);
+    border: 1px solid #ffb74d;
+    color: #ffb74d;
+    padding: 0.6rem 1rem;
+    border-radius: var(--radius);
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+/* Format Badge */
+.format-badge {
+    position: absolute;
+    bottom: 0.35rem;
+    left: 0.35rem;
+    font-size: 0.6rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    background: rgba(0, 0, 0, 0.7);
+    color: var(--text);
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    pointer-events: none;
+}
+
+/* Format badge in list view: override absolute positioning */
+.library-list-row .format-badge {
+    position: static;
+    flex-shrink: 0;
+}
+
 /* Restructure Wizard */
 .restructure-group-header {
     display: flex;
@@ -872,4 +1106,1383 @@ select:disabled {
         width: 120px;
         height: 180px;
     }
+}
+
+/* ---------------------------------------------------------------------------
+   Floating progress widget
+--------------------------------------------------------------------------- */
+
+.progress-widget {
+    position: fixed;
+    bottom: 1.5rem;
+    right: 1.5rem;
+    z-index: 9000;
+    min-width: 200px;
+    max-width: 340px;
+    font-size: 0.85rem;
+}
+
+.progress-widget.hidden {
+    display: none;
+}
+
+.progress-widget.done-flash .progress-widget-toggle {
+    background: #27ae60;
+}
+
+.progress-widget-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 0.85rem;
+}
+
+.progress-widget-toggle:hover {
+    background: #223040;
+}
+
+.progress-spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    flex-shrink: 0;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.progress-widget-panel {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-top: 0.35rem;
+    padding: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.progress-task-card {
+    background: var(--bg);
+    border-radius: calc(var(--radius) - 2px);
+    padding: 0.5rem 0.6rem;
+}
+
+.progress-task-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 0.3rem;
+    gap: 0.5rem;
+}
+
+.progress-task-type {
+    color: var(--accent);
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.progress-task-label {
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.progress-bar-wrap {
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 0.25rem;
+}
+
+.progress-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width 0.4s ease;
+}
+
+.progress-task-detail {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+}
+
+/* ============================================================
+   Phase 1: Settings Sidebar
+   ============================================================ */
+
+.settings-layout {
+    display: flex;
+    gap: 2rem;
+    align-items: flex-start;
+}
+
+.settings-sidebar {
+    position: sticky;
+    top: 1rem;
+    width: 180px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.75rem 0;
+}
+
+.settings-sidebar-link {
+    display: block;
+    padding: 0.4rem 1rem;
+    color: var(--text-muted);
+    text-decoration: none;
+    font-size: 0.88rem;
+    border-left: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+.settings-sidebar-link:hover,
+.settings-sidebar-link.active {
+    color: var(--accent);
+    border-left-color: var(--accent);
+    background: rgba(61, 180, 242, 0.06);
+}
+
+@media (max-width: 768px) {
+    .settings-layout {
+        flex-direction: column;
+    }
+    .settings-sidebar {
+        position: static;
+        width: 100%;
+        flex-direction: row;
+        flex-wrap: wrap;
+        padding: 0.5rem;
+        gap: 0;
+    }
+    .settings-sidebar-link {
+        border-left: none;
+        border-bottom: 2px solid transparent;
+        padding: 0.35rem 0.6rem;
+    }
+    .settings-sidebar-link:hover,
+    .settings-sidebar-link.active {
+        border-left-color: transparent;
+        border-bottom-color: var(--accent);
+    }
+}
+
+/* ============================================================
+   Phase 4: Tools Page
+   ============================================================ */
+
+.tools-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.25rem;
+}
+
+@media (max-width: 700px) {
+    .tools-grid { grid-template-columns: 1fr; }
+}
+
+.tool-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.tool-card-disabled {
+    opacity: 0.65;
+}
+
+.tool-card-icon {
+    font-size: 2rem;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.tool-card-icon-split {
+    gap: 0.4rem;
+}
+
+.tool-service-logo {
+    width: 2rem;
+    height: 2rem;
+    object-fit: contain;
+    flex-shrink: 0;
+}
+
+.tool-card-body h2 {
+    font-size: 1.1rem;
+    color: var(--accent);
+    margin-bottom: 0.4rem;
+}
+
+.tool-card-body p {
+    font-size: 0.88rem;
+    color: var(--text-muted);
+    margin: 0;
+}
+
+.tool-card-meta {
+    font-size: 0.8rem !important;
+    color: var(--text-muted) !important;
+    margin-top: 0.35rem !important;
+}
+
+.tool-card-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-top: auto;
+}
+
+.tool-disabled-msg {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    flex: 1;
+}
+
+.badge-sonarr {
+    background: #1565c0;
+    color: #fff;
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.badge-radarr {
+    background: #e65100;
+    color: #fff;
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+/* ============================================================
+   Phase 5: Dashboard Redesign
+   ============================================================ */
+
+.dashboard-stats-bar {
+    display: flex;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem 1.5rem;
+    margin-bottom: 1.25rem;
+}
+
+.dash-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+.dash-stat-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--accent);
+    line-height: 1.1;
+}
+
+.dash-stat-label {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.quick-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 1.25rem;
+}
+
+.dashboard-lower {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.25rem;
+}
+
+@media (max-width: 768px) {
+    .dashboard-lower { grid-template-columns: 1fr; }
+}
+
+.watching-grid {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+}
+
+.watching-card {
+    text-decoration: none;
+    color: inherit;
+    display: flex;
+    flex-direction: column;
+}
+
+.watching-progress-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: rgba(0,0,0,0.4);
+}
+
+.watching-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 0 2px 0 0;
+}
+
+.activity-feed {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.activity-item {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 0.875rem;
+    padding: 0.35rem 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.activity-item:last-child {
+    border-bottom: none;
+}
+
+.activity-icon {
+    font-size: 1rem;
+    flex-shrink: 0;
+    width: 1.5rem;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.activity-service-icon {
+    width: 1.1rem;
+    height: 1.1rem;
+    object-fit: contain;
+}
+
+.activity-arr-icons {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.activity-label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.activity-ts {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+/* ============================================================
+   Phase 3: Unified Library
+   ============================================================ */
+
+.filter-chips {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+
+.filter-chip {
+    display: inline-block;
+    padding: 0.3rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    text-decoration: none;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.filter-chip:hover,
+.filter-chip.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+}
+
+.view-toggle {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.view-btn {
+    background: none;
+    border: none;
+    padding: 0.35rem 0.65rem;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 1rem;
+    transition: background 0.15s, color 0.15s;
+}
+
+.view-btn.active,
+.view-btn:hover {
+    background: var(--accent);
+    color: #fff;
+}
+
+.source-badge {
+    position: absolute;
+    top: 0.35rem;
+    left: 0.35rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    pointer-events: none;
+}
+
+.source-badge-local  { background: #37474f; color: #fff; }
+.source-badge-plex   { background: #e5a00d; color: #000; }
+.source-badge-jellyfin { background: #9147ff; color: #fff; }
+
+.confidence-badge {
+    position: absolute;
+    bottom: 0.35rem;
+    right: 0.35rem;
+    padding: 0.1rem 0.4rem;
+    background: rgba(0,0,0,0.65);
+    color: #fff;
+    border-radius: 3px;
+    font-size: 0.7rem;
+    pointer-events: none;
+}
+
+/* Modal shared styles (used in unified library) */
+.modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.modal-box {
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    width: 560px;
+    max-width: 95vw;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+}
+
+.modal-header {
+    padding: 1rem 1.25rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.modal-header h2 {
+    font-size: 1rem;
+    margin: 0;
+    color: var(--text);
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    font-size: 1.2rem;
+    cursor: pointer;
+    color: var(--text-muted);
+    padding: 0 0.25rem;
+}
+
+.modal-close:hover { color: var(--text); }
+
+.modal-body {
+    padding: 0.75rem 1.25rem;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.modal-footer {
+    padding: 0.75rem 1.25rem;
+    border-top: 1px solid var(--border);
+    text-align: right;
+}
+
+.modal-search {
+    width: 100%;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 0.9rem;
+    background: var(--bg);
+    color: var(--text);
+}
+
+.candidate-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.candidate-card {
+    display: flex;
+    gap: 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.6rem 0.75rem;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.candidate-card:hover {
+    background: rgba(61, 180, 242, 0.08);
+    border-color: var(--accent);
+}
+
+.candidate-poster {
+    width: 36px;
+    height: 52px;
+    object-fit: cover;
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+
+.candidate-poster-ph {
+    width: 36px;
+    height: 52px;
+    background: var(--border);
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+
+.candidate-info { flex: 1; min-width: 0; }
+
+.candidate-title {
+    font-weight: 600;
+    font-size: 0.9rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text);
+}
+
+.candidate-meta {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin-top: 0.15rem;
+}
+
+/* Unified library card edit button */
+.card-edit-btn {
+    margin-top: 0.25rem;
+    width: 100%;
+}
+
+/* Poster empty state */
+.library-card-poster-empty {
+    width: 100%;
+    height: 100%;
+    background: var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    font-size: 1.5rem;
+}
+
+/* ============================================================
+   Unified Library Toolbar (lib-toolbar)
+   ============================================================ */
+
+.lib-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-bottom: 1.25rem;
+}
+
+.lib-toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.lib-toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+}
+
+.search-input {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.4rem 0.7rem;
+    font-size: 0.88rem;
+    width: 220px;
+    transition: border-color 0.2s;
+}
+
+.search-input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.lib-select {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.4rem 0.65rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.lib-select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+/* Source badge container on poster (stacked top-left) */
+.lib-source-badges {
+    position: absolute;
+    top: 0.35rem;
+    left: 0.35rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    pointer-events: none;
+}
+
+/* Refresh overlay button */
+.lib-refresh-btn {
+    position: absolute;
+    top: 0.3rem;
+    right: 0.3rem;
+    background: rgba(0,0,0,0.55);
+    border: none;
+    border-radius: 50%;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 1rem;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s, background 0.15s;
+}
+
+.library-card:hover .lib-refresh-btn {
+    opacity: 1;
+}
+
+.lib-refresh-btn:hover {
+    background: rgba(61, 180, 242, 0.7);
+}
+
+/* Title link in library cards */
+.lib-title-link {
+    color: var(--text);
+    text-decoration: none;
+    font-size: 0.8rem;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.3;
+    display: block;
+}
+
+.lib-title-link:hover {
+    color: var(--accent);
+}
+
+/* btn-xs size */
+.btn-xs {
+    padding: 0.2rem 0.5rem;
+    font-size: 0.75rem;
+}
+
+/* ============================================================
+   Dashboard: Watching Grid Poster Overlay
+   ============================================================ */
+
+.watching-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 0.85rem;
+}
+
+.watching-card {
+    text-decoration: none;
+    color: inherit;
+    display: flex;
+    flex-direction: column;
+}
+
+.watching-poster {
+    position: relative;
+    width: 100%;
+    padding-bottom: 142%;   /* 2:3 aspect ratio */
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    overflow: hidden;
+    border: 2px solid transparent;
+    transition: border-color 0.2s, transform 0.15s;
+}
+
+.watching-card:hover .watching-poster {
+    border-color: var(--accent);
+    transform: scale(1.03);
+}
+
+.watching-poster img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.watching-poster-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--border);
+    color: var(--text-muted);
+    font-size: 1.5rem;
+}
+
+/* AniList-style bottom overlay */
+.watching-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(to top, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.55) 60%, transparent 100%);
+    padding: 1.5rem 0.5rem 0.45rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.watching-overlay-progress-bar {
+    width: 100%;
+    height: 3px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.watching-overlay-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+}
+
+.watching-overlay-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+}
+
+.watching-overlay-title {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.3;
+}
+
+.watching-overlay-ep {
+    font-size: 0.68rem;
+    color: rgba(255,255,255,0.75);
+    white-space: nowrap;
+}
+
+/* Inline quick-actions row inside stats bar */
+.dash-quick-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+/* ============================================================
+   Watchlist: filter chip pill spacing
+   ============================================================ */
+
+.filter-tabs {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+}
+
+.filter-tab {
+    padding: 0.35rem 0.9rem;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    background: transparent;
+    color: var(--text-muted);
+    text-decoration: none;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.filter-tab.active,
+.filter-tab:hover {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+}
+
+/* Sortable table headers */
+.sortable-th {
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.sortable-th:hover {
+    color: var(--accent);
+}
+
+.sort-indicator {
+    display: inline-block;
+    margin-left: 0.3rem;
+    opacity: 0.4;
+    font-size: 0.75em;
+}
+
+.sortable-th.sort-asc .sort-indicator,
+.sortable-th.sort-desc .sort-indicator {
+    opacity: 1;
+    color: var(--accent);
+}
+
+/* Watchlist grid view */
+.watchlist-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 1rem;
+    margin-top: 0.5rem;
+}
+
+.watchlist-grid-card {
+    display: flex;
+    flex-direction: column;
+}
+
+.watchlist-grid-poster {
+    position: relative;
+    width: 100%;
+    padding-bottom: 142%;
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    overflow: hidden;
+    border: 2px solid transparent;
+    transition: border-color 0.2s, transform 0.15s;
+}
+
+.watchlist-grid-card:hover .watchlist-grid-poster {
+    border-color: var(--accent);
+    transform: scale(1.02);
+}
+
+.watchlist-grid-poster img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.watchlist-grid-poster-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--border);
+    color: var(--text-muted);
+    font-size: 1.5rem;
+}
+
+/* Progress overlay on watchlist poster */
+.watchlist-grid-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(to top, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0.5) 55%, transparent 100%);
+    padding: 1.2rem 0.4rem 0.4rem;
+}
+
+.watchlist-grid-progress-bar {
+    width: 100%;
+    height: 3px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 0.25rem;
+}
+
+.watchlist-grid-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+}
+
+.watchlist-grid-title {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.3;
+}
+
+.watchlist-grid-ep {
+    font-size: 0.65rem;
+    color: rgba(255,255,255,0.7);
+}
+
+.watchlist-grid-status {
+    position: absolute;
+    top: 0.3rem;
+    left: 0.3rem;
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    font-size: 0.62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    pointer-events: none;
+}
+
+.watchlist-grid-info {
+    padding: 0.3rem 0.1rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text);
+}
+
+/* ============================================================
+   Scroll-on-hover for title text
+   ============================================================ */
+
+.scroll-on-hover {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: block;
+}
+
+.scroll-on-hover.is-scrolling {
+    overflow: visible;
+    text-overflow: clip;
+    animation: text-scroll 3.5s ease-in-out infinite alternate;
+}
+
+@keyframes text-scroll {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(var(--scroll-dist, 0px)); }
+}
+
+/* ============================================================
+   Entry Detail Popup Modal (shared: library + watchlist)
+   ============================================================ */
+
+.entry-detail-box {
+    width: 680px;
+    max-width: 96vw;
+}
+
+.entry-detail-body {
+    display: flex;
+    gap: 1.25rem;
+    padding: 1rem 1.25rem 0.5rem !important;
+}
+
+.entry-detail-poster-col {
+    flex-shrink: 0;
+    width: 120px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.entry-detail-poster {
+    width: 120px;
+    height: 170px;
+    object-fit: cover;
+    border-radius: var(--radius);
+    background: var(--border);
+    display: block;
+}
+
+.entry-detail-poster-empty {
+    width: 120px;
+    height: 170px;
+    border-radius: var(--radius);
+    background: var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2rem;
+    color: var(--text-muted);
+}
+
+.entry-detail-info-col {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.entry-detail-title {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--text);
+    text-decoration: none;
+    line-height: 1.3;
+}
+
+.entry-detail-title:hover {
+    color: var(--accent);
+}
+
+.entry-detail-subtitle {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    margin-top: -0.2rem;
+}
+
+.entry-detail-badges {
+    display: flex;
+    flex-direction: column;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+
+.entry-detail-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.25rem 0.75rem;
+    font-size: 0.85rem;
+}
+
+.entry-detail-label {
+    color: var(--text-muted);
+    white-space: nowrap;
+    font-weight: 600;
+}
+
+.entry-detail-value {
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.entry-detail-actions {
+    margin-top: auto;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+/* ============================================================
+   Tools: service badge in tool card header
+   ============================================================ */
+
+.tool-card-header-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.tool-card-service-badges {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.tool-service-badge {
+    display: inline-block;
+    padding: 0.15rem 0.55rem;
+    border-radius: 4px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.tool-service-badge-ok {
+    background: rgba(61, 180, 242, 0.15);
+    color: var(--accent);
+    border: 1px solid var(--accent);
+}
+
+.tool-service-badge-off {
+    background: transparent;
+    color: var(--danger);
+    border: 1px solid var(--danger);
+}
+
+/* ============================================================
+   Library: edit hover overlay (like refresh btn)
+   ============================================================ */
+
+.lib-edit-btn {
+    position: absolute;
+    bottom: 0.3rem;
+    right: 0.3rem;
+    background: rgba(0,0,0,0.55);
+    border: none;
+    border-radius: 4px;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 0.85rem;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s, background 0.15s;
+}
+
+.library-card:hover .lib-edit-btn {
+    opacity: 1;
+}
+
+.lib-edit-btn:hover {
+    background: rgba(61, 180, 242, 0.7);
+}
+
+/* Shared data table style (watchlist + library list view) */
+.library-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.88rem;
+}
+
+.library-table th {
+    text-align: left;
+    padding: 0.5rem 0.6rem;
+    border-bottom: 2px solid var(--border);
+    font-weight: 600;
+    white-space: nowrap;
+    background: var(--bg-card);
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.library-table td {
+    padding: 0.45rem 0.6rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+}
+
+.library-table tbody tr:hover td {
+    background: rgba(61, 180, 242, 0.05);
+}
+
+/* Scrollable container for sticky-header tables */
+.table-scroll-container {
+    overflow: auto;
+    max-height: calc(100vh - 280px);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.table-scroll-container thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--bg-card);
+}
+
+/* Dark scrollbar for table scroll container */
+.table-scroll-container::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+.table-scroll-container::-webkit-scrollbar-track {
+    background: var(--bg);
+}
+.table-scroll-container::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 4px;
+}
+.table-scroll-container::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+}
+
+/* ============================================================
+   Unified Library: two-row toolbar
+   ============================================================ */
+
+.lib-toolbar-row1 {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.6rem;
+}
+
+.lib-toolbar-row2 {
+    margin-bottom: 1.1rem;
+}
+
+/* inline table within list-view div (no separate scroll wrapper needed) */
+.table-scroll-inner {
+    border-collapse: collapse;
+}
+
+.table-scroll-inner thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--bg-card);
+}
+
+/* ── Service logos ──────────────────────────────────────────────── */
+
+/* Section headings in Settings */
+.section-service-logo {
+    width: 1.2rem;
+    height: 1.2rem;
+    object-fit: contain;
+    vertical-align: middle;
+    margin-right: 0.4rem;
+    position: relative;
+    top: -1px;
+}
+
+/* Page-level h1 logos (Crunchyroll, Download Manager) */
+.page-service-logo {
+    width: 1.6rem;
+    height: 1.6rem;
+    object-fit: contain;
+    vertical-align: middle;
+    margin-right: 0.4rem;
+    position: relative;
+    top: -2px;
+}
+
+/* Onboarding review card logos */
+.review-service-logo {
+    width: 2rem;
+    height: 2rem;
+    object-fit: contain;
+    display: block;
+    margin: 0 auto;
+}
+
+/* Onboarding tab button logos */
+.tab-service-logo {
+    width: 1rem;
+    height: 1rem;
+    object-fit: contain;
+    vertical-align: middle;
+    margin-right: 0.3rem;
+    position: relative;
+    top: -1px;
+}
+
+/* Inline button logos (dashboard quick actions) */
+.btn-service-logo {
+    width: 0.95rem;
+    height: 0.95rem;
+    object-fit: contain;
+    vertical-align: middle;
+    margin-right: 0.3rem;
+    position: relative;
+    top: -1px;
+}
+
+/* Filter chip logos (library source chips) */
+.chip-service-logo {
+    width: 0.85rem;
+    height: 0.85rem;
+    object-fit: contain;
+    vertical-align: middle;
+    margin-right: 0.25rem;
+    position: relative;
+    top: -1px;
 }

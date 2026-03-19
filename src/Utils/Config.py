@@ -22,6 +22,8 @@ class CrunchyrollConfig:
     flaresolverr_url: str = ""
     headless: bool = True
     max_pages: int = 10
+    auto_sync_enabled: bool = True
+    auto_approve: bool = True
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,24 @@ class JellyfinConfig:
 
 
 @dataclass(frozen=True)
+class SonarrConfig:
+    url: str = ""
+    api_key: str = ""
+    anime_root_folder: str = ""
+    path_prefix: str = ""
+    local_path_prefix: str = ""
+
+
+@dataclass(frozen=True)
+class RadarrConfig:
+    url: str = ""
+    api_key: str = ""
+    anime_root_folder: str = ""
+    path_prefix: str = ""
+    local_path_prefix: str = ""
+
+
+@dataclass(frozen=True)
 class DatabaseConfig:
     path: Path = Path("./data/anilist_link.db")
 
@@ -46,31 +66,9 @@ class DatabaseConfig:
 class SchedulerConfig:
     scan_interval_hours: int = 24
     sync_interval_minutes: int = 15
-
-
-@dataclass(frozen=True)
-class SonarrConfig:
-    url: str = ""
-    api_key: str = ""
-
-
-@dataclass(frozen=True)
-class RadarrConfig:
-    url: str = ""
-    api_key: str = ""
-
-
-@dataclass(frozen=True)
-class ProwlarrConfig:
-    url: str = ""
-    api_key: str = ""
-
-
-@dataclass(frozen=True)
-class QBittorrentConfig:
-    url: str = ""
-    username: str = "admin"
-    password: str = "adminadmin"
+    cr_sync_time: str = (
+        "02:00"  # "HH:MM" for daily at a fixed time; empty = use interval
+    )
 
 
 @dataclass(frozen=True)
@@ -79,6 +77,7 @@ class DownloadSyncConfig:
     monitor_mode: str = "future"
     auto_search: bool = False
     sync_interval_minutes: int = 60
+    arr_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -87,17 +86,16 @@ class AppConfig:
     timezone: str = "UTC"
     host: str = "0.0.0.0"
     port: int = 9876
+    base_url: str = "http://localhost:9876"
     log_path: Path | None = None
     anilist: AniListConfig = AniListConfig(client_id="", client_secret="")
     crunchyroll: CrunchyrollConfig = CrunchyrollConfig()
     plex: PlexConfig = PlexConfig()
     jellyfin: JellyfinConfig = JellyfinConfig()
-    database: DatabaseConfig = DatabaseConfig()
-    scheduler: SchedulerConfig = SchedulerConfig()
     sonarr: SonarrConfig = SonarrConfig()
     radarr: RadarrConfig = RadarrConfig()
-    prowlarr: ProwlarrConfig = ProwlarrConfig()
-    qbittorrent: QBittorrentConfig = QBittorrentConfig()
+    database: DatabaseConfig = DatabaseConfig()
+    scheduler: SchedulerConfig = SchedulerConfig()
     download_sync: DownloadSyncConfig = DownloadSyncConfig()
 
 
@@ -187,6 +185,8 @@ def load_config() -> AppConfig:
             flaresolverr_url=_env("FLARESOLVERR_URL"),
             headless=_env_bool("HEADLESS_MODE", True),
             max_pages=_env_int("MAX_PAGES", 10),
+            auto_sync_enabled=_env_bool("CR_AUTO_SYNC_ENABLED", True),
+            auto_approve=_env_bool("CR_AUTO_APPROVE", True),
         ),
         plex=PlexConfig(
             url=_env("PLEX_URL"),
@@ -197,11 +197,6 @@ def load_config() -> AppConfig:
             url=_env("JELLYFIN_URL"),
             api_key=_env("JELLYFIN_API_KEY"),
         ),
-        database=DatabaseConfig(path=_resolve_db_path()),
-        scheduler=SchedulerConfig(
-            scan_interval_hours=_env_int("SCAN_INTERVAL", 24),
-            sync_interval_minutes=_env_int("SYNC_INTERVAL", 15),
-        ),
         sonarr=SonarrConfig(
             url=_env("SONARR_URL"),
             api_key=_env("SONARR_API_KEY"),
@@ -210,14 +205,11 @@ def load_config() -> AppConfig:
             url=_env("RADARR_URL"),
             api_key=_env("RADARR_API_KEY"),
         ),
-        prowlarr=ProwlarrConfig(
-            url=_env("PROWLARR_URL"),
-            api_key=_env("PROWLARR_API_KEY"),
-        ),
-        qbittorrent=QBittorrentConfig(
-            url=_env("QBITTORRENT_URL"),
-            username=_env("QBITTORRENT_USERNAME", "admin"),
-            password=_env("QBITTORRENT_PASSWORD", "adminadmin"),
+        database=DatabaseConfig(path=_resolve_db_path()),
+        scheduler=SchedulerConfig(
+            scan_interval_hours=_env_int("SCAN_INTERVAL", 24),
+            sync_interval_minutes=_env_int("SYNC_INTERVAL", 15),
+            cr_sync_time=_env("CR_SYNC_TIME", ""),
         ),
         download_sync=DownloadSyncConfig(
             auto_statuses=tuple(
@@ -243,6 +235,8 @@ SETTINGS_MAP: dict[str, tuple[str, str]] = {
     "crunchyroll.flaresolverr_url": ("FLARESOLVERR_URL", ""),
     "crunchyroll.headless": ("HEADLESS_MODE", "true"),
     "crunchyroll.max_pages": ("MAX_PAGES", "10"),
+    "crunchyroll.auto_sync_enabled": ("CR_AUTO_SYNC_ENABLED", "true"),
+    "crunchyroll.auto_approve": ("CR_AUTO_APPROVE", "true"),
     "anilist.client_id": ("ANILIST_CLIENT_ID", ""),
     "anilist.client_secret": ("ANILIST_CLIENT_SECRET", ""),
     "plex.url": ("PLEX_URL", ""),
@@ -250,8 +244,20 @@ SETTINGS_MAP: dict[str, tuple[str, str]] = {
     "plex.anime_library_keys": ("PLEX_ANIME_LIBRARIES", "[]"),
     "jellyfin.url": ("JELLYFIN_URL", ""),
     "jellyfin.api_key": ("JELLYFIN_API_KEY", ""),
+    "sonarr.url": ("SONARR_URL", ""),
+    "sonarr.api_key": ("SONARR_API_KEY", ""),
+    "sonarr.anime_root_folder": ("SONARR_ANIME_ROOT_FOLDER", ""),
+    "sonarr.path_prefix": ("SONARR_PATH_PREFIX", ""),
+    "sonarr.local_path_prefix": ("SONARR_LOCAL_PATH_PREFIX", ""),
+    "radarr.url": ("RADARR_URL", ""),
+    "radarr.api_key": ("RADARR_API_KEY", ""),
+    "radarr.anime_root_folder": ("RADARR_ANIME_ROOT_FOLDER", ""),
+    "radarr.path_prefix": ("RADARR_PATH_PREFIX", ""),
+    "radarr.local_path_prefix": ("RADARR_LOCAL_PATH_PREFIX", ""),
+    "app.base_url": ("APP_BASE_URL", "http://localhost:9876"),
     "scheduler.sync_interval_minutes": ("SYNC_INTERVAL", "15"),
     "scheduler.scan_interval_hours": ("SCAN_INTERVAL", "24"),
+    "scheduler.cr_sync_time": ("CR_SYNC_TIME", "02:00"),
     "app.debug": ("DEBUG", "false"),
     "app.title_display": ("TITLE_DISPLAY", "romaji"),
     "restructure.plex_path_prefix": ("RESTRUCTURE_PLEX_PREFIX", ""),
@@ -262,19 +268,19 @@ SETTINGS_MAP: dict[str, tuple[str, str]] = {
         "NAMING_SEASON_FOLDER_TEMPLATE",
         "Season {season}",
     ),
-    "sonarr.url": ("SONARR_URL", ""),
-    "sonarr.api_key": ("SONARR_API_KEY", ""),
-    "radarr.url": ("RADARR_URL", ""),
-    "radarr.api_key": ("RADARR_API_KEY", ""),
-    "prowlarr.url": ("PROWLARR_URL", ""),
-    "prowlarr.api_key": ("PROWLARR_API_KEY", ""),
-    "qbittorrent.url": ("QBITTORRENT_URL", ""),
-    "qbittorrent.username": ("QBITTORRENT_USERNAME", "admin"),
-    "qbittorrent.password": ("QBITTORRENT_PASSWORD", "adminadmin"),
-    "downloads.auto_statuses": ("DOWNLOAD_AUTO_STATUSES", "CURRENT"),
+    "naming.movie_file_template": (
+        "NAMING_MOVIE_FILE_TEMPLATE",
+        "{title} [{year}]",
+    ),
+    "naming.illegal_char_replacement": (
+        "NAMING_ILLEGAL_CHAR_REPLACEMENT",
+        "",
+    ),
+    "downloads.auto_statuses": ("DOWNLOAD_AUTO_STATUSES", ""),
     "downloads.monitor_mode": ("DOWNLOAD_MONITOR_MODE", "future"),
     "downloads.auto_search": ("DOWNLOAD_AUTO_SEARCH", "false"),
     "downloads.sync_interval_minutes": ("DOWNLOAD_SYNC_INTERVAL", "60"),
+    "downloads.arr_enabled": ("DOWNLOADS_ARR_ENABLED", "true"),
 }
 
 # Keys that represent secret values (passwords, tokens, api keys)
@@ -285,8 +291,6 @@ SECRET_KEYS: set[str] = {
     "jellyfin.api_key",
     "sonarr.api_key",
     "radarr.api_key",
-    "prowlarr.api_key",
-    "qbittorrent.password",
 }
 
 
@@ -346,6 +350,9 @@ def load_config_from_db_settings(
             flaresolverr_url=r("crunchyroll.flaresolverr_url"),
             headless=r("crunchyroll.headless").lower() in ("true", "1", "yes"),
             max_pages=int(r("crunchyroll.max_pages") or "10"),
+            auto_sync_enabled=r("crunchyroll.auto_sync_enabled").lower()
+            in ("true", "1", "yes"),
+            auto_approve=r("crunchyroll.auto_approve").lower() in ("true", "1", "yes"),
         ),
         plex=PlexConfig(
             url=r("plex.url"),
@@ -356,37 +363,37 @@ def load_config_from_db_settings(
             url=r("jellyfin.url"),
             api_key=r("jellyfin.api_key"),
         ),
-        database=DatabaseConfig(path=_resolve_db_path()),
-        scheduler=SchedulerConfig(
-            scan_interval_hours=int(r("scheduler.scan_interval_hours") or "24"),
-            sync_interval_minutes=int(r("scheduler.sync_interval_minutes") or "15"),
-        ),
         sonarr=SonarrConfig(
             url=r("sonarr.url"),
             api_key=r("sonarr.api_key"),
+            anime_root_folder=r("sonarr.anime_root_folder"),
+            path_prefix=r("sonarr.path_prefix"),
+            local_path_prefix=r("sonarr.local_path_prefix"),
         ),
         radarr=RadarrConfig(
             url=r("radarr.url"),
             api_key=r("radarr.api_key"),
+            anime_root_folder=r("radarr.anime_root_folder"),
+            path_prefix=r("radarr.path_prefix"),
+            local_path_prefix=r("radarr.local_path_prefix"),
         ),
-        prowlarr=ProwlarrConfig(
-            url=r("prowlarr.url"),
-            api_key=r("prowlarr.api_key"),
-        ),
-        qbittorrent=QBittorrentConfig(
-            url=r("qbittorrent.url"),
-            username=r("qbittorrent.username") or "admin",
-            password=r("qbittorrent.password") or "adminadmin",
+        database=DatabaseConfig(path=_resolve_db_path()),
+        scheduler=SchedulerConfig(
+            scan_interval_hours=int(r("scheduler.scan_interval_hours") or "24"),
+            sync_interval_minutes=int(r("scheduler.sync_interval_minutes") or "15"),
+            cr_sync_time=r("scheduler.cr_sync_time"),
         ),
         download_sync=DownloadSyncConfig(
             auto_statuses=tuple(
                 s.strip()
-                for s in (r("downloads.auto_statuses") or "CURRENT").split(",")
+                for s in (r("downloads.auto_statuses") or "").split(",")
                 if s.strip()
             ),
             monitor_mode=r("downloads.monitor_mode") or "future",
             auto_search=(r("downloads.auto_search") or "false").lower()
             in ("true", "1", "yes"),
             sync_interval_minutes=int(r("downloads.sync_interval_minutes") or "60"),
+            arr_enabled=(r("downloads.arr_enabled") or "true").lower()
+            not in ("false", "0", "no"),
         ),
     )

@@ -4,10 +4,12 @@ A self-hosted Docker container that bridges AniList with Plex, Jellyfin, and Cru
 
 ## Features
 
-- Sync watch progress from Crunchyroll, Plex, and Jellyfin to AniList
-- AniList-powered metadata provider for Plex and Jellyfin anime libraries
+- **File Organization** — Rename and restructure anime files using AniList series data (L1/L2/L3 restructure wizard)
+- **Metadata** — AniList-powered metadata provider for Plex and Jellyfin anime libraries (titles, posters, summaries, genres, ratings)
+- **Watch Sync** — Sync watch progress from Crunchyroll to AniList; Plex/Jellyfin sync planned
+- **Download Management** — Add anime to Sonarr/Radarr with AniList alternative titles via Prowlarr
 - Per-user AniList account linking via OAuth2
-- Web dashboard for configuration, mapping review, and sync monitoring
+- Web dashboard for configuration, mapping review, sync monitoring, and onboarding
 
 ## Quick Start
 
@@ -29,6 +31,15 @@ Set the following environment variables in `docker-compose.yml`:
 | `JELLYFIN_API_KEY` | Jellyfin API key |
 | `ANILIST_CLIENT_ID` | AniList OAuth2 app client ID |
 | `ANILIST_CLIENT_SECRET` | AniList OAuth2 app client secret |
+| `SONARR_URL` | Sonarr server URL (optional, P4) |
+| `SONARR_API_KEY` | Sonarr API key (optional, P4) |
+| `RADARR_URL` | Radarr server URL (optional, P4) |
+| `RADARR_API_KEY` | Radarr API key (optional, P4) |
+| `PROWLARR_URL` | Prowlarr server URL (optional, P4) |
+| `PROWLARR_API_KEY` | Prowlarr API key (optional, P4) |
+| `QBITTORRENT_URL` | qBittorrent WebUI URL (optional, P4) |
+| `QBITTORRENT_USER` | qBittorrent username (optional, P4) |
+| `QBITTORRENT_PASS` | qBittorrent password (optional, P4) |
 
 ## Documentation
 

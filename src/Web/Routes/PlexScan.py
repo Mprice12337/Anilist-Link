@@ -8,6 +8,7 @@ import time
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from starlette.responses import Response
 
 from src.Clients.PlexClient import PlexClient
 from src.Matching.TitleMatcher import TitleMatcher, get_primary_title
@@ -126,7 +127,7 @@ async def plex_scan_progress_api(request: Request) -> JSONResponse:
 
 
 @router.get("/scan/plex/results", response_class=HTMLResponse)
-async def plex_scan_results_page(request: Request) -> HTMLResponse:
+async def plex_scan_results_page(request: Request) -> Response:
     """Render the preview results after a scan completes."""
     templates = request.app.state.templates
     results: ScanResults | None = getattr(request.app.state, "plex_scan_results", None)

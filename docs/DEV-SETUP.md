@@ -87,14 +87,11 @@ Thumbs.db
 ### 5. Install Dependencies
 ```bash
 # Create and activate virtual environment
-python3.11 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate  # macOS/Linux
 
 # Install project dependencies
 pip install -e ".[dev]"
-
-# Or install from requirements
-pip install -r requirements.txt
 ```
 
 ### 6. Environment Configuration
@@ -112,6 +109,17 @@ cp .env.example .env
 - [ ] `JELLYFIN_API_KEY` - Your Jellyfin API key
 - [ ] `ANILIST_CLIENT_ID` - AniList OAuth2 app client ID (register at https://anilist.co/settings/developer)
 - [ ] `ANILIST_CLIENT_SECRET` - AniList OAuth2 app client secret
+
+**P4 Download Management (optional)**:
+- [ ] `SONARR_URL` - Sonarr server URL (e.g., `http://192.168.1.100:8989`)
+- [ ] `SONARR_API_KEY` - Sonarr API key
+- [ ] `RADARR_URL` - Radarr server URL (e.g., `http://192.168.1.100:7878`)
+- [ ] `RADARR_API_KEY` - Radarr API key
+- [ ] `PROWLARR_URL` - Prowlarr server URL (e.g., `http://192.168.1.100:9696`)
+- [ ] `PROWLARR_API_KEY` - Prowlarr API key
+- [ ] `QBITTORRENT_URL` - qBittorrent WebUI URL (e.g., `http://192.168.1.100:8080`)
+- [ ] `QBITTORRENT_USER` - qBittorrent WebUI username
+- [ ] `QBITTORRENT_PASS` - qBittorrent WebUI password
 
 ### 7. Database Setup
 ```bash
@@ -381,7 +389,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
       - name: Install dependencies
         run: pip install -e ".[dev]"
       - name: Run linter
@@ -502,7 +510,7 @@ claude config set mcp.playwright.enabled true
 Before handing off work to Claude, ensure:
 
 ### Environment Setup
-- [ ] Python 3.11+ installed
+- [ ] Python 3.12 installed
 - [ ] Virtual environment created and dependencies installed
 - [ ] Application starts successfully (`python -m src.Main`)
 - [ ] Environment variables set (at minimum ANILIST_CLIENT_ID/SECRET)
@@ -604,7 +612,7 @@ Once setup is complete:
 ### "Module not found" errors
 - Ensure virtual environment is activated: `source .venv/bin/activate`
 - Verify dependencies installed: `pip install -e ".[dev]"`
-- Check Python version: `python --version` (must be 3.11+)
+- Check Python version: `python --version` (must be 3.12+; system Python on macOS is 3.9, use `/opt/homebrew/bin/python3.12`)
 
 ### Tests fail on first run
 - Ensure test dependencies are installed: `pip install pytest pytest-asyncio pytest-cov`

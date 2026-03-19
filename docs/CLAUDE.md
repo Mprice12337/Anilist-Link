@@ -645,15 +645,14 @@ alias alstop='docker-compose down'           # Stop Anilist-Link
 3. **Plex multi-user tokens**: Per-user tracking requires obtaining individual tokens via Plex.tv API, not just the server admin token.
 
 ### Technical Debt
-**P2 — File Organization**:
-- Rename-only mode not yet implemented (currently only full restructure)
-- Operation level selection not yet in restructure wizard
+**P2 — File Organization**: ✅ Complete
+- All 3 operation levels implemented: folder rename (L1), folder+file rename (L2), full restructure (L3)
+- Wizard UI, analyze, execute, and auto-rescan all working
 
-**P3 — Metadata**:
-- Staff/credits writing to Plex not yet implemented
-- Jellyfin client is a stub (only module docstring)
-- Plex GUID parsing for high-confidence AniDB/TVDB→AniList mapping — not yet implemented
-- Mappings.py route file is a stub (no endpoints for manual override management)
+**P3 — Metadata**: ✅ Complete (core)
+- MetadataScanner, PlexClient metadata writing, structure A/B/C detection, series groups all working
+- Manual overrides UI at `/mappings` (list, add, delete)
+- Deferred (non-blocking): staff/credits writing to Plex, Jellyfin client (stub), GUID-based high-confidence matching
 
 **P1 — Watch Sync**:
 - Plex watch sync (polling + webhook) not yet implemented

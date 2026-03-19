@@ -704,14 +704,27 @@ class CrunchyrollClient:
 
     def _setup_driver(self) -> None:
         """Initialize undetected Chrome WebDriver with Docker-compatible flags."""
+        import subprocess
+
         import undetected_chromedriver as uc
 
         options = uc.ChromeOptions()
 
-        chrome_binary = os.environ.get("CHROME_BIN", "/usr/bin/google-chrome")
-        if os.path.exists(chrome_binary):
+        _chrome_candidates = [
+            os.environ.get("CHROME_BIN", ""),
+            "/usr/bin/google-chrome",
+            "/usr/bin/chromium-browser",
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ]
+        chrome_binary = next(
+            (p for p in _chrome_candidates if p and os.path.exists(p)), ""
+        )
+        if chrome_binary:
             options.binary_location = chrome_binary
             logger.info("Using Chrome binary: %s", chrome_binary)
+        else:
+            logger.info("Chrome binary not found in standard paths; using auto-detect")
 
         if self._headless:
             options.add_argument("--headless=new")
@@ -753,11 +766,13 @@ class CrunchyrollClient:
         options.add_argument("--remote-debugging-port=9222")
 
         try:
-            import shlex
-
-            chrome_version_output = os.popen(
-                f"{shlex.quote(chrome_binary)} --version"
-            ).read()
+            cmd = (
+                [chrome_binary, "--version"]
+                if chrome_binary
+                else ["google-chrome", "--version"]
+            )
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            chrome_version_output = result.stdout.strip() or result.stderr.strip()
             chrome_version = chrome_version_output.split()[-1].split(".")[0]
             logger.info("Detected Chrome major version: %s", chrome_version)
             self._driver = uc.Chrome(

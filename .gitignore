@@ -1,6 +1,10 @@
 # Development resources (NOT in version control)
 _resources/
 
+# AI tool working directories
+.claude/
+.claire/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -49,6 +53,9 @@ htmlcov/
 # Docker volumes (local development)
 config/
 data/
+
+# SQLite databases (local dev)
+*.db
 
 # Temporary files
 tmp/

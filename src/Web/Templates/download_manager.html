@@ -1,0 +1,366 @@
+{% extends "base.html" %}
+
+{% block title %}Download Manager — Anilist-Link{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1><img src="/static/img/sonarr.webp" alt="Sonarr" class="page-service-logo"><img src="/static/img/radarr.png" alt="Radarr" class="page-service-logo">Download Manager</h1>
+    <p class="page-subtitle">Add anime to Sonarr (series) or Radarr (movies) via AniList.</p>
+</div>
+
+{% if not sonarr_configured and not radarr_configured %}
+<div class="alert alert-warning">
+    <strong>No download clients configured.</strong>
+    Add your <a href="/settings">Sonarr or Radarr settings</a> to get started.
+</div>
+{% endif %}
+
+<!-- Search -->
+<section class="card" id="search-section">
+    <h2>Search AniList</h2>
+    <div class="form-row">
+        <input
+            type="search"
+            id="search-input"
+            class="form-control"
+            placeholder="Search anime title…"
+            autocomplete="off"
+        >
+        <button class="btn btn-primary" id="search-btn">Search</button>
+    </div>
+
+    <div id="search-results" class="search-results hidden"></div>
+</section>
+
+<!-- Add modal -->
+<div id="add-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+        <h3 id="modal-title">Add to Download Client</h3>
+        <p id="modal-subtitle" class="text-muted"></p>
+
+        <div class="form-group">
+            <label for="modal-service">Service</label>
+            <select id="modal-service" class="form-control">
+                {% if sonarr_configured %}<option value="sonarr">Sonarr (TV Series)</option>{% endif %}
+                {% if radarr_configured %}<option value="radarr">Radarr (Movie)</option>{% endif %}
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="modal-quality">Quality Profile</label>
+            <select id="modal-quality" class="form-control">
+                <option value="">Loading…</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="modal-folder">Root Folder</label>
+            <select id="modal-folder" class="form-control">
+                <option value="">Loading…</option>
+            </select>
+        </div>
+
+        <div class="form-group checkbox-group">
+            <label>
+                <input type="checkbox" id="modal-monitored" checked>
+                Monitored (search immediately)
+            </label>
+        </div>
+
+        <div id="modal-error" class="alert alert-error hidden"></div>
+
+        <div class="modal-actions">
+            <button class="btn btn-secondary" id="modal-cancel">Cancel</button>
+            <button class="btn btn-primary" id="modal-confirm">Add</button>
+        </div>
+    </div>
+</div>
+
+<!-- Recent requests -->
+<section class="card" id="recent-section">
+    <h2>Recent Requests</h2>
+    {% if recent_requests %}
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Title</th>
+                <th>Service</th>
+                <th>Status</th>
+                <th>TVDB/TMDB</th>
+                <th>Requested</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for req in recent_requests %}
+            <tr>
+                <td>
+                    <a href="https://anilist.co/anime/{{ req.anilist_id }}" target="_blank" rel="noopener">
+                        {{ req.anilist_title }}
+                    </a>
+                </td>
+                <td>
+                    <span class="badge badge-{{ req.service }}">{{ req.service | title }}</span>
+                </td>
+                <td>
+                    <span class="badge status-{{ req.status }}">{{ req.status }}</span>
+                    {% if req.error_message %}
+                    <span class="text-muted text-sm" title="{{ req.error_message }}">⚠</span>
+                    {% endif %}
+                </td>
+                <td class="text-mono text-sm">
+                    {% if req.tvdb_id %}TVDB:{{ req.tvdb_id }}{% endif %}
+                    {% if req.tmdb_id %}TMDB:{{ req.tmdb_id }}{% endif %}
+                </td>
+                <td class="text-sm text-muted">{{ req.created_at[:16] if req.created_at else '' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="text-muted">No download requests yet.</p>
+    {% endif %}
+</section>
+
+<style>
+.search-results { margin-top: 1rem; display: grid; gap: 0.75rem; }
+.search-results.hidden { display: none; }
+.search-result-card {
+    display: flex; align-items: center; gap: 1rem;
+    padding: 0.75rem; border: 1px solid var(--border-color, #ddd);
+    border-radius: 6px; background: var(--card-bg, #fff);
+}
+.search-result-card img { width: 48px; height: 68px; object-fit: cover; border-radius: 3px; }
+.search-result-card img.no-cover { background: var(--border-color, #ddd); display: flex; align-items: center; justify-content: center; }
+.result-info { flex: 1; }
+.result-title { font-weight: 600; }
+.result-meta { font-size: 0.8rem; color: var(--text-muted, #666); margin-top: 2px; }
+.result-actions { display: flex; gap: 0.5rem; }
+
+.modal { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; }
+.modal.hidden { display: none; }
+.modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.5); }
+.modal-content {
+    position: relative; background: var(--card-bg, #fff); border-radius: 8px;
+    padding: 1.5rem; max-width: 480px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+}
+.modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.5rem; }
+
+.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+.badge-sonarr { background: #1e90ff22; color: #1e90ff; }
+.badge-radarr { background: #ff8c0022; color: #ff8c00; }
+.status-added { background: #00c85322; color: #00c853; }
+.status-exists { background: #ff980022; color: #ff9800; }
+.status-error { background: #f4433622; color: #f44336; }
+.status-pending { background: #9e9e9e22; color: #9e9e9e; }
+
+.text-mono { font-family: monospace; }
+.text-sm { font-size: 0.8rem; }
+.checkbox-group label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+
+.form-row { display: flex; gap: 0.75rem; align-items: flex-start; }
+.form-row .form-control { flex: 1; }
+
+.alert-error { background: #f4433622; color: #c62828; border: 1px solid #f44336; border-radius: 4px; padding: 0.5rem 0.75rem; }
+</style>
+
+<script>
+(function () {
+    const searchInput = document.getElementById('search-input');
+    const searchBtn = document.getElementById('search-btn');
+    const searchResults = document.getElementById('search-results');
+    const modal = document.getElementById('add-modal');
+    const modalTitle = document.getElementById('modal-title');
+    const modalSubtitle = document.getElementById('modal-subtitle');
+    const modalService = document.getElementById('modal-service');
+    const modalQuality = document.getElementById('modal-quality');
+    const modalFolder = document.getElementById('modal-folder');
+    const modalMonitored = document.getElementById('modal-monitored');
+    const modalError = document.getElementById('modal-error');
+    const modalCancel = document.getElementById('modal-cancel');
+    const modalConfirm = document.getElementById('modal-confirm');
+
+    let currentAnilistId = null;
+    let optionsCache = {};
+
+    function esc(str) {
+        return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    // --- Search ---
+    async function doSearch() {
+        const q = searchInput.value.trim();
+        if (q.length < 2) return;
+        searchBtn.disabled = true;
+        searchBtn.textContent = 'Searching…';
+        searchResults.innerHTML = '<p class="text-muted">Searching…</p>';
+        searchResults.classList.remove('hidden');
+
+        try {
+            const resp = await fetch('/api/download/search?q=' + encodeURIComponent(q));
+            const data = await resp.json();
+            renderResults(data.results || []);
+        } catch (e) {
+            searchResults.innerHTML = '<p class="alert alert-error">Search failed: ' + esc(e.message) + '</p>';
+        } finally {
+            searchBtn.disabled = false;
+            searchBtn.textContent = 'Search';
+        }
+    }
+
+    function renderResults(results) {
+        if (!results.length) {
+            searchResults.innerHTML = '<p class="text-muted">No results found.</p>';
+            return;
+        }
+        searchResults.innerHTML = results.map(r => {
+            const coverHtml = r.cover
+                ? `<img src="${esc(r.cover)}" alt="" loading="lazy">`
+                : `<div class="no-cover" style="width:48px;height:68px;background:#eee;border-radius:3px;"></div>`;
+            const meta = [r.format, r.year, r.episodes ? r.episodes + ' ep' : '', r.status]
+                .filter(Boolean).join(' · ');
+            const svc = r.suggested_service === 'radarr' ? 'Radarr' : 'Sonarr';
+            const svcColor = r.suggested_service === 'radarr' ? '#ff8c00' : '#1e90ff';
+            return `<div class="search-result-card">
+                ${coverHtml}
+                <div class="result-info">
+                    <div class="result-title">${esc(r.title)}</div>
+                    <div class="result-meta">${esc(meta)}</div>
+                </div>
+                <div class="result-actions">
+                    <button class="btn btn-sm btn-primary" onclick="openModal(${r.id}, ${JSON.stringify(esc(r.title))}, '${r.suggested_service}')">
+                        + ${svc}
+                    </button>
+                </div>
+            </div>`;
+        }).join('');
+    }
+
+    searchBtn.addEventListener('click', doSearch);
+    searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+
+    // --- Modal ---
+    window.openModal = async function (anilistId, title, suggestedService) {
+        currentAnilistId = anilistId;
+        modalTitle.textContent = 'Add to Download Client';
+        modalSubtitle.textContent = title;
+        modalError.classList.add('hidden');
+        modalError.textContent = '';
+        modal.classList.remove('hidden');
+
+        // Set suggested service
+        if (modalService.querySelector(`option[value="${suggestedService}"]`)) {
+            modalService.value = suggestedService;
+        }
+
+        await loadOptions(modalService.value);
+    };
+
+    modalService.addEventListener('change', () => loadOptions(modalService.value));
+
+    async function loadOptions(service) {
+        if (optionsCache[service]) {
+            populateSelects(optionsCache[service]);
+            return;
+        }
+        modalQuality.innerHTML = '<option>Loading…</option>';
+        modalFolder.innerHTML = '<option>Loading…</option>';
+        try {
+            const resp = await fetch(`/api/download/${service}/options`);
+            const data = await resp.json();
+            if (!data.ok) throw new Error(data.error || 'Failed to load options');
+            optionsCache[service] = data;
+            populateSelects(data);
+        } catch (e) {
+            modalQuality.innerHTML = '<option>Error loading</option>';
+            modalFolder.innerHTML = '<option>Error loading</option>';
+            showModalError(e.message);
+        }
+    }
+
+    function populateSelects(data) {
+        modalQuality.innerHTML = data.quality_profiles.map(p =>
+            `<option value="${p.id}">${esc(p.name)}</option>`
+        ).join('');
+        modalFolder.innerHTML = data.root_folders.map(f =>
+            `<option value="${esc(f.path)}">${esc(f.path)}</option>`
+        ).join('');
+    }
+
+    modalCancel.addEventListener('click', closeModal);
+    document.querySelector('.modal-backdrop').addEventListener('click', closeModal);
+
+    function closeModal() {
+        modal.classList.add('hidden');
+        currentAnilistId = null;
+    }
+
+    function showModalError(msg) {
+        modalError.textContent = msg;
+        modalError.classList.remove('hidden');
+    }
+
+    modalConfirm.addEventListener('click', async () => {
+        if (!currentAnilistId) return;
+        const service = modalService.value;
+        const qualityProfileId = parseInt(modalQuality.value);
+        const rootFolder = modalFolder.value;
+        const monitored = modalMonitored.checked;
+
+        if (!service || !qualityProfileId || !rootFolder) {
+            showModalError('Please select a quality profile and root folder.');
+            return;
+        }
+
+        modalConfirm.disabled = true;
+        modalConfirm.textContent = 'Adding…';
+        modalError.classList.add('hidden');
+
+        try {
+            const resp = await fetch('/api/download/add', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    anilist_id: currentAnilistId,
+                    service,
+                    quality_profile_id: qualityProfileId,
+                    root_folder: rootFolder,
+                    monitored,
+                }),
+            });
+            const data = await resp.json();
+
+            if (data.status === 'added') {
+                closeModal();
+                showToast(`Added "${data.anilist_title}" to ${data.service}!`, 'success');
+                setTimeout(() => location.reload(), 1500);
+            } else if (data.status === 'exists') {
+                closeModal();
+                showToast(`"${data.anilist_title}" already in ${data.service}.`, 'info');
+                setTimeout(() => location.reload(), 1500);
+            } else {
+                showModalError(data.error || 'Unknown error');
+            }
+        } catch (e) {
+            showModalError(e.message);
+        } finally {
+            modalConfirm.disabled = false;
+            modalConfirm.textContent = 'Add';
+        }
+    });
+
+    // --- Toast ---
+    function showToast(msg, type) {
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type}`;
+        toast.textContent = msg;
+        toast.style.cssText = 'position:fixed;bottom:1rem;right:1rem;padding:0.75rem 1.25rem;border-radius:6px;z-index:9999;font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,0.15);';
+        if (type === 'success') toast.style.background = '#00c853';
+        else if (type === 'info') toast.style.background = '#1e90ff';
+        toast.style.color = '#fff';
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 3000);
+    }
+})();
+</script>
+{% endblock %}

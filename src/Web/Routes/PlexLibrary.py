@@ -297,7 +297,7 @@ async def plex_scan_progress_page(request: Request) -> HTMLResponse:
 
 
 @router.get("/plex/scan/results", response_class=HTMLResponse)
-async def plex_scan_results_page(request: Request) -> HTMLResponse:
+async def plex_scan_results_page(request: Request) -> Response:
     """Render scan results, accessible from the Plex tab flow."""
     templates = request.app.state.templates
     results = getattr(request.app.state, "plex_scan_results", None)

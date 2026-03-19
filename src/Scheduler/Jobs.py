@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from src.Utils.Config import SchedulerConfig
@@ -19,6 +20,31 @@ JOB_METADATA_SCAN = "metadata_scan"
 JOB_PLEX_METADATA_SCAN = "plex_metadata_scan"
 JOB_WATCH_SYNC = "watch_sync"
 JOB_DOWNLOAD_SYNC = "download_sync"
+
+
+def _cr_trigger(config: SchedulerConfig) -> CronTrigger | IntervalTrigger:
+    """Return the appropriate trigger for the Crunchyroll sync job.
+
+    If ``config.cr_sync_time`` is a valid ``HH:MM`` string, returns a
+    :class:`CronTrigger` that fires once daily at that local time.
+    Otherwise falls back to an :class:`IntervalTrigger` using
+    ``sync_interval_minutes``.
+    """
+    time_str = (config.cr_sync_time or "").strip()
+    if time_str:
+        parts = time_str.split(":")
+        if len(parts) == 2:
+            try:
+                hour, minute = int(parts[0]), int(parts[1])
+                logger.info(
+                    "Crunchyroll sync scheduled daily at %02d:%02d", hour, minute
+                )
+                return CronTrigger(hour=hour, minute=minute)
+            except ValueError:
+                logger.warning(
+                    "Invalid cr_sync_time '%s' — falling back to interval", time_str
+                )
+    return IntervalTrigger(minutes=config.sync_interval_minutes)
 
 
 class JobScheduler:
@@ -41,15 +67,10 @@ class JobScheduler:
         if crunchyroll_sync_func:
             self._scheduler.add_job(
                 crunchyroll_sync_func,
-                trigger=IntervalTrigger(minutes=self._config.sync_interval_minutes),
+                trigger=_cr_trigger(self._config),
                 id=JOB_CRUNCHYROLL_SYNC,
                 name="Crunchyroll Watch History Sync",
                 replace_existing=True,
-            )
-            logger.info(
-                "Registered %s job (every %d min)",
-                JOB_CRUNCHYROLL_SYNC,
-                self._config.sync_interval_minutes,
             )
 
         if metadata_scan_func:
@@ -126,20 +147,29 @@ class JobScheduler:
         old = self._config
         self._config = new_config
 
+        # Reschedule CR sync if its trigger inputs changed
+        cr_changed = (
+            new_config.sync_interval_minutes != old.sync_interval_minutes
+            or new_config.cr_sync_time != old.cr_sync_time
+        )
+        if cr_changed:
+            job = self._scheduler.get_job(JOB_CRUNCHYROLL_SYNC)
+            if job:
+                trigger = _cr_trigger(new_config)
+                job.reschedule(trigger=trigger)
+                logger.info("Rescheduled %s with updated trigger", JOB_CRUNCHYROLL_SYNC)
+
         if new_config.sync_interval_minutes != old.sync_interval_minutes:
-            for job_id in (JOB_CRUNCHYROLL_SYNC, JOB_WATCH_SYNC):
-                job = self._scheduler.get_job(job_id)
-                if job:
-                    job.reschedule(
-                        trigger=IntervalTrigger(
-                            minutes=new_config.sync_interval_minutes
-                        )
-                    )
-                    logger.info(
-                        "Rescheduled %s to every %d min",
-                        job_id,
-                        new_config.sync_interval_minutes,
-                    )
+            job = self._scheduler.get_job(JOB_WATCH_SYNC)
+            if job:
+                job.reschedule(
+                    trigger=IntervalTrigger(minutes=new_config.sync_interval_minutes)
+                )
+                logger.info(
+                    "Rescheduled %s to every %d min",
+                    JOB_WATCH_SYNC,
+                    new_config.sync_interval_minutes,
+                )
 
         if new_config.scan_interval_hours != old.scan_interval_hours:
             for job_id in (JOB_METADATA_SCAN, JOB_PLEX_METADATA_SCAN):

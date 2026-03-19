@@ -1,21 +1,20 @@
 {% extends "base.html" %}
 {% block title %}My Library — Anilist-Link{% endblock %}
+{% block container_class %}container-wide{% endblock %}
 
 {% block content %}
 <style>
+  .monitor-menu-item { display:flex; align-items:center; gap:0.4rem; width:100%; text-align:left; padding:0.45rem 0.75rem; border:none; background:none; font-size:0.88rem; cursor:pointer; color:inherit; }
+  .monitor-menu-item:hover { background:var(--bg-secondary,#f5f5f5); }
+  .mm-check { display:inline-block; width:0.9rem; text-align:center; font-size:0.8rem; flex-shrink:0; }
   .library-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 0.75rem; }
   .library-controls { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
-  .filter-tabs { display: flex; gap: 0.25rem; flex-wrap: wrap; margin-bottom: 1rem; }
-  .filter-tab { padding: 0.35rem 0.75rem; border: 1px solid var(--border-color, #ddd); border-radius: 4px; cursor: pointer; font-size: 0.85rem; background: var(--bg-secondary, #f8f9fa); color: inherit; text-decoration: none; }
-  .filter-tab.active, .filter-tab:hover { background: var(--accent, #4a90d9); color: #fff; border-color: var(--accent, #4a90d9); }
+  /* filter-tabs: pill style defined in style.css */
   .status-bar { font-size: 0.85rem; color: var(--text-muted, #666); margin-bottom: 1rem; }
   .search-row { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; }
-  .search-input { flex: 1; max-width: 320px; padding: 0.4rem 0.75rem; border: 1px solid var(--border-color, #ddd); border-radius: 4px; font-size: 0.9rem; background: var(--bg-primary, #fff); color: inherit; }
+  .search-input { flex: 1; padding: 0.4rem 0.75rem; border: 1px solid var(--border-color, #ddd); border-radius: 4px; font-size: 0.9rem; background: var(--bg-primary, #fff); color: inherit; }
   .missing-toggle { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; cursor: pointer; white-space: nowrap; }
-  .library-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
-  .library-table th { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 2px solid var(--border-color, #ddd); font-weight: 600; white-space: nowrap; }
-  .library-table td { padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--border-color, #eee); vertical-align: middle; }
-  .library-table tr:hover td { background: var(--bg-secondary, #f8f9fa); }
+  /* .library-table styles are in style.css */
   .cover-img { width: 40px; height: 56px; object-fit: cover; border-radius: 3px; display: block; }
   .cover-placeholder { width: 40px; height: 56px; background: var(--bg-secondary, #e9ecef); border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; color: var(--text-muted, #999); }
   .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 3px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; white-space: nowrap; }
@@ -30,13 +29,16 @@
   .badge-cancelled { background: #b71c1c; color: #fff; }
   .local-have { color: #2e7d32; font-weight: 600; }
   .local-missing { color: #c62828; font-weight: 600; }
-  .sonarr-monitored { background: #1565c0; color: #fff; }
-  .sonarr-in { background: #546e7a; color: #fff; }
+  .arr-monitored { background: #1565c0; color: #fff; }
+  .arr-tracked { background: #546e7a; color: #fff; }
+  .arr-sonarr { background: #1565c0; }
+  .arr-radarr { background: #e65100; }
   .entry-title a { font-weight: 500; color: inherit; text-decoration: none; }
   .entry-title a:hover { text-decoration: underline; }
   .progress-cell { white-space: nowrap; color: var(--text-muted, #666); }
   .btn-xs { padding: 0.2rem 0.5rem; font-size: 0.75rem; }
-  .action-btns { display: flex; gap: 0.3rem; align-items: center; flex-wrap: nowrap; }
+  .action-btns { display: flex; gap: 0.3rem; align-items: center; flex-wrap: wrap; }
+  .action-btns button, .action-btns a { flex-shrink: 0; }
   .spinner { display: inline-block; width: 1rem; height: 1rem; border: 2px solid rgba(0,0,0,0.1); border-top-color: #4a90d9; border-radius: 50%; animation: spin 0.7s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .toast-container { position: fixed; top: 1rem; right: 1rem; z-index: 9999; display: flex; flex-direction: column; gap: 0.5rem; }
@@ -48,6 +50,41 @@
   .summary-chip { background: var(--bg-secondary, #e9ecef); border-radius: 12px; padding: 0.2rem 0.65rem; white-space: nowrap; }
   .year-cell, .eps-cell { color: var(--text-muted, #777); }
   .hidden { display: none !important; }
+  /* Release search modal */
+  .release-modal-box { width: 820px; max-width: 97vw; }
+  .release-modal-box .modal-body { color: var(--text); }
+  .release-controls { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.6rem; flex-wrap: wrap; }
+  .release-filter-input { flex: 1; min-width: 160px; padding: 0.35rem 0.6rem; border: 1px solid var(--border); border-radius: 4px; font-size: 0.88rem; background: var(--bg); color: var(--text); }
+  .release-sort-select { padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: 4px; font-size: 0.85rem; background: var(--bg); color: var(--text); }
+  .release-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; color: var(--text); }
+  .release-table th { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 2px solid var(--border); font-weight: 700; white-space: nowrap; background: var(--bg); color: var(--text-muted); }
+  .release-table td { padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--border); vertical-align: middle; color: var(--text); }
+  .release-table tr:hover td { background: rgba(61, 180, 242, 0.05); }
+  .release-table tr.rejected td { color: var(--text-muted); text-decoration: line-through; }
+  .release-title-cell { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: help; }
+  .badge-quality { background: #0277bd; color: #fff; font-size: 0.72rem; padding: 0.1rem 0.4rem; border-radius: 3px; white-space: nowrap; }
+  .release-new-search { border-top: 1px solid var(--border); margin-top: 0.75rem; padding-top: 0.65rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+  .release-new-search input { flex: 1; min-width: 180px; padding: 0.35rem 0.6rem; border: 1px solid var(--border); border-radius: 4px; font-size: 0.88rem; background: var(--bg); color: var(--text); }
+  .release-new-search label { font-size: 0.82rem; color: var(--text-muted); white-space: nowrap; }
+  /* Disambiguation modal */
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 10000; display: flex; align-items: center; justify-content: center; }
+  .modal-box { background: var(--bg-primary, #fff); border-radius: 8px; width: 560px; max-width: 95vw; max-height: 80vh; display: flex; flex-direction: column; box-shadow: 0 8px 32px rgba(0,0,0,0.25); }
+  .modal-header { padding: 1rem 1.25rem 0.75rem; border-bottom: 1px solid var(--border-color, #eee); display: flex; align-items: center; justify-content: space-between; }
+  .modal-header h2 { font-size: 1rem; margin: 0; }
+  .modal-close { background: none; border: none; font-size: 1.2rem; cursor: pointer; color: var(--text-muted, #666); padding: 0 0.25rem; }
+  .modal-body { padding: 0.75rem 1.25rem; overflow-y: auto; flex: 1; }
+  .modal-footer { padding: 0.75rem 1.25rem; border-top: 1px solid var(--border-color, #eee); text-align: right; }
+  .candidate-list { display: flex; flex-direction: column; gap: 0.6rem; }
+  .candidate-card { display: flex; gap: 0.75rem; border: 1px solid var(--border-color, #ddd); border-radius: 6px; padding: 0.6rem 0.75rem; cursor: pointer; transition: background 0.15s, border-color 0.15s; }
+  .candidate-card:hover { background: var(--bg-secondary, #f4f6f8); border-color: var(--accent, #4a90d9); }
+  .candidate-card.selected { border-color: var(--accent, #4a90d9); background: rgba(74,144,217,0.08); }
+  .candidate-poster { width: 36px; height: 52px; object-fit: cover; border-radius: 3px; flex-shrink: 0; }
+  .candidate-poster-ph { width: 36px; height: 52px; background: var(--bg-secondary, #e9ecef); border-radius: 3px; flex-shrink: 0; }
+  .candidate-info { flex: 1; min-width: 0; }
+  .candidate-title { font-weight: 600; font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .candidate-meta { font-size: 0.78rem; color: var(--text-muted, #666); margin-top: 0.15rem; }
+  .candidate-overview { font-size: 0.78rem; color: var(--text-muted, #777); margin-top: 0.25rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .modal-search { width: 100%; padding: 0.4rem 0.6rem; border: 1px solid var(--border-color, #ddd); border-radius: 4px; font-size: 0.9rem; margin-bottom: 0.75rem; background: var(--bg-primary, #fff); color: inherit; }
 </style>
 
 <div class="toast-container" id="toastContainer"></div>
@@ -58,20 +95,16 @@
     <button class="btn btn-primary" id="refreshBtn" onclick="refreshWatchlist()">
       Refresh from AniList
     </button>
+    <div class="view-toggle">
+      <button class="view-btn active" id="tableViewBtn" onclick="setWatchlistView('table')" title="Table view">☰</button>
+      <button class="view-btn" id="gridViewBtn" onclick="setWatchlistView('grid')" title="Grid view">⊞</button>
+    </div>
   </div>
 </div>
 
 {% if not user %}
 <div class="alert alert-warning">No AniList account linked. <a href="/auth/anilist">Link your account</a> to see your library.</div>
 {% else %}
-
-<!-- Summary -->
-<div class="summary-row" id="summaryRow">
-  {% for status, count in status_counts.items() %}
-  <span class="summary-chip" data-status="{{ status }}">{{ status }}: <strong>{{ count }}</strong></span>
-  {% endfor %}
-  <span class="summary-chip">Total: <strong id="totalCount">{{ total_count }}</strong></span>
-</div>
 
 <!-- Filter tabs -->
 <div class="filter-tabs">
@@ -92,20 +125,21 @@
   </label>
 </div>
 
-<!-- Table -->
-<div style="overflow-x: auto;">
+<!-- Table view -->
+<div id="tableView" class="table-scroll-container">
 <table class="library-table" id="libraryTable">
   <thead>
     <tr>
       <th></th>
-      <th>Title</th>
-      <th>Format</th>
-      <th>Year</th>
-      <th>Episodes</th>
-      <th>Status</th>
-      <th>Progress</th>
+      <th class="sortable-th" data-col="title" onclick="sortTable('title')">Title <span class="sort-indicator">↕</span></th>
+      <th class="sortable-th" data-col="format" onclick="sortTable('format')">Format <span class="sort-indicator">↕</span></th>
+      <th class="sortable-th" data-col="year" onclick="sortTable('year')">Year <span class="sort-indicator">↕</span></th>
+      <th class="sortable-th" data-col="eps" onclick="sortTable('eps')">Episodes <span class="sort-indicator">↕</span></th>
+      <th class="sortable-th" data-col="status" onclick="sortTable('status')">Watch Status <span class="sort-indicator">↕</span></th>
+      <th>Airing</th>
+      <th class="sortable-th" data-col="progress" onclick="sortTable('progress')">Progress <span class="sort-indicator">↕</span></th>
       <th>Local</th>
-      <th>Sonarr</th>
+      <th>*arr</th>
       <th>Actions</th>
     </tr>
   </thead>
@@ -117,21 +151,39 @@
     {% set fmt_lower = fmt.lower().replace('_short','') %}
     {% set airing = entry.airing_status or '' %}
     {% set airing_lower = airing.lower() %}
+    {% set watch_colors = {
+      'CURRENT':   '#2e7d32',
+      'PLANNING':  '#1565c0',
+      'COMPLETED': '#0277bd',
+      'PAUSED':    '#546e7a',
+      'REPEATING': '#6a1b9a',
+      'DROPPED':   '#b71c1c'
+    } %}
     <tr
       data-status="{{ ls }}"
       data-local="{{ entry.local_status }}"
-      data-sonarr="{{ entry.sonarr_status }}"
+      data-arr="{{ entry.arr_status }}"
       data-title="{{ entry.anilist_title | lower }}"
+      data-sort-title="{{ entry.anilist_title | lower }}"
+      data-sort-format="{{ (entry.anilist_format or '') | lower }}"
+      data-sort-year="{{ entry.start_year or 0 }}"
+      data-sort-eps="{{ entry.anilist_episodes or 0 }}"
+      data-sort-progress="{{ entry.progress or 0 }}"
+      data-sort-status="{{ ls | lower }}"
+      data-idx="{{ loop.index0 }}"
+      style="cursor:pointer"
+      onclick="openWatchlistDetail(this.dataset.idx)"
     >
-      <td>
+      <td onclick="event.stopPropagation()">
         {% if entry.cover_image %}
         <img src="{{ entry.cover_image }}" alt="" class="cover-img">
         {% else %}
         <div class="cover-placeholder">?</div>
         {% endif %}
       </td>
-      <td class="entry-title">
-        <a href="https://anilist.co/anime/{{ aid }}" target="_blank" rel="noopener">
+      <td class="entry-title" onclick="event.stopPropagation()">
+        <a href="https://anilist.co/anime/{{ aid }}" target="_blank" rel="noopener"
+           class="scroll-on-hover" style="display:block;max-width:220px">
           {{ entry.anilist_title or '(untitled)' }}
         </a>
       </td>
@@ -140,6 +192,9 @@
       </td>
       <td class="year-cell">{{ entry.start_year or '' }}</td>
       <td class="eps-cell">{{ entry.anilist_episodes or '?' }}</td>
+      <td>
+        <span class="badge" style="background:{{ watch_colors.get(ls, '#555') }};color:#fff;">{{ ls.title() if ls else '?' }}</span>
+      </td>
       <td>
         {% if airing_lower == 'releasing' %}
         <span class="badge badge-releasing">Airing</span>
@@ -150,7 +205,7 @@
         {% elif airing_lower == 'cancelled' %}
         <span class="badge badge-cancelled">Cancelled</span>
         {% else %}
-        <span class="badge badge-unknown">{{ airing or '?' }}</span>
+        <span style="color:var(--text-muted);font-size:0.82rem">{{ airing or '—' }}</span>
         {% endif %}
       </td>
       <td class="progress-cell">
@@ -163,35 +218,403 @@
       <td>
         {% if entry.local_status == 'have' %}
         <span class="local-have">Have</span>
+        {% elif entry.local_status == 'arr' %}
+        <span class="local-have" title="Files present in {{ entry.arr_service | title }}">via {{ entry.arr_service | title }}</span>
+        {% elif entry.arr_status != 'untracked' %}
+        <span class="local-missing" title="In {{ entry.arr_service | title }}, no files yet">Tracked</span>
         {% else %}
         <span class="local-missing">Missing</span>
         {% endif %}
       </td>
-      <td>
-        {% if entry.sonarr_status == 'monitored' %}
-        <span class="badge sonarr-monitored">Monitored</span>
-        {% elif entry.sonarr_status == 'in_sonarr' %}
-        <span class="badge sonarr-in">In Sonarr</span>
+      <td onclick="event.stopPropagation()">
+        {% if entry.arr_status != 'untracked' %}
+        <span class="badge {% if entry.arr_status == 'monitored' %}arr-monitored arr-{{ entry.arr_service }}{% else %}arr-tracked{% endif %} arr-toggle"
+              title="Change monitoring"
+              onclick="openMonitorMenu(event, {{ aid }}, '{{ entry.arr_service }}', '{{ entry.monitor_type or 'future' }}')"
+              style="cursor:pointer;">
+          {{ entry.arr_service | title }} {% if entry.arr_status == 'monitored' %}●{% else %}○{% endif %}
+        </span>
+        <br>
+        {% if entry.sonarr_season %}
+        <span style="font-size:0.75rem;color:var(--text-muted,#888);">S{{ entry.sonarr_season }}</span>
+        {% if entry.arr_total %}
+        <span style="font-size:0.75rem;color:var(--text-muted,#888);"> · {{ entry.arr_files }}/{{ entry.arr_total }} eps</span>
+        {% endif %}
+        {% elif entry.arr_service == 'radarr' %}
+        <span style="font-size:0.75rem;color:{% if entry.arr_has_file %}#2e7d32{% else %}var(--text-muted,#888){% endif %};">
+          {% if entry.arr_has_file %}File downloaded{% else %}No file{% endif %}
+        </span>
+        {% elif entry.arr_total %}
+        <span style="font-size:0.75rem;color:var(--text-muted,#888);">{{ entry.arr_files }}/{{ entry.arr_total }} eps</span>
+        {% endif %}
         {% endif %}
       </td>
-      <td>
+      <td onclick="event.stopPropagation()">
         <div class="action-btns">
-          <a href="/grab/{{ aid }}" class="btn btn-secondary btn-xs" title="Find torrent">Grab</a>
+          {% if entry.arr_status != 'untracked' %}
+          <button class="btn btn-primary btn-xs"
+                  data-aid="{{ aid }}"
+                  data-title="{{ entry.anilist_title|e }}"
+                  data-service="{{ entry.arr_service }}"
+                  onclick="openReleaseModal(this.dataset.aid, this.dataset.title, this.dataset.service)">Search Releases</button>
+          {% if entry.arr_service == 'sonarr' and entry.sonarr_id %}
+          <button class="btn btn-secondary btn-xs"
+                  onclick="reprocessEntry('sonarr', {{ entry.sonarr_id }}, this, false)"
+                  title="Move existing files into AniList-structured subfolders">Reprocess</button>
+          <button class="btn btn-secondary btn-xs"
+                  onclick="reprocessEntry('sonarr', {{ entry.sonarr_id }}, this, true)"
+                  title="Preview what would be moved">Preview</button>
+          {% elif entry.arr_service == 'radarr' and entry.radarr_id %}
+          <button class="btn btn-secondary btn-xs"
+                  onclick="reprocessEntry('radarr', {{ entry.radarr_id }}, this, false)"
+                  title="Move existing file into AniList-structured subfolder">Reprocess</button>
+          <button class="btn btn-secondary btn-xs"
+                  onclick="reprocessEntry('radarr', {{ entry.radarr_id }}, this, true)"
+                  title="Preview what would be moved">Preview</button>
+          {% endif %}
+          {% elif arr_enabled %}
+          <button class="btn btn-secondary btn-xs"
+                  onclick="previewAdd({{ aid }}, '{{ entry.anilist_title|e }}', this)"
+                  title="Add to Sonarr/Radarr">+ Add</button>
+          {% endif %}
         </div>
       </td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
-</div>
+</div><!-- end #tableView -->
 
-<p style="margin-top: 1rem; font-size: 0.85rem; color: var(--text-muted, #777);" id="noResults" class="hidden">No entries match your filters.</p>
+<!-- Grid view -->
+<div id="gridView" class="watchlist-grid hidden">
+  {% for entry in entries %}
+  {% set ls = entry.list_status %}
+  {% set progress_pct = ((entry.progress / entry.anilist_episodes) * 100) | int if entry.anilist_episodes else 0 %}
+  {% set status_colors = {'CURRENT': '#2e7d32', 'COMPLETED': '#1565c0', 'PLANNING': '#f9a825', 'PAUSED': '#546e7a', 'DROPPED': '#b71c1c', 'REPEATING': '#6a1b9a'} %}
+  <div class="watchlist-grid-card"
+       data-status="{{ ls }}"
+       data-local="{{ entry.local_status }}"
+       data-arr="{{ entry.arr_status }}"
+       data-title="{{ entry.anilist_title | lower }}"
+       data-idx="{{ loop.index0 }}"
+       onclick="openWatchlistDetail(this.dataset.idx)"
+       style="cursor:pointer">
+    <div class="watchlist-grid-poster">
+      {% if entry.cover_image %}
+      <img src="{{ entry.cover_image }}" alt="{{ entry.anilist_title }}" loading="lazy">
+      {% else %}
+      <div class="watchlist-grid-poster-empty">?</div>
+      {% endif %}
+      <!-- Status badge -->
+      <span class="watchlist-grid-status badge" style="background:{{ status_colors.get(ls, '#555') }};color:#fff;">{{ ls.title() }}</span>
+      <!-- Progress overlay -->
+      <div class="watchlist-grid-overlay">
+        <div class="watchlist-grid-progress-bar">
+          <div class="watchlist-grid-progress-fill" style="width:{{ progress_pct }}%"></div>
+        </div>
+        <div class="watchlist-grid-title">{{ entry.anilist_title or '(untitled)' }}</div>
+        <div class="watchlist-grid-ep">
+          {% if entry.anilist_episodes %}Ep {{ entry.progress }}/{{ entry.anilist_episodes }}
+          {% else %}Ep {{ entry.progress }}{% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div><!-- end #gridView -->
+
+<p style="margin-top: 1rem; font-size: 0.85rem; color: var(--text-muted);" id="noResults" class="hidden">No entries match your filters.</p>
 
 {% endif %}
 
+<!-- Entry Detail Modal -->
+<div class="modal-backdrop hidden" id="watchlistDetailModal" onclick="if(event.target===this)closeWatchlistDetail()">
+  <div class="modal-box entry-detail-box" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2 id="wdTitle">Details</h2>
+      <button class="modal-close" onclick="closeWatchlistDetail()">&times;</button>
+    </div>
+    <div class="modal-body entry-detail-body">
+      <div class="entry-detail-poster-col">
+        <div id="wdPosterWrap"></div>
+      </div>
+      <div class="entry-detail-info-col">
+        <div id="wdTitleWrap"></div>
+        <div id="wdInfoGrid" class="entry-detail-grid"></div>
+        <div id="wdActions" class="entry-detail-actions"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Monitor dropdown menu -->
+<div id="monitorMenu" style="display:none;position:fixed;z-index:1000;background:var(--bg-primary,#fff);border:1px solid var(--border-color,#ddd);border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,0.15);min-width:210px;padding:0.25rem 0;">
+  <div style="padding:0.35rem 0.75rem;font-size:0.75rem;font-weight:600;color:var(--text-muted,#888);text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid var(--border-color,#eee);margin-bottom:0.25rem;">Monitor mode</div>
+  <button id="mm-all" class="monitor-menu-item" onclick="setMonitorType('all')">
+    <span class="mm-check" id="mm-check-all"></span>
+    Monitor All <span style="font-size:0.75rem;color:var(--text-muted,#888);">— all eps + search</span>
+  </button>
+  <button id="mm-future" class="monitor-menu-item" onclick="setMonitorType('future')">
+    <span class="mm-check" id="mm-check-future"></span>
+    Monitor Future <span style="font-size:0.75rem;color:var(--text-muted,#888);">— new eps only</span>
+  </button>
+  <button id="mm-none" class="monitor-menu-item" onclick="setMonitorType('none')" style="color:#c62828;">
+    <span class="mm-check" id="mm-check-none"></span>
+    Unmonitor
+  </button>
+</div>
+
+<!-- Quick Add modal (add to Sonarr without needing an AniList watchlist entry) -->
+<div id="quickAddModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="quickAddTitle">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h2 id="quickAddTitle">Quick Add to Sonarr</h2>
+      <button class="modal-close" onclick="closeQuickAdd()" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="text" class="modal-search" id="quickAddSearch"
+             placeholder="Search by title…" oninput="onQuickAddSearch(this.value)" autocomplete="off">
+      <div class="candidate-list" id="quickAddCandidates" style="max-height:320px;overflow-y:auto;">
+        <p style="color:var(--text-muted,#666);font-size:0.85rem;">Type a title to search Sonarr…</p>
+      </div>
+      <div id="quickAddMonitorRow" style="display:none;margin-top:0.75rem;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+        <label style="font-size:0.85rem;font-weight:600;white-space:nowrap;">Monitor mode:</label>
+        <select id="quickAddMonitorMode" style="font-size:0.85rem;padding:0.3rem 0.5rem;border:1px solid var(--border-color,#ddd);border-radius:4px;background:var(--bg-primary,#fff);color:inherit;">
+          <option value="future">Future (new episodes only)</option>
+          <option value="all">All episodes</option>
+          <option value="latestSeason">Latest season only</option>
+          <option value="firstSeason">First season only</option>
+          <option value="none">None (don't monitor)</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeQuickAdd()">Cancel</button>
+      <button class="btn btn-primary" id="quickAddConfirmBtn" onclick="confirmQuickAdd()" disabled style="margin-left:0.5rem;">Add to Sonarr</button>
+    </div>
+  </div>
+</div>
+
+<!-- Release search modal -->
+<div id="releaseModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="releaseModalTitle">
+  <div class="modal-box release-modal-box">
+    <div class="modal-header">
+      <h2 id="releaseModalTitle">Search Releases</h2>
+      <button class="modal-close" onclick="closeReleaseModal()" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="release-controls" id="releaseControls" style="display:none;">
+        <input type="text" class="release-filter-input" id="releaseFilterInput"
+               placeholder="Filter by title…" oninput="filterReleases()">
+        <select class="release-sort-select" id="releaseSortSelect" onchange="filterReleases()">
+          <option value="seeders">Sort: Seeders ↓</option>
+          <option value="size">Sort: Size ↓</option>
+          <option value="quality">Sort: Quality</option>
+          <option value="age">Sort: Age ↑</option>
+        </select>
+        <label style="font-size:0.82rem;color:var(--text-muted);display:flex;align-items:center;gap:0.3rem;">
+          <input type="checkbox" id="releaseHideRejected" onchange="filterReleases()"> Hide rejected
+        </label>
+        <button class="btn btn-secondary btn-xs" onclick="loadReleases()" title="Re-query indexers">↺ Re-search</button>
+      </div>
+      <div id="releaseBody">
+        <p style="color:var(--text-muted);font-size:0.85rem;">Querying indexers — this may take up to 30 seconds…</p>
+      </div>
+      <div class="release-new-search" id="releaseNewSearchRow" style="display:none;">
+        <label>Add alt search title to Sonarr:</label>
+        <input type="text" id="releaseAltInput" placeholder="e.g. DanDaDan…">
+        <button class="btn btn-secondary btn-xs" onclick="pushAltTitleAndRefresh()">Add &amp; Re-search</button>
+      </div>
+    </div>
+    <div class="modal-footer" style="font-size:0.8rem;color:var(--text-muted);display:flex;align-items:center;justify-content:space-between;">
+      <span id="releaseCount"></span>
+      <button class="btn btn-secondary btn-xs" onclick="closeReleaseModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Match preview modal -->
+<div id="matchPreviewModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="matchPreviewTitle">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h2 id="matchPreviewTitle">Confirm Match</h2>
+      <button class="modal-close" onclick="closeMatchPreview()" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex;gap:1rem;margin-bottom:1rem;align-items:flex-start;">
+        <img id="matchPoster" src="" alt="" style="width:72px;height:102px;object-fit:cover;border-radius:4px;flex-shrink:0;" onerror="this.style.display='none'">
+        <div style="flex:1;min-width:0;">
+          <div id="matchTitle" style="font-weight:700;font-size:1rem;"></div>
+          <div id="matchMeta" style="font-size:0.82rem;color:var(--text-muted,#888);margin-top:0.2rem;"></div>
+          <div id="matchOverview" style="font-size:0.82rem;margin-top:0.35rem;max-height:3.5rem;overflow:hidden;color:var(--text-secondary,#555);"></div>
+        </div>
+      </div>
+      <div id="matchSiblings" style="display:none;padding:0.5rem 0.75rem;background:var(--bg-secondary,#f8f9fa);border-radius:4px;font-size:0.84rem;margin-bottom:0.75rem;border-left:3px solid var(--accent,#4a90d9);"></div>
+      <div style="margin-bottom:0.75rem;display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+        <label style="font-size:0.85rem;font-weight:600;white-space:nowrap;">Monitor mode:</label>
+        <select id="matchMonitorMode" style="font-size:0.85rem;padding:0.3rem 0.5rem;border:1px solid var(--border-color,#ddd);border-radius:4px;background:var(--bg-primary,#fff);color:inherit;">
+          <option value="future">Future (new episodes only)</option>
+          <option value="all">All episodes</option>
+          <option value="latestSeason">Latest season only</option>
+          <option value="firstSeason">First season only</option>
+          <option value="none">None (don't monitor)</option>
+        </select>
+      </div>
+      <div style="font-size:0.82rem;">
+        <a href="#" id="matchPickDifferent" onclick="openDifferentMatch();return false;">Pick a different match…</a>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeMatchPreview()">Cancel</button>
+      <button class="btn btn-primary" id="confirmMatchBtn" onclick="confirmMatch()" style="margin-left:0.5rem;">Add to Sonarr</button>
+    </div>
+  </div>
+</div>
+
+<!-- Disambiguation modal -->
+<div id="disambigModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="disambigTitle">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h2 id="disambigTitle">Pick the correct series</h2>
+      <button class="modal-close" onclick="closeDisambig()" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p id="disambigHint" style="font-size:0.85rem;color:var(--text-muted,#666);margin-bottom:0.6rem;"></p>
+      <input type="text" class="modal-search" id="disambigSearch" placeholder="Refine search…" oninput="searchCandidates(this.value)">
+      <div class="candidate-list" id="candidateList">
+        <p style="color:var(--text-muted,#666);font-size:0.85rem;">Searching…</p>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeDisambig()">Cancel</button>
+      <button class="btn btn-primary" id="confirmPickBtn" onclick="confirmPick()" disabled style="margin-left:0.5rem;">Add to Sonarr</button>
+    </div>
+  </div>
+</div>
+
 <script>
+var ENTRIES = {{ entries | tojson }};
+var arr_enabled = {{ 'true' if arr_enabled else 'false' }};
+
 (function() {
   var currentFilter = 'ALL';
+  var currentView = localStorage.getItem('watchlist_view') || 'table';
+  var sortCol = null;
+  var sortDir = 1; // 1 = asc, -1 = desc
+
+  // Entry detail popup
+  window.openWatchlistDetail = function(idxStr) {
+    var idx = parseInt(idxStr, 10);
+    var entry = ENTRIES[idx];
+    if (!entry) return;
+    document.getElementById('watchlistDetailModal').classList.remove('hidden');
+    document.getElementById('wdTitle').textContent = entry.anilist_title || '(untitled)';
+
+    // Poster
+    var posterWrap = document.getElementById('wdPosterWrap');
+    if (entry.cover_image) {
+      posterWrap.innerHTML = '<img src="' + _escHtml(entry.cover_image) + '" class="entry-detail-poster" alt="">';
+    } else {
+      posterWrap.innerHTML = '<div class="entry-detail-poster-empty">?</div>';
+    }
+
+    // Title + AniList link
+    var titleWrap = document.getElementById('wdTitleWrap');
+    titleWrap.innerHTML = '<a href="https://anilist.co/anime/' + entry.anilist_id + '" target="_blank" rel="noopener" class="entry-detail-title">'
+      + _escHtml(entry.anilist_title || '(untitled)') + '</a>';
+
+    // Info grid
+    var watchColors = {CURRENT:'#2e7d32',PLANNING:'#1565c0',COMPLETED:'#0277bd',PAUSED:'#546e7a',REPEATING:'#6a1b9a',DROPPED:'#b71c1c'};
+    var ls = entry.list_status || '';
+    var grid = document.getElementById('wdInfoGrid');
+    var rows = [];
+    if (ls) rows.push(['Watch Status', '<span class="badge" style="background:' + (watchColors[ls]||'#555') + ';color:#fff">' + ls.charAt(0) + ls.slice(1).toLowerCase() + '</span>']);
+    if (entry.airing_status) rows.push(['Airing', entry.airing_status.replace('_', ' ').toLowerCase().replace(/\b\w/g, function(c){return c.toUpperCase();})]);
+    if (entry.anilist_format) rows.push(['Format', entry.anilist_format]);
+    if (entry.start_year) rows.push(['Year', entry.start_year]);
+    if (entry.anilist_episodes) rows.push(['Episodes', entry.anilist_episodes]);
+    var progStr = entry.anilist_episodes ? (entry.progress + '/' + entry.anilist_episodes + ' eps') : (entry.progress + ' eps');
+    rows.push(['Progress', progStr]);
+    if (entry.local_status) rows.push(['Local', entry.local_status === 'have' ? '✓ Have' : entry.local_status === 'arr' ? 'via ' + (entry.arr_service||'') : '✗ Missing']);
+    if (entry.arr_status && entry.arr_status !== 'untracked') rows.push(['*arr', (entry.arr_service||'') + ' ' + (entry.arr_status==='monitored'?'●':'○')]);
+    grid.innerHTML = rows.map(function(r) {
+      return '<span class="entry-detail-label">' + escHtml(r[0]) + '</span>'
+        + '<span class="entry-detail-value">' + r[1] + '</span>';
+    }).join('');
+
+    // Actions
+    var actionsEl = document.getElementById('wdActions');
+    var html = '';
+    if (entry.arr_status && entry.arr_status !== 'untracked') {
+      html += '<button class="btn btn-primary btn-xs" onclick="closeWatchlistDetail(); openReleaseModal(' + entry.anilist_id + ', \'' + _escJs(entry.anilist_title||'') + '\', \'' + (entry.arr_service||'sonarr') + '\')">Search Releases</button> ';
+      if (entry.arr_service === 'sonarr' && entry.sonarr_id) {
+        html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); reprocessEntry(\'sonarr\',' + entry.sonarr_id + ',this,false)" title="Move files into AniList subfolders">Reprocess</button> ';
+        html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); reprocessEntry(\'sonarr\',' + entry.sonarr_id + ',this,true)" title="Preview what would be moved">Preview</button>';
+      } else if (entry.arr_service === 'radarr' && entry.radarr_id) {
+        html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); reprocessEntry(\'radarr\',' + entry.radarr_id + ',this,false)" title="Move file into AniList subfolder">Reprocess</button> ';
+        html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); reprocessEntry(\'radarr\',' + entry.radarr_id + ',this,true)" title="Preview what would be moved">Preview</button>';
+      }
+    } else if (typeof arr_enabled !== 'undefined' && arr_enabled) {
+      html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); previewAdd(' + entry.anilist_id + ', \'' + _escJs(entry.anilist_title||'') + '\', this)" title="Add to Sonarr/Radarr">+ Add</button>';
+    }
+    actionsEl.innerHTML = html || '<span style="font-size:0.82rem;color:var(--text-muted)">No actions available.</span>';
+  };
+
+  window.closeWatchlistDetail = function() {
+    document.getElementById('watchlistDetailModal').classList.add('hidden');
+  };
+
+  function _escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  function _escJs(s) {
+    return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+  }
+
+  // View toggle (table / grid)
+  window.setWatchlistView = function(v) {
+    currentView = v;
+    localStorage.setItem('watchlist_view', v);
+    document.getElementById('tableView').classList.toggle('hidden', v !== 'table');
+    document.getElementById('gridView').classList.toggle('hidden', v !== 'grid');
+    document.getElementById('tableViewBtn').classList.toggle('active', v === 'table');
+    document.getElementById('gridViewBtn').classList.toggle('active', v === 'grid');
+  };
+
+  // Sort table by column
+  window.sortTable = function(col) {
+    if (sortCol === col) {
+      sortDir = -sortDir;
+    } else {
+      sortCol = col;
+      sortDir = 1;
+    }
+    // Update header indicators
+    document.querySelectorAll('.sortable-th').forEach(function(th) {
+      th.classList.remove('sort-asc', 'sort-desc');
+      var ind = th.querySelector('.sort-indicator');
+      if (ind) ind.textContent = '↕';
+    });
+    var activeTh = document.querySelector('.sortable-th[data-col="' + col + '"]');
+    if (activeTh) {
+      activeTh.classList.add(sortDir === 1 ? 'sort-asc' : 'sort-desc');
+      var ind = activeTh.querySelector('.sort-indicator');
+      if (ind) ind.textContent = sortDir === 1 ? '↑' : '↓';
+    }
+
+    var tbody = document.getElementById('tableBody');
+    var rows = Array.from(tbody.querySelectorAll('tr'));
+    rows.sort(function(a, b) {
+      var av = a.getAttribute('data-sort-' + col) || '';
+      var bv = b.getAttribute('data-sort-' + col) || '';
+      // Numeric columns
+      if (col === 'year' || col === 'eps' || col === 'progress') {
+        return (parseFloat(av) - parseFloat(bv)) * sortDir;
+      }
+      return av.localeCompare(bv) * sortDir;
+    });
+    rows.forEach(function(r) { tbody.appendChild(r); });
+  };
 
   window.setFilter = function(btn, filter) {
     document.querySelectorAll('.filter-tab').forEach(function(b) { b.classList.remove('active'); });
@@ -203,6 +626,7 @@
   window.applyFilters = function() {
     var search = document.getElementById('searchInput').value.toLowerCase();
     var missingOnly = document.getElementById('missingOnly').checked;
+    // Table rows
     var rows = document.querySelectorAll('#tableBody tr');
     var visible = 0;
     rows.forEach(function(row) {
@@ -216,17 +640,545 @@
       row.style.display = show ? '' : 'none';
       if (show) visible++;
     });
+    // Grid cards
+    document.querySelectorAll('#gridView .watchlist-grid-card').forEach(function(card) {
+      var status = card.getAttribute('data-status') || '';
+      var local = card.getAttribute('data-local') || '';
+      var title = card.getAttribute('data-title') || '';
+      var show = true;
+      if (currentFilter !== 'ALL' && status !== currentFilter) show = false;
+      if (missingOnly && local !== 'missing') show = false;
+      if (search && !title.includes(search)) show = false;
+      card.classList.toggle('hidden', !show);
+    });
     var noResults = document.getElementById('noResults');
     if (noResults) noResults.classList.toggle('hidden', visible > 0);
     var totalEl = document.getElementById('totalCount');
     if (totalEl) totalEl.textContent = visible;
   };
 
+  // ---------------------------------------------------------------------------
+  // Release search modal
+  // ---------------------------------------------------------------------------
+  var _release = { anilistId: null, service: 'sonarr', arrId: null, allReleases: [] };
+
+  window.openReleaseModal = function(anilistId, title, service) {
+    _release.anilistId = anilistId;
+    _release.service = service || 'sonarr';
+    _release.arrId = null;
+    _release.allReleases = [];
+    document.getElementById('releaseModalTitle').textContent =
+      'Search Releases \u2014 ' + title;
+    document.getElementById('releaseAltInput').value = '';
+    document.getElementById('releaseFilterInput').value = '';
+    document.getElementById('releaseCount').textContent = '';
+    document.getElementById('releaseControls').style.display = 'none';
+    document.getElementById('releaseNewSearchRow').style.display = 'none';
+    document.getElementById('releaseBody').innerHTML =
+      '<p style="color:var(--text-muted);font-size:0.85rem;">Querying indexers\u2026 this may take up to 30 seconds.</p>';
+    document.getElementById('releaseModal').classList.remove('hidden');
+    loadReleases();
+  };
+
+  window.closeReleaseModal = function() {
+    document.getElementById('releaseModal').classList.add('hidden');
+    _release.anilistId = null;
+    _release.allReleases = [];
+  };
+
+  window.loadReleases = function() {
+    if (!_release.anilistId) return;
+    var body = document.getElementById('releaseBody');
+    body.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Querying indexers\u2026 this may take up to 30 seconds.</p>';
+    document.getElementById('releaseCount').textContent = 'Searching\u2026';
+    document.getElementById('releaseControls').style.display = 'none';
+    document.getElementById('releaseNewSearchRow').style.display = 'none';
+
+    fetch('/api/watchlist/releases?anilist_id=' + _release.anilistId)
+      .then(function(r) {
+        if (!r.ok) return r.json().then(function(d) { throw new Error(d.error || r.status); });
+        return r.json();
+      })
+      .then(function(data) {
+        _release.service = data.service || _release.service;
+        _release.arrId = data.arr_id;
+        _release.allReleases = data.releases || [];
+        document.getElementById('releaseControls').style.display = '';
+        document.getElementById('releaseNewSearchRow').style.display = '';
+        filterReleases();
+      })
+      .catch(function(e) {
+        body.innerHTML = '<p style="color:#c62828;font-size:0.85rem;">Error: ' + escHtml(e.message) + '</p>';
+        document.getElementById('releaseCount').textContent = '';
+        document.getElementById('releaseNewSearchRow').style.display = '';
+      });
+  };
+
+  window.filterReleases = function() {
+    var q = (document.getElementById('releaseFilterInput').value || '').toLowerCase();
+    var sort = document.getElementById('releaseSortSelect').value;
+    var hideRejected = document.getElementById('releaseHideRejected').checked;
+    var releases = _release.allReleases.slice();
+
+    if (q) {
+      releases = releases.filter(function(r) {
+        return r.title.toLowerCase().indexOf(q) !== -1;
+      });
+    }
+    if (hideRejected) {
+      releases = releases.filter(function(r) { return !r.rejected; });
+    }
+
+    releases.sort(function(a, b) {
+      if (sort === 'seeders') return (b.seeders || 0) - (a.seeders || 0);
+      if (sort === 'size') return _releaseBytes(b.size) - _releaseBytes(a.size);
+      if (sort === 'quality') return (a.quality || '').localeCompare(b.quality || '');
+      if (sort === 'age') return _releaseAgeMins(a.age) - _releaseAgeMins(b.age);
+      return 0;
+    });
+
+    renderReleases(releases, _release.allReleases.length);
+  };
+
+  function _releaseBytes(s) {
+    var m = s && s.match(/([\d.]+)\s*(GB|MB)/i);
+    return m ? parseFloat(m[1]) * (m[2].toUpperCase() === 'GB' ? 1073741824 : 1048576) : 0;
+  }
+
+  function _releaseAgeMins(s) {
+    if (!s) return 0;
+    if (s.indexOf('d') !== -1) return parseInt(s) * 1440;
+    if (s.indexOf('h') !== -1) return parseInt(s) * 60;
+    return 0;
+  }
+
+  function renderReleases(releases, total) {
+    var body = document.getElementById('releaseBody');
+    var countEl = document.getElementById('releaseCount');
+
+    if (!releases || releases.length === 0) {
+      body.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">No releases match. Try adjusting the filter or use "Add &amp; Re-search" below.</p>';
+      countEl.textContent = total != null ? '0 of ' + total + ' results' : '0 results';
+      return;
+    }
+
+    var accepted = releases.filter(function(r) { return !r.rejected; }).length;
+    countEl.textContent = releases.length + ' shown' +
+      (total != null && total !== releases.length ? ' of ' + total : '') +
+      ' \u2014 ' + accepted + ' accepted';
+
+    var rows = releases.map(function(r) {
+      var grabBtn = r.rejected
+        ? '<span title="' + escHtml((r.rejections || []).join('; ')) +
+          '" style="font-size:0.75rem;color:var(--text-muted);">Rejected</span>'
+        : '<button class="btn btn-primary btn-xs" onclick="grabRelease(' +
+            JSON.stringify(r.guid) + ',' + r.indexer_id + ')">Grab</button>';
+      var seeders = r.seeders != null
+        ? '<strong style="color:' + (r.seeders > 5 ? '#1b5e20' : '#b71c1c') + '">' + r.seeders + '</strong>'
+        : '\u2014';
+      return '<tr class="' + (r.rejected ? 'rejected' : '') + '">' +
+        '<td class="release-title-cell" title="' + escHtml(r.title) + '">' + escHtml(r.title) + '</td>' +
+        '<td><span class="badge badge-quality">' + escHtml(r.quality) + '</span></td>' +
+        '<td style="white-space:nowrap;color:var(--text)">' + escHtml(r.size) + '</td>' +
+        '<td style="text-align:center">' + seeders + '</td>' +
+        '<td style="color:var(--text-muted)">' + escHtml(r.age) + '</td>' +
+        '<td style="max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted)"' +
+          ' title="' + escHtml(r.indexer) + '">' + escHtml(r.indexer) + '</td>' +
+        '<td>' + grabBtn + '</td>' +
+        '</tr>';
+    }).join('');
+
+    body.innerHTML = '<div style="overflow-x:auto"><table class="release-table">' +
+      '<thead><tr><th>Title</th><th>Quality</th><th>Size</th>' +
+      '<th>Seeds</th><th>Age</th><th>Indexer</th><th></th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table></div>';
+  }
+
+  window.grabRelease = function(guid, indexerId) {
+    if (!_release.anilistId) return;
+    fetch('/api/watchlist/grab', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        anilist_id: _release.anilistId,
+        guid: guid,
+        indexer_id: indexerId,
+        service: _release.service
+      })
+    }).then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.ok) {
+          showToast('Sent to ' + _release.service + ' \u2014 download queued!', 'success');
+          closeReleaseModal();
+        } else {
+          showToast('Grab failed: ' + (data.error || 'unknown'), 'error');
+        }
+      })
+      .catch(function(e) { showToast('Request failed: ' + e.message, 'error'); });
+  };
+
+  window.pushAltTitleAndRefresh = function() {
+    var title = document.getElementById('releaseAltInput').value.trim();
+    if (!title || !_release.anilistId) return;
+
+    fetch('/api/watchlist/push-alt-titles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ anilist_id: _release.anilistId, titles: [title] })
+    }).then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.ok) {
+          showToast('Added "' + title + '" \u2014 re-querying indexers\u2026', 'success');
+          loadReleases();
+        } else {
+          showToast('Error: ' + (data.error || 'unknown'), 'error');
+        }
+      })
+      .catch(function(e) { showToast('Request failed: ' + e.message, 'error'); });
+  };
+
+  // ---------------------------------------------------------------------------
+  // Monitor dropdown menu
+  // ---------------------------------------------------------------------------
+  var _monitorMenu = { anilistId: null, service: 'sonarr', currentType: 'future' };
+
+  window.openMonitorMenu = function(event, anilistId, service, currentType) {
+    event.stopPropagation();
+    _monitorMenu.anilistId = anilistId;
+    _monitorMenu.service = service;
+    _monitorMenu.currentType = currentType || 'future';
+
+    // Highlight the active option
+    ['all', 'future', 'none'].forEach(function(t) {
+      var chk = document.getElementById('mm-check-' + t);
+      var btn = document.getElementById('mm-' + t);
+      if (chk) chk.textContent = (t === _monitorMenu.currentType) ? '✓' : '';
+      if (btn) btn.style.fontWeight = (t === _monitorMenu.currentType) ? '600' : '';
+    });
+
+    var menu = document.getElementById('monitorMenu');
+    var x = event.clientX;
+    var y = event.clientY + 6;
+    // Keep menu inside viewport
+    menu.style.display = 'block';
+    var mw = menu.offsetWidth;
+    var mh = menu.offsetHeight;
+    if (x + mw > window.innerWidth - 8) x = window.innerWidth - mw - 8;
+    if (y + mh > window.innerHeight - 8) y = event.clientY - mh - 6;
+    menu.style.left = x + 'px';
+    menu.style.top = y + 'px';
+  };
+
+  window.setMonitorType = function(monitorType) {
+    var menu = document.getElementById('monitorMenu');
+    menu.style.display = 'none';
+    if (!_monitorMenu.anilistId) return;
+
+    var label = monitorType === 'all' ? 'Monitoring all episodes\u2026 this may take a moment.'
+               : monitorType === 'future' ? 'Setting to monitor future episodes\u2026'
+               : 'Unmonitoring\u2026';
+    showToast(label, 'success');
+
+    fetch('/api/watchlist/update-monitor', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ anilist_id: _monitorMenu.anilistId, monitor_type: monitorType })
+    }).then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.ok) {
+          window.location.reload();
+        } else {
+          showToast('Error: ' + (data.error || 'unknown'), 'error');
+        }
+      })
+      .catch(function(e) {
+        showToast('Request failed: ' + e.message, 'error');
+      });
+  };
+
+  // Close menu when clicking outside
+  document.addEventListener('click', function(e) {
+    var menu = document.getElementById('monitorMenu');
+    if (menu && !menu.contains(e.target)) {
+      menu.style.display = 'none';
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // 2-step add flow: resolve → preview → confirm
+  // ---------------------------------------------------------------------------
+  var _preview = { anilistId: null, btn: null, service: 'sonarr', tvdbId: null, tmdbId: null, title: '' };
+  var _disambig = { anilistId: null, btn: null, service: 'sonarr', selectedTvdbId: null, searchTimer: null };
+
+  function onAddSuccess(anilistId, service, btn) {
+    showToast('Added to ' + service + ' successfully', 'success');
+    window.location.reload();
+  }
+
+  // Step 1: resolve the match (no add yet)
+  window.previewAdd = function(anilistId, title, btn) {
+    btn.disabled = true;
+    btn.textContent = '\u2026';
+
+    fetch('/api/watchlist/resolve?anilist_id=' + anilistId)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (!data.resolved && data.needs_disambiguation) {
+          openDisambig(anilistId, btn, title, data.service || 'sonarr', data.candidates || []);
+        } else if (!data.resolved) {
+          showToast('Could not resolve: ' + (data.error || 'unknown'), 'error');
+          btn.disabled = false;
+          btn.textContent = '+ Add';
+        } else {
+          openMatchPreview(anilistId, btn, title, data);
+        }
+      })
+      .catch(function(e) {
+        showToast('Request failed: ' + e.message, 'error');
+        btn.disabled = false;
+        btn.textContent = '+ Add';
+      });
+  };
+
+  // Step 2: show match preview modal
+  window.openMatchPreview = function(anilistId, btn, anilistTitle, data) {
+    _preview.anilistId = anilistId;
+    _preview.btn = btn;
+    _preview.service = data.service || 'sonarr';
+    _preview.tvdbId = data.tvdb_id || null;
+    _preview.tmdbId = data.tmdb_id || null;
+    _preview.title = anilistTitle;
+
+    var label = _preview.service === 'radarr' ? 'Radarr' : 'Sonarr';
+    document.getElementById('matchPreviewTitle').textContent = 'Confirm Match';
+
+    var posterEl = document.getElementById('matchPoster');
+    if (data.poster) {
+      posterEl.src = data.poster;
+      posterEl.style.display = '';
+    } else {
+      posterEl.style.display = 'none';
+    }
+
+    document.getElementById('matchTitle').textContent = data.arr_title || '';
+    var meta = [];
+    if (data.arr_year) meta.push(data.arr_year);
+    if (data.season_count) meta.push(data.season_count + ' season' + (data.season_count !== 1 ? 's' : ''));
+    if (data.tvdb_id) meta.push('TVDB: ' + data.tvdb_id);
+    if (data.tmdb_id) meta.push('TMDB: ' + data.tmdb_id);
+    document.getElementById('matchMeta').textContent = meta.join(' \u00b7 ');
+    document.getElementById('matchOverview').textContent = data.overview || '';
+
+    var siblingsEl = document.getElementById('matchSiblings');
+    if (data.siblings && data.siblings.length > 0) {
+      var sibText = data.siblings.map(function(s) {
+        return '\u201c' + (s.anilist_title || 'Unknown') + '\u201d' +
+          (s.sonarr_season ? ' \u2192 Season ' + s.sonarr_season : '');
+      }).join(', ');
+      siblingsEl.innerHTML = '\u26a0\ufe0f Already linked: ' + escHtml(sibText) +
+        (data.suggested_season ? '. This entry will be <strong>Season ' + data.suggested_season + '</strong>.' : '.');
+      siblingsEl.style.display = '';
+    } else {
+      siblingsEl.style.display = 'none';
+    }
+
+    var confirmBtn = document.getElementById('confirmMatchBtn');
+    confirmBtn.textContent = data.already_in_arr
+      ? 'Link to existing ' + label + ' series'
+      : 'Add to ' + label;
+    confirmBtn.disabled = false;
+
+    document.getElementById('matchPickDifferent').style.display =
+      (_preview.service === 'radarr') ? 'none' : '';
+
+    document.getElementById('matchPreviewModal').classList.remove('hidden');
+  };
+
+  window.closeMatchPreview = function() {
+    document.getElementById('matchPreviewModal').classList.add('hidden');
+    if (_preview.btn) {
+      _preview.btn.disabled = false;
+      _preview.btn.textContent = '+ Add';
+    }
+    _preview.anilistId = null;
+    _preview.btn = null;
+  };
+
+  // Step 3: confirm the previewed match and actually add
+  window.confirmMatch = function() {
+    if (!_preview.anilistId) return;
+    var confirmBtn = document.getElementById('confirmMatchBtn');
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Adding\u2026';
+
+    var monitorMode = document.getElementById('matchMonitorMode').value;
+    var body = { anilist_id: _preview.anilistId, monitor_strategy: monitorMode };
+    if (_preview.tvdbId) body.tvdb_id = _preview.tvdbId;
+
+    fetch('/api/library/add-to-arr', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function(r) { return r.json(); })
+      .then(function(data) {
+        document.getElementById('matchPreviewModal').classList.add('hidden');
+        if (data.ok) {
+          onAddSuccess(_preview.anilistId, data.service, _preview.btn);
+        } else {
+          showToast('Error: ' + (data.error || 'unknown'), 'error');
+          if (_preview.btn) {
+            _preview.btn.disabled = false;
+            _preview.btn.textContent = '+ Add';
+          }
+        }
+        _preview.anilistId = null;
+        _preview.btn = null;
+      })
+      .catch(function(e) {
+        showToast('Request failed: ' + e.message, 'error');
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Add';
+      });
+  };
+
+  // "Pick a different match" — open disambig picker from preview modal
+  window.openDifferentMatch = function() {
+    document.getElementById('matchPreviewModal').classList.add('hidden');
+    openDisambig(_preview.anilistId, _preview.btn, _preview.title, _preview.service, []);
+    _preview.anilistId = null;
+    _preview.btn = null;
+  };
+
+  // ---------------------------------------------------------------------------
+  // Disambiguation picker (manual series search)
+  // ---------------------------------------------------------------------------
+  window.openDisambig = function(anilistId, btn, title, service, preloadedCandidates) {
+    _disambig.anilistId = anilistId;
+    _disambig.btn = btn;
+    _disambig.service = service || 'sonarr';
+    _disambig.selectedTvdbId = null;
+
+    document.getElementById('disambigHint').textContent =
+      'Could not auto-match \u201c' + title + '\u201d on ' + _disambig.service + '. Pick the correct entry:';
+    document.getElementById('disambigSearch').value = title;
+    document.getElementById('confirmPickBtn').disabled = true;
+    document.getElementById('confirmPickBtn').textContent =
+      'Add to ' + (_disambig.service === 'radarr' ? 'Radarr' : 'Sonarr');
+    document.getElementById('disambigModal').classList.remove('hidden');
+
+    if (preloadedCandidates && preloadedCandidates.length > 0) {
+      renderCandidates(preloadedCandidates);
+    } else {
+      document.getElementById('candidateList').innerHTML =
+        '<p style="color:var(--text-muted,#666);font-size:0.85rem;">Searching\u2026</p>';
+      loadCandidates(title);
+    }
+  };
+
+  window.closeDisambig = function() {
+    document.getElementById('disambigModal').classList.add('hidden');
+    if (_disambig.btn) {
+      _disambig.btn.disabled = false;
+      _disambig.btn.textContent = '+ Add';
+    }
+    _disambig.anilistId = null;
+    _disambig.btn = null;
+    _disambig.selectedTvdbId = null;
+  };
+
+  window.searchCandidates = function(q) {
+    clearTimeout(_disambig.searchTimer);
+    _disambig.searchTimer = setTimeout(function() { loadCandidates(q); }, 400);
+  };
+
+  function renderCandidates(candidates) {
+    var list = document.getElementById('candidateList');
+    if (!candidates || candidates.length === 0) {
+      list.innerHTML = '<p style="color:var(--text-muted,#666);font-size:0.85rem;">No results found.</p>';
+      return;
+    }
+    list.innerHTML = candidates.map(function(c) {
+      var scoreLabel = c.score != null ? ' &nbsp;&middot;&nbsp; ' + c.score + '%' : '';
+      return '<div class="candidate-card" data-tvdb="' + esc(c.tvdb_id) + '" onclick="selectCandidate(this,' + c.tvdb_id + ')">' +
+        (c.remote_poster
+          ? '<img src="' + esc(c.remote_poster) + '" class="candidate-poster" loading="lazy" onerror="this.style.display=\'none\'">'
+          : '<div class="candidate-poster-ph"></div>') +
+        '<div class="candidate-info">' +
+          '<div class="candidate-title">' + escHtml(c.title) + '</div>' +
+          '<div class="candidate-meta">' +
+            (c.year ? c.year + ' &nbsp;&middot;&nbsp; ' : '') +
+            escHtml(c.status || '') +
+            ' &nbsp;&middot;&nbsp; TVDB: ' + esc(c.tvdb_id) +
+            scoreLabel +
+          '</div>' +
+          (c.overview ? '<div class="candidate-overview">' + escHtml(c.overview) + '</div>' : '') +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  function loadCandidates(q) {
+    if (!q.trim()) return;
+    var list = document.getElementById('candidateList');
+    list.innerHTML = '<p style="color:var(--text-muted,#666);font-size:0.85rem;">Searching\u2026</p>';
+    fetch('/api/watchlist/sonarr-lookup?q=' + encodeURIComponent(q))
+      .then(function(r) { return r.json(); })
+      .then(function(data) { renderCandidates(data.candidates || []); })
+      .catch(function() {
+        list.innerHTML = '<p style="color:#c62828;font-size:0.85rem;">Search failed.</p>';
+      });
+  }
+
+  window.selectCandidate = function(card, tvdbId) {
+    document.querySelectorAll('.candidate-card').forEach(function(c) { c.classList.remove('selected'); });
+    card.classList.add('selected');
+    _disambig.selectedTvdbId = tvdbId;
+    document.getElementById('confirmPickBtn').disabled = false;
+  };
+
+  window.confirmPick = function() {
+    if (!_disambig.selectedTvdbId || !_disambig.anilistId) return;
+    var confirmBtn = document.getElementById('confirmPickBtn');
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Adding\u2026';
+
+    fetch('/api/library/add-to-arr', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ anilist_id: _disambig.anilistId, tvdb_id: _disambig.selectedTvdbId })
+    }).then(function(r) { return r.json(); })
+      .then(function(data) {
+        document.getElementById('disambigModal').classList.add('hidden');
+        if (data.ok) {
+          onAddSuccess(_disambig.anilistId, data.service, _disambig.btn);
+        } else {
+          showToast('Error: ' + (data.error || 'unknown'), 'error');
+          if (_disambig.btn) {
+            _disambig.btn.disabled = false;
+            _disambig.btn.textContent = '+ Add';
+          }
+        }
+        _disambig.anilistId = null;
+        _disambig.btn = null;
+        _disambig.selectedTvdbId = null;
+      })
+      .catch(function(e) {
+        showToast('Request failed: ' + e.message, 'error');
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Add to ' + (_disambig.service === 'radarr' ? 'Radarr' : 'Sonarr');
+      });
+  };
+
+  function esc(v) { return String(v == null ? '' : v); }
+  function escHtml(str) {
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
   window.refreshWatchlist = function() {
     var btn = document.getElementById('refreshBtn');
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span> Refreshing…';
-    fetch('/api/library/watchlist/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+    fetch('/api/watchlist/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
       .then(function(r) { return r.json(); })
       .then(function(data) {
         if (data.ok) {
@@ -245,6 +1197,172 @@
       });
   };
 
+  window.resyncSonarrSeasons = function() {
+    var btn = document.getElementById('resyncSeasonsBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Re-syncing…';
+    fetch('/api/library/backfill-sonarr-siblings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        btn.disabled = false;
+        btn.innerHTML = '↺ Re-sync Seasons';
+        if (data.ok) {
+          var msg = 'Season sync done: ' + data.total_season_updates + ' updated, ' + data.total_linked + ' new links.';
+          showToast(msg, 'success');
+          if (data.total_season_updates > 0 || data.total_linked > 0) {
+            setTimeout(function() { window.location.reload(); }, 1800);
+          }
+        } else {
+          showToast('Error: ' + (data.error || 'unknown'), 'error');
+        }
+      })
+      .catch(function(e) {
+        btn.disabled = false;
+        btn.innerHTML = '↺ Re-sync Seasons';
+        showToast('Request failed: ' + e.message, 'error');
+      });
+  };
+
+  // ---------------------------------------------------------------------------
+  // Quick Add (search Sonarr directly, no AniList entry required)
+  // ---------------------------------------------------------------------------
+  var _quickAdd = { selectedTvdbId: null, selectedTitle: '', searchTimer: null };
+
+  window.openQuickAdd = function() {
+    _quickAdd.selectedTvdbId = null;
+    _quickAdd.selectedTitle = '';
+    document.getElementById('quickAddSearch').value = '';
+    document.getElementById('quickAddCandidates').innerHTML =
+      '<p style="color:var(--text-muted,#666);font-size:0.85rem;">Type a title to search Sonarr\u2026</p>';
+    document.getElementById('quickAddConfirmBtn').disabled = true;
+    document.getElementById('quickAddConfirmBtn').textContent = 'Add to Sonarr';
+    document.getElementById('quickAddMonitorRow').style.display = 'none';
+    document.getElementById('quickAddModal').classList.remove('hidden');
+    setTimeout(function() { document.getElementById('quickAddSearch').focus(); }, 50);
+  };
+
+  window.closeQuickAdd = function() {
+    document.getElementById('quickAddModal').classList.add('hidden');
+    _quickAdd.selectedTvdbId = null;
+  };
+
+  window.onQuickAddSearch = function(q) {
+    clearTimeout(_quickAdd.searchTimer);
+    var list = document.getElementById('quickAddCandidates');
+    if (!q.trim()) {
+      list.innerHTML = '<p style="color:var(--text-muted,#666);font-size:0.85rem;">Type a title to search Sonarr\u2026</p>';
+      return;
+    }
+    _quickAdd.searchTimer = setTimeout(function() {
+      list.innerHTML = '<p style="color:var(--text-muted,#666);font-size:0.85rem;">Searching\u2026</p>';
+      fetch('/api/watchlist/sonarr-lookup?q=' + encodeURIComponent(q))
+        .then(function(r) { return r.json(); })
+        .then(function(data) { _renderQuickAddCandidates(data.candidates || []); })
+        .catch(function() {
+          list.innerHTML = '<p style="color:#c62828;font-size:0.85rem;">Search failed.</p>';
+        });
+    }, 400);
+  };
+
+  function _renderQuickAddCandidates(candidates) {
+    var list = document.getElementById('quickAddCandidates');
+    if (!candidates || candidates.length === 0) {
+      list.innerHTML = '<p style="color:var(--text-muted,#666);font-size:0.85rem;">No results found.</p>';
+      return;
+    }
+    list.innerHTML = candidates.map(function(c) {
+      return '<div class="candidate-card" onclick="selectQuickAdd(this,' + esc(c.tvdb_id) + ')">' +
+        (c.remote_poster
+          ? '<img src="' + esc(c.remote_poster) + '" class="candidate-poster" loading="lazy" onerror="this.style.display=\'none\'">'
+          : '<div class="candidate-poster-ph"></div>') +
+        '<div class="candidate-info">' +
+          '<div class="candidate-title">' + escHtml(c.title) + '</div>' +
+          '<div class="candidate-meta">' +
+            (c.year ? c.year + ' \u00b7 ' : '') + escHtml(c.status || '') +
+            ' \u00b7 TVDB: ' + esc(c.tvdb_id) +
+          '</div>' +
+          (c.overview ? '<div class="candidate-overview">' + escHtml(c.overview) + '</div>' : '') +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  window.selectQuickAdd = function(card, tvdbId) {
+    document.querySelectorAll('#quickAddCandidates .candidate-card').forEach(function(c) {
+      c.classList.remove('selected');
+    });
+    card.classList.add('selected');
+    _quickAdd.selectedTvdbId = tvdbId;
+    _quickAdd.selectedTitle = (card.querySelector('.candidate-title') || {}).textContent || '';
+    document.getElementById('quickAddConfirmBtn').disabled = false;
+    document.getElementById('quickAddMonitorRow').style.display = 'flex';
+  };
+
+  window.confirmQuickAdd = function() {
+    if (!_quickAdd.selectedTvdbId) return;
+    var btn = document.getElementById('quickAddConfirmBtn');
+    btn.disabled = true;
+    btn.textContent = 'Adding\u2026';
+    var monitorMode = document.getElementById('quickAddMonitorMode').value;
+
+    fetch('/api/library/add-by-tvdb', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tvdb_id: _quickAdd.selectedTvdbId, monitor_strategy: monitorMode })
+    }).then(function(r) { return r.json(); })
+      .then(function(data) {
+        document.getElementById('quickAddModal').classList.add('hidden');
+        if (data.ok) {
+          var label = data.arr_title || _quickAdd.selectedTitle;
+          showToast(
+            data.already_existed
+              ? '\u201c' + label + '\u201d is already in Sonarr.'
+              : '\u201c' + label + '\u201d added to Sonarr.',
+            'success'
+          );
+        } else {
+          showToast('Error: ' + (data.error || 'unknown'), 'error');
+        }
+        _quickAdd.selectedTvdbId = null;
+        btn.disabled = false;
+        btn.textContent = 'Add to Sonarr';
+      })
+      .catch(function(e) {
+        showToast('Request failed: ' + e.message, 'error');
+        btn.disabled = false;
+        btn.textContent = 'Add to Sonarr';
+      });
+  };
+
+  window.reprocessEntry = async function(service, arrId, btn, dryRun) {
+    btn.disabled = true;
+    var orig = btn.textContent;
+    btn.textContent = '…';
+    var url = '/api/download/' + service + '/' + arrId + '/reprocess' + (dryRun ? '?dry_run=true' : '');
+    try {
+      var resp = await fetch(url, {method: 'POST'});
+      var data = await resp.json();
+      if (data.ok && data.dry_run) {
+        var moved = (data.files || []).filter(function(f) { return f.action === 'move'; });
+        var skip = (data.files || []).filter(function(f) { return f.action === 'skip'; });
+        var lines = ['Dry run — ' + moved.length + ' to move, ' + skip.length + ' already correct'];
+        moved.forEach(function(f) {
+          lines.push('→ ' + f.folder_name + '/' + f.arr_from.split('/').pop());
+        });
+        showToast(lines.join('\n'), 'success');
+      } else if (data.ok) {
+        showToast('Reprocess done — moved: ' + data.moved + ', skipped: ' + data.skipped + (data.errors ? ', errors: ' + data.errors : ''), data.errors ? 'error' : 'success');
+      } else {
+        showToast('Reprocess failed: ' + (data.error || 'unknown error'), 'error');
+      }
+    } catch(e) {
+      showToast('Reprocess error: ' + e.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  };
+
   function showToast(msg, type) {
     var container = document.getElementById('toastContainer');
     var toast = document.createElement('div');
@@ -253,6 +1371,23 @@
     container.appendChild(toast);
     setTimeout(function() { toast.remove(); }, 4000);
   }
+
+  // Initialize view from localStorage
+  setWatchlistView(currentView);
+
+  // Scroll-on-hover for title cells
+  document.querySelectorAll('.scroll-on-hover').forEach(function(el) {
+    el.addEventListener('mouseenter', function() {
+      if (el.scrollWidth > el.offsetWidth + 2) {
+        el.style.setProperty('--scroll-dist', -(el.scrollWidth - el.offsetWidth) + 'px');
+        el.classList.add('is-scrolling');
+      }
+    });
+    el.addEventListener('mouseleave', function() {
+      el.classList.remove('is-scrolling');
+      el.style.removeProperty('--scroll-dist');
+    });
+  });
 })();
 </script>
 {% endblock %}

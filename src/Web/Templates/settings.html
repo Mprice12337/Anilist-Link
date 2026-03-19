@@ -8,12 +8,28 @@
 <div class="alert alert-success">Settings saved successfully.</div>
 {% endif %}
 
-<form method="post" action="/settings" autocomplete="off">
+<div class="settings-layout">
+<nav class="settings-sidebar">
     {% for group_name, fields in field_groups %}
-    <div class="card">
-        <h2>{{ group_name }}</h2>
-        {% if group_name == "AniList" %}
+    <a href="#settings-{{ group_name | lower | replace(' ', '-') }}" class="settings-sidebar-link">{{ group_name }}</a>
+    {% endfor %}
+</nav>
+
+<form method="post" action="/settings" autocomplete="off" style="flex:1;min-width:0">
+    {% for group_name, fields in field_groups %}
+    <div class="card" id="settings-{{ group_name | lower | replace(' ', '-') }}">
+        <h2>{% if group_name == "AniList" %}<img src="/static/img/anilist.png" alt="AniList" class="section-service-logo">{% elif group_name == "Plex" %}<img src="/static/img/plex.png" alt="Plex" class="section-service-logo">{% elif group_name == "Jellyfin" %}<img src="/static/img/jellyfin.png" alt="Jellyfin" class="section-service-logo">{% elif group_name == "Crunchyroll" %}<img src="/static/img/crunchyroll.png" alt="Crunchyroll" class="section-service-logo">{% elif group_name == "Sonarr" %}<img src="/static/img/sonarr.webp" alt="Sonarr" class="section-service-logo">{% elif group_name == "Radarr" %}<img src="/static/img/radarr.png" alt="Radarr" class="section-service-logo">{% endif %}{{ group_name }}</h2>
+        {% if group_name == "Library" %}
+        <p class="text-muted hint">Configure your anime library paths (one directory per line).</p>
+        {% if setup == "library" %}
+        <div class="alert alert-success">Set up your library paths below to get started.</div>
+        {% endif %}
+        {% elif group_name == "AniList" %}
         <p class="text-muted hint">Set your AniList app's redirect URL to: <code>{{ anilist_callback_url }}</code></p>
+        {% elif group_name == "Sonarr" %}
+        <p class="text-muted hint">Set <strong>Anime root folder path</strong> to your anime directory (e.g. <code>/data/anime</code>) so new series land there instead of the default TV folder. Register <code>http://&lt;your-host&gt;:9876/api/webhook/sonarr</code> in Sonarr → Settings → Connect for post-download restructuring.</p>
+        {% elif group_name == "Radarr" %}
+        <p class="text-muted hint">Set <strong>Anime root folder path</strong> to your anime movies directory. Register <code>http://&lt;your-host&gt;:9876/api/webhook/radarr</code> in Radarr → Settings → Connect for post-download restructuring.</p>
         {% elif group_name == "Library Restructuring" %}
         <p class="text-muted hint">Map Plex's file paths to local paths (e.g. Plex sees <code>/data/anime</code>, local is <code>/mnt/media/anime</code>). Leave blank if paths are the same.</p>
         {% elif group_name == "Naming Templates" %}
@@ -25,10 +41,21 @@
                     data-file="{{ preset.file }}"
                     data-folder="{{ preset.folder }}"
                     data-season="{{ preset.season_folder }}"
+                    data-movie="{{ preset.movie_file }}"
                     style="margin-right:0.25rem;margin-bottom:0.25rem;padding:0.25rem 0.6rem;font-size:0.8rem">
                 {{ preset_name.replace('_', ' ').title() }}
             </button>
             {% endfor %}
+        </div>
+        {% endif %}
+        {% if group_name in ("Sonarr", "Radarr") %}
+        <div style="margin-bottom:0.75rem">
+          <button type="button" class="btn btn-secondary btn-sm"
+                  onclick="migrateRootFolder('{{ group_name | lower }}')"
+                  title="Move all tracked {{ group_name }} entries to the configured anime root folder">
+            Move all tracked entries to anime folder
+          </button>
+          <span id="{{ group_name | lower }}-migrate-status" style="margin-left:0.75rem;font-size:0.85rem;color:var(--text-muted)"></span>
         </div>
         {% endif %}
         <div class="form-grid">
@@ -64,8 +91,18 @@
                     <option value="english" {% if display.get(key) == "english" %}selected{% endif %}>English</option>
                     <option value="both_romaji_primary" {% if display.get(key) == "both_romaji_primary" %}selected{% endif %}>Both (Romaji primary)</option>
                     <option value="both_english_primary" {% if display.get(key) == "both_english_primary" %}selected{% endif %}>Both (English primary)</option>
+                    {% elif key == "naming.illegal_char_replacement" %}
+                    <option value="" {% if display.get(key, "") == "" %}selected{% endif %}>Remove — Re:Zero → ReZero</option>
+                    <option value="-" {% if display.get(key) == "-" %}selected{% endif %}>Hyphen — Re:Zero → Re-Zero</option>
+                    <option value=" " {% if display.get(key) == " " %}selected{% endif %}>Space — Re:Zero → Re Zero</option>
+                    <option value="_" {% if display.get(key) == "_" %}selected{% endif %}>Underscore — Re:Zero → Re_Zero</option>
                     {% endif %}
                 </select>
+
+                {% elif input_type == "textarea" %}
+                <textarea name="{{ key }}" id="{{ key }}" rows="3"
+                          {% if key in env_overrides %}disabled{% endif %}
+                          style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:0.55rem 0.75rem;font-size:0.9rem;width:100%;resize:vertical;font-family:inherit">{{ display.get(key, '') }}</textarea>
 
                 {% elif input_type == "checkbox" %}
                 <label class="toggle">
@@ -88,6 +125,22 @@
                        min="1"
                        {% if key in env_overrides %}disabled{% endif %}>
 
+                {% elif key in ("sonarr.anime_root_folder", "radarr.anime_root_folder") %}
+                <div style="display:flex;gap:0.5rem;align-items:center">
+                    <input type="text" name="{{ key }}" id="{{ key }}"
+                           value="{{ display.get(key, '') }}"
+                           {% if key in env_overrides %}disabled{% endif %}
+                           style="flex:1">
+                    {% if key not in env_overrides %}
+                    <button type="button" class="btn btn-secondary btn-sm"
+                            onclick="loadArrFolders('{{ key }}')"
+                            style="white-space:nowrap">Browse</button>
+                    {% endif %}
+                </div>
+                <select id="{{ key }}-picker" style="display:none;margin-top:0.35rem;width:100%"
+                        onchange="document.getElementById('{{ key }}').value=this.value;this.style.display='none'">
+                </select>
+
                 {% else %}
                 <input type="{{ input_type }}" name="{{ key }}" id="{{ key }}"
                        value="{{ display.get(key, '') }}"
@@ -103,7 +156,8 @@
             <div style="font-size:0.85rem">
                 <div><span class="text-muted">Folder:</span> <code id="naming-preview-folder"></code></div>
                 <div><span class="text-muted">Season:</span> <code id="naming-preview-season"></code></div>
-                <div><span class="text-muted">File:</span> <code id="naming-preview-file"></code></div>
+                <div><span class="text-muted">Episode:</span> <code id="naming-preview-file"></code></div>
+                <div><span class="text-muted">Movie:</span> <code id="naming-preview-movie"></code></div>
             </div>
         </div>
         <details style="margin-top:0.75rem">
@@ -120,6 +174,8 @@
                 <div><code>{quality.resolution}</code> — Resolution only</div>
                 <div><code>{quality.source}</code> — Source only</div>
                 <div><code>{season.name}</code> — Season AniList title</div>
+                <div><code>{format}</code> — AniList format (e.g. MOVIE)</div>
+                <div><code>{format.short}</code> — Short format (e.g. Movie)</div>
             </div>
         </details>
         {% endif %}
@@ -131,6 +187,7 @@
         <a href="/" class="btn btn-secondary">Cancel</a>
     </div>
 </form>
+</div>{# end .settings-layout #}
 
 <script>
 (function() {
@@ -145,7 +202,25 @@
         'quality': '1080p BluRay x265',
         'quality.resolution': '1080p',
         'quality.source': 'BluRay',
-        'season.name': 'Shingeki no Kyojin Season 2'
+        'season.name': 'Shingeki no Kyojin Season 2',
+        'format': 'TV',
+        'format.short': 'TV'
+    };
+
+    var movieTokens = {
+        'title': 'Sen to Chihiro no Kamikakushi',
+        'title.romaji': 'Sen to Chihiro no Kamikakushi',
+        'title.english': 'Spirited Away',
+        'year': '2001',
+        'season': '01',
+        'episode': '',
+        'episode.title': '',
+        'quality': '1080p BluRay x265',
+        'quality.resolution': '1080p',
+        'quality.source': 'BluRay',
+        'season.name': '',
+        'format': 'MOVIE',
+        'format.short': 'Movie'
     };
 
     function renderTemplate(template, tokens) {
@@ -167,14 +242,17 @@
         var fileEl = document.getElementById('naming.file_template');
         var folderEl = document.getElementById('naming.folder_template');
         var seasonEl = document.getElementById('naming.season_folder_template');
+        var movieEl = document.getElementById('naming.movie_file_template');
         if (!fileEl || !folderEl || !seasonEl) return;
 
         var pFile = document.getElementById('naming-preview-file');
         var pFolder = document.getElementById('naming-preview-folder');
         var pSeason = document.getElementById('naming-preview-season');
+        var pMovie = document.getElementById('naming-preview-movie');
         if (pFile) pFile.textContent = renderTemplate(fileEl.value, sampleTokens) + '.mkv';
         if (pFolder) pFolder.textContent = renderTemplate(folderEl.value, sampleTokens);
         if (pSeason) pSeason.textContent = renderTemplate(seasonEl.value, sampleTokens);
+        if (pMovie && movieEl) pMovie.textContent = renderTemplate(movieEl.value, movieTokens) + '.mkv';
     }
 
     // Bind input events
@@ -188,9 +266,11 @@
             var fileEl = document.getElementById('naming.file_template');
             var folderEl = document.getElementById('naming.folder_template');
             var seasonEl = document.getElementById('naming.season_folder_template');
+            var movieEl = document.getElementById('naming.movie_file_template');
             if (fileEl) fileEl.value = btn.dataset.file;
             if (folderEl) folderEl.value = btn.dataset.folder;
             if (seasonEl) seasonEl.value = btn.dataset.season;
+            if (movieEl) movieEl.value = btn.dataset.movie;
             updatePreview();
         });
     });
@@ -198,5 +278,82 @@
     // Initial render
     updatePreview();
 })();
+
+async function migrateRootFolder(service) {
+    var btn = event.target;
+    var status = document.getElementById(service + '-migrate-status');
+    btn.disabled = true;
+    status.innerHTML = 'Moving…';
+    status.style.color = 'var(--text-muted)';
+    try {
+        var resp = await fetch('/api/download/' + service + '/migrate-root-folder', {method: 'POST'});
+        var data = await resp.json();
+        if (data.ok) {
+            var summary = 'moved: ' + data.moved + ', skipped: ' + data.skipped + (data.errors ? ', errors: ' + data.errors : '');
+            var rows = (data.details || []).map(function(d) {
+                var color = d.status === 'moved' ? '#2e7d32' : d.status === 'skipped' ? '#888' : '#c62828';
+                var reason = d.status === 'skipped' ? ' (already in target)' : d.status === 'error' ? ' — ' + (d.error || '') : '';
+                return '<div style="font-size:0.8rem;color:' + color + '">' + d.status.toUpperCase() + ' ' + d.title + reason + '</div>';
+            }).join('');
+            status.innerHTML = '<strong>' + summary + '</strong>' + (rows ? '<div style="margin-top:0.4rem">' + rows + '</div>' : '');
+            status.style.color = data.errors ? '#c62828' : 'inherit';
+        } else {
+            status.textContent = 'Error: ' + (data.error || 'unknown');
+            status.style.color = '#c62828';
+        }
+    } catch(e) {
+        status.textContent = 'Error: ' + e.message;
+        status.style.color = '#c62828';
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+// Settings sidebar scrollspy
+(function() {
+    var links = document.querySelectorAll('.settings-sidebar-link');
+    if (!links.length || !('IntersectionObserver' in window)) return;
+    var active = null;
+    function setActive(id) {
+        links.forEach(function(l) {
+            l.classList.toggle('active', l.getAttribute('href') === '#' + id);
+        });
+        active = id;
+    }
+    var observer = new IntersectionObserver(function(entries) {
+        entries.forEach(function(e) {
+            if (e.isIntersecting) setActive(e.target.id);
+        });
+    }, { rootMargin: '-20% 0px -70% 0px' });
+    links.forEach(function(l) {
+        var id = l.getAttribute('href').slice(1);
+        var el = document.getElementById(id);
+        if (el) observer.observe(el);
+    });
+})();
+
+async function loadArrFolders(key) {
+    var service = key.startsWith('sonarr') ? 'sonarr' : 'radarr';
+    var btn = document.querySelector('[onclick="loadArrFolders(\'' + key + '\')"]');
+    var picker = document.getElementById(key + '-picker');
+    if (btn) btn.disabled = true;
+    try {
+        var resp = await fetch('/api/download/' + service + '/options');
+        var data = await resp.json();
+        if (!data.ok || !data.root_folders || !data.root_folders.length) {
+            alert('No root folders found — check ' + service + ' URL and API key.');
+            return;
+        }
+        picker.innerHTML = '<option value="">— select a path —</option>' +
+            data.root_folders.map(function(f) {
+                return '<option value="' + f.path + '">' + f.path + '</option>';
+            }).join('');
+        picker.style.display = 'block';
+    } catch (e) {
+        alert('Could not reach ' + service + ': ' + e.message);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
 </script>
 {% endblock %}

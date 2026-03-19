@@ -9,15 +9,14 @@
 <body>
     <nav class="navbar">
         <div class="nav-brand">
-            <a href="/">Anilist-Link</a>
+            <a href="/"><img src="/static/img/anilist.png" alt="AniList" class="nav-brand-logo">Anilist-Link</a>
         </div>
         <div class="nav-links">
-            <a href="/">Dashboard</a>
-            <a href="/library">My Library</a>
-            <a href="/plex">Plex</a>
-            <a href="/restructure">Restructure</a>
-            <a href="/settings">Settings</a>
-            <a href="/api/status">API Status</a>
+            <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">Dashboard</a>
+            <a href="/watchlist" class="{% if '/watchlist' in request.url.path %}active{% endif %}">Watchlist</a>
+            <a href="/library" class="{% if '/library' in request.url.path %}active{% endif %}">Library</a>
+            <a href="/tools" class="{% if '/tools' in request.url.path or '/restructure' in request.url.path or '/crunchyroll' in request.url.path or '/download' in request.url.path %}active{% endif %}">Tools</a>
+            <a href="/settings" class="{% if '/settings' in request.url.path %}active{% endif %}">Settings</a>
         </div>
     </nav>
 
@@ -28,5 +27,93 @@
     <footer class="footer">
         <p>Anilist-Link v{{ version | default("0.1.0") }}</p>
     </footer>
+
+    <!-- Floating progress widget -->
+    <div id="progress-widget" class="progress-widget hidden" aria-live="polite">
+        <button class="progress-widget-toggle" id="progress-toggle" aria-expanded="false">
+            <span class="progress-spinner"></span>
+            <span id="progress-count">0 tasks</span>
+        </button>
+        <div class="progress-widget-panel" id="progress-panel" hidden>
+            <div id="progress-tasks"></div>
+        </div>
+    </div>
+
+    <script>
+    (function () {
+        const widget = document.getElementById('progress-widget');
+        const toggle = document.getElementById('progress-toggle');
+        const panel = document.getElementById('progress-panel');
+        const countEl = document.getElementById('progress-count');
+        const tasksEl = document.getElementById('progress-tasks');
+
+        let pollInterval = null;
+        let expanded = false;
+
+        toggle.addEventListener('click', function () {
+            expanded = !expanded;
+            toggle.setAttribute('aria-expanded', expanded);
+            panel.hidden = !expanded;
+        });
+
+        function renderTask(task) {
+            return `<div class="progress-task-card">
+                <div class="progress-task-header">
+                    <span class="progress-task-type">${escHtml(task.type)}</span>
+                    <span class="progress-task-label">${escHtml(task.label)}</span>
+                </div>
+                <div class="progress-bar-wrap">
+                    <div class="progress-bar-fill" style="width:${task.percent}%"></div>
+                </div>
+                <div class="progress-task-detail">${escHtml(task.detail)} &mdash; ${escHtml(task.status)}</div>
+            </div>`;
+        }
+
+        function escHtml(str) {
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        let wasActive = false;
+
+        async function poll() {
+            try {
+                const resp = await fetch('/api/progress');
+                if (!resp.ok) return;
+                const data = await resp.json();
+                const tasks = data.tasks || [];
+
+                if (tasks.length === 0) {
+                    if (wasActive) {
+                        // Brief "done" flash before hiding
+                        widget.classList.add('done-flash');
+                        setTimeout(() => {
+                            widget.classList.add('hidden');
+                            widget.classList.remove('done-flash');
+                        }, 1500);
+                        wasActive = false;
+                    }
+                    return;
+                }
+
+                wasActive = true;
+                widget.classList.remove('hidden');
+                countEl.textContent = tasks.length === 1 ? '1 task' : `${tasks.length} tasks`;
+                tasksEl.innerHTML = tasks.map(renderTask).join('');
+            } catch (e) {
+                // silently ignore fetch errors
+            }
+        }
+
+        // Always keep polling — the widget is a SPA-safe global observer.
+        // The server call is cheap (local SQLite read); stopping early causes
+        // background tasks started after page load to never appear.
+        poll();
+        setInterval(poll, 2000);
+    })();
+    </script>
 </body>
 </html>

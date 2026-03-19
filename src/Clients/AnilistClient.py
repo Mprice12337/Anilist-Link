@@ -19,6 +19,7 @@ OAUTH_TOKEN_URL = "https://anilist.co/api/v2/oauth/token"
 MAX_RETRIES = 3  # retries for 5xx / transport errors only
 MAX_RATE_LIMIT_WAITS = 10  # separate budget for 429s (not counted as errors)
 BACKOFF_BASE = 2.0
+SCAN_RESERVE = 10  # requests kept back for auth/test; scan tasks pause below this
 
 # ---------------------------------------------------------------------------
 # GraphQL query / mutation strings
@@ -93,6 +94,24 @@ query ($id: Int) {
           startDate { year month day }
         }
       }
+    }
+  }
+}
+"""
+
+GET_ANIME_EXTERNAL_LINKS_QUERY = """
+query ($id: Int) {
+  Media(id: $id, type: ANIME) {
+    id
+    title { romaji english native }
+    format
+    episodes
+    externalLinks {
+      id
+      externalId
+      site
+      url
+      type
     }
   }
 }
@@ -204,8 +223,8 @@ class RateLimiter:
     """
 
     def __init__(self) -> None:
-        self._limit: int = 30  # conservative default until first response
-        self._remaining: int = 30
+        self._limit: int = 90  # AniList normal limit; first response will confirm
+        self._remaining: int = 90  # start optimistic so "only go down" rule works
         self._reset_at: float = 0.0  # monotonic time when window resets
         self._last_response: float = 0.0  # monotonic time of last response
         self._lock = asyncio.Lock()
@@ -216,59 +235,95 @@ class RateLimiter:
         return 60.0 / max(1, self._limit) * 1.1
 
     def update_from_headers(self, headers: httpx.Headers) -> None:
-        """Feed response headers back into the limiter."""
+        """Feed response headers back into the limiter.
+
+        Must be called after every response.  The authoritative ``remaining``
+        value from the server corrects our optimistic local counter.
+        """
         raw_limit = headers.get("X-RateLimit-Limit")
         if raw_limit is not None:
             self._limit = int(raw_limit)
 
         raw_remaining = headers.get("X-RateLimit-Remaining")
         if raw_remaining is not None:
-            self._remaining = int(raw_remaining)
+            # Trust the server: it knows the true remaining count.
+            # Only update if the server value is *lower* than our local
+            # counter to avoid re-inflating the budget when concurrent
+            # requests' responses arrive out of order.
+            server_remaining = int(raw_remaining)
+            if server_remaining < self._remaining:
+                self._remaining = server_remaining
 
         raw_reset = headers.get("X-RateLimit-Reset")
         if raw_reset is not None:
-            # AniList sends a UNIX epoch timestamp
             reset_epoch = int(raw_reset)
-            # Convert to monotonic-relative for reliable comparison
             wall_now = time.time()
             mono_now = time.monotonic()
-            self._reset_at = mono_now + max(0, reset_epoch - wall_now)
+            new_reset = mono_now + max(0, reset_epoch - wall_now)
+            # Only advance reset_at, never move it backwards
+            if new_reset > self._reset_at:
+                self._reset_at = new_reset
 
-        # Record when the last response arrived so ``acquire`` can
-        # measure the gap from response→next-request (not request→request).
         self._last_response = time.monotonic()
 
         logger.debug(
-            "Rate headers: limit=%d, remaining=%d, " "reset_in=%.0fs, gap=%.1fs",
+            "Rate headers: limit=%d, remaining=%d, reset_in=%.0fs, gap=%.1fs",
             self._limit,
             self._remaining,
-            max(0, self._reset_at - self._last_response),
+            max(0, self._reset_at - time.monotonic()),
             self._min_gap,
         )
 
-    async def acquire(self) -> None:
-        """Wait if necessary before making a request."""
+    async def acquire(self, high_priority: bool = False) -> None:
+        """Wait if necessary before making a request.
+
+        high_priority=True  — used for auth/test calls: only blocks when
+                               1 or fewer requests remain in the window.
+        high_priority=False — used for scan/bulk calls: pauses when
+                               SCAN_RESERVE or fewer requests remain,
+                               leaving headroom for auth and OAuth.
+
+        Long waits (window reset) are performed **outside** the lock so
+        high-priority requests can still proceed while a scan is paused.
+        """
+        threshold = 1 if high_priority else SCAN_RESERVE
+
+        # --- Phase 1: budget check + optimistic decrement ---
+        # Runs outside the gap-enforcement lock so high-priority calls are
+        # never blocked by a scan sleeping in Phase 2.
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                window_reset = self._reset_at > 0 and self._reset_at <= now
+                if window_reset:
+                    # Rate window has rolled over — restore full budget
+                    self._remaining = self._limit
+                    self._reset_at = 0.0
+                if self._remaining > threshold:
+                    # Optimistically claim one slot before releasing the lock.
+                    # update_from_headers() will correct this with the real
+                    # server value once the response arrives.
+                    self._remaining = max(0, self._remaining - 1)
+                    break
+                wait = max(self._reset_at - now, 0.5)
+
+            logger.info(
+                "Rate limiter: %s paused (%d/%d remaining, reserve=%d), "
+                "waiting %.1fs for window reset",
+                "auth" if high_priority else "scan",
+                self._remaining,
+                self._limit,
+                threshold,
+                wait,
+            )
+            await asyncio.sleep(min(wait, 5.0))
+
+        # --- Phase 2: enforce minimum inter-request gap ---
         async with self._lock:
             now = time.monotonic()
-
-            # 1. If near-exhausted, wait for the window to reset
-            if self._remaining <= 3 and self._reset_at > now:
-                wait = self._reset_at - now
-                logger.info(
-                    "Rate limiter: %d/%d remaining, waiting %.1fs for reset",
-                    self._remaining,
-                    self._limit,
-                    wait,
-                )
-                await asyncio.sleep(wait)
-                now = time.monotonic()
-
-            # 2. Enforce minimum gap since the last response came back.
-            #    This prevents bursting even when network round-trips are fast.
-            gap = self._min_gap
             since_last = now - self._last_response
-            if since_last < gap:
-                await asyncio.sleep(gap - since_last)
+            if since_last < self._min_gap:
+                await asyncio.sleep(self._min_gap - since_last)
 
 
 # ---------------------------------------------------------------------------
@@ -299,31 +354,51 @@ class AniListClient:
     # OAuth2
     # ------------------------------------------------------------------
 
-    def get_authorize_url(self, redirect_uri: str | None = None) -> str:
+    def get_authorize_url(
+        self,
+        redirect_uri: str | None = None,
+        client_id: str | None = None,
+    ) -> str:
         uri = redirect_uri or self._redirect_uri
+        cid = client_id or self._client_id
         return (
             f"{OAUTH_AUTHORIZE_URL}"
-            f"?client_id={self._client_id}"
+            f"?client_id={cid}"
             f"&redirect_uri={uri}"
             f"&response_type=code"
         )
 
     async def exchange_code_for_token(
-        self, auth_code: str, redirect_uri: str | None = None
+        self,
+        auth_code: str,
+        redirect_uri: str | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
     ) -> dict[str, Any]:
         uri = redirect_uri or self._redirect_uri
-        resp = await self._http.post(
-            OAUTH_TOKEN_URL,
-            json={
-                "grant_type": "authorization_code",
-                "client_id": self._client_id,
-                "client_secret": self._client_secret,
-                "redirect_uri": uri,
-                "code": auth_code,
-            },
+        payload = {
+            "grant_type": "authorization_code",
+            "client_id": client_id or self._client_id,
+            "client_secret": client_secret or self._client_secret,
+            "redirect_uri": uri,
+            "code": auth_code,
+        }
+        for attempt in range(4):
+            resp = await self._http.post(OAUTH_TOKEN_URL, json=payload)
+            if resp.status_code == 429:
+                wait = int(resp.headers.get("Retry-After", "10")) + 2
+                logger.warning(
+                    "OAuth token exchange rate-limited; waiting %ds (attempt %d)",
+                    wait,
+                    attempt + 1,
+                )
+                await asyncio.sleep(wait)
+                continue
+            resp.raise_for_status()
+            return resp.json()
+        raise RuntimeError(
+            "AniList OAuth token exchange failed after retries (rate limited)"
         )
-        resp.raise_for_status()
-        return resp.json()
 
     # ------------------------------------------------------------------
     # Public queries (no auth)
@@ -360,12 +435,70 @@ class AniListClient:
         root_data = {k: v for k, v in media.items() if k != "relations"}
         return root_data, edges
 
+    async def get_anime_external_links(self, anime_id: int) -> dict[str, Any] | None:
+        """Fetch external links (TVDB, TMDB, etc.) for a given AniList entry.
+
+        Returns the Media object with ``externalLinks`` populated, or None.
+        """
+        data = await self._execute_query(
+            GET_ANIME_EXTERNAL_LINKS_QUERY, {"id": anime_id}
+        )
+        return data.get("Media")
+
+    def extract_tvdb_id(self, external_links: list[dict[str, Any]]) -> int | None:
+        """Extract the TVDB series ID from AniList externalLinks.
+
+        Checks ``externalId`` first (AniList's stored numeric ID for the site),
+        then falls back to URL parsing. TVDB URLs are slug-based so URL parsing
+        rarely succeeds; the Sonarr title-search fallback in DownloadManager
+        handles that case.
+        """
+        for link in external_links:
+            if link.get("site", "").lower() == "thetvdb":
+                ext_id = link.get("externalId")
+                if ext_id:
+                    try:
+                        return int(ext_id)
+                    except (ValueError, TypeError):
+                        pass
+                # Fallback: parse numeric segment from URL
+                url = link.get("url", "")
+                for part in reversed(url.rstrip("/").split("/")):
+                    if part.isdigit():
+                        return int(part)
+        return None
+
+    def extract_tmdb_id(self, external_links: list[dict[str, Any]]) -> int | None:
+        """Extract the TMDB ID from AniList externalLinks.
+
+        Checks ``externalId`` first, then parses the URL (TMDB URLs are numeric
+        but may carry a slug suffix like ``/12345-show-name``).
+        """
+        for link in external_links:
+            site = link.get("site", "").lower()
+            if site in ("themoviedb", "tmdb"):
+                ext_id = link.get("externalId")
+                if ext_id:
+                    try:
+                        return int(ext_id)
+                    except (ValueError, TypeError):
+                        pass
+                # Fallback: TMDB URL may be /movie/12345 or /movie/12345-slug
+                url = link.get("url", "")
+                for part in reversed(url.rstrip("/").split("/")):
+                    numeric = part.split("-")[0] if "-" in part else part
+                    if numeric.isdigit():
+                        return int(numeric)
+        return None
+
     # ------------------------------------------------------------------
     # Authenticated queries
     # ------------------------------------------------------------------
 
     async def get_viewer(self, access_token: str) -> dict[str, Any]:
-        data = await self._execute_query(VIEWER_QUERY, {}, access_token)
+        data = await self._execute_query(
+            VIEWER_QUERY, {}, access_token, high_priority=True
+        )
         return data.get("Viewer", {})
 
     async def get_user_anime_list(
@@ -431,6 +564,7 @@ class AniListClient:
                 GET_ANIME_LIST_ENTRY_QUERY,
                 {"mediaId": anime_id, "userId": user_id},
                 access_token,
+                high_priority=True,
             )
             return data.get("MediaList")
         except httpx.HTTPStatusError:
@@ -456,7 +590,7 @@ class AniListClient:
         if repeat is not None:
             variables["repeat"] = repeat
         data = await self._execute_query(
-            UPDATE_PROGRESS_MUTATION, variables, access_token
+            UPDATE_PROGRESS_MUTATION, variables, access_token, high_priority=True
         )
         return data.get("SaveMediaListEntry", {})
 
@@ -469,6 +603,7 @@ class AniListClient:
         query: str,
         variables: dict[str, Any],
         access_token: str | None = None,
+        high_priority: bool = False,
     ) -> dict[str, Any]:
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if access_token:
@@ -478,7 +613,7 @@ class AniListClient:
         rate_limit_waits = 0
 
         while True:
-            await self._limiter.acquire()
+            await self._limiter.acquire(high_priority=high_priority)
 
             try:
                 resp = await self._http.post(

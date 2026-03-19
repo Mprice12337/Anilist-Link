@@ -453,7 +453,7 @@ class WatchSyncer:
                         )
                         similarity = max(similarity, movie_sim)
 
-                    if similarity > best_similarity:
+                    if similarity > best_similarity and similarity >= 0.75:
                         best_similarity = similarity
                         best_match = result
 

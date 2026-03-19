@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Scanning {{ library.name if library else "Library" }}... — Anilist-Link{% endblock %}
+
+{% block content %}
+<h1>Scanning Library</h1>
+{% if library %}
+<p class="text-muted">{{ library.name }}</p>
+{% endif %}
+
+<section class="card" id="progress-card">
+    <h2 id="progress-heading">Scanning...</h2>
+    <div class="progress-bar-container">
+        <div class="progress-bar" id="progress-bar" style="width: 0%"></div>
+    </div>
+    <p class="progress-text">
+        <span id="progress-count">0</span> / <span id="progress-total">?</span>
+        <span id="progress-unit">items processed</span>
+    </p>
+    <p class="text-muted" id="phase-text">Starting...</p>
+    <p class="text-muted" id="current-item"></p>
+    <p class="text-muted" id="eta-text"></p>
+</section>
+
+<script>
+(function() {
+    var libraryId = {{ library_id }};
+    var bar = document.getElementById('progress-bar');
+    var count = document.getElementById('progress-count');
+    var total = document.getElementById('progress-total');
+    var heading = document.getElementById('progress-heading');
+    var phaseText = document.getElementById('phase-text');
+    var currentItem = document.getElementById('current-item');
+    var etaText = document.getElementById('eta-text');
+
+    function formatTime(seconds) {
+        if (seconds < 60) return Math.round(seconds) + 's';
+        var m = Math.floor(seconds / 60);
+        var s = Math.round(seconds % 60);
+        return m + 'm ' + s + 's';
+    }
+
+    async function poll() {
+        try {
+            var resp = await fetch('/api/library/' + libraryId + '/scan/progress');
+            var data = await resp.json();
+
+            if (data.status === 'complete') {
+                bar.style.width = '100%';
+                heading.textContent = 'Complete! Loading results...';
+                phaseText.textContent = data.phase || '';
+                currentItem.textContent = '';
+                etaText.textContent = '';
+                window.location.href = '/library/' + libraryId;
+                return;
+            }
+
+            if (data.status === 'error') {
+                heading.textContent = 'Error';
+                phaseText.textContent = data.error_message || 'An unexpected error occurred.';
+                currentItem.textContent = '';
+                etaText.textContent = '';
+                bar.style.width = '100%';
+                bar.classList.add('progress-bar-error');
+                return;
+            }
+
+            count.textContent = data.processed;
+            if (data.total > 0) {
+                total.textContent = data.total;
+                var pct = Math.min(100, Math.round((data.processed / data.total) * 100));
+                bar.style.width = pct + '%';
+            }
+
+            if (data.phase) {
+                phaseText.textContent = data.phase;
+            }
+            if (data.current_item) {
+                currentItem.textContent = 'Current: ' + data.current_item;
+            }
+
+            if (data.processed > 0 && data.total > 0 && data.elapsed_seconds > 0) {
+                var avgPerItem = data.elapsed_seconds / data.processed;
+                var remaining = data.total - data.processed;
+                var etaSeconds = avgPerItem * remaining;
+                etaText.textContent = 'ETA: ' + formatTime(etaSeconds) +
+                    ' (elapsed: ' + formatTime(data.elapsed_seconds) + ')';
+            }
+        } catch(e) {}
+        setTimeout(poll, 1000);
+    }
+
+    poll();
+})();
+</script>
+{% endblock %}

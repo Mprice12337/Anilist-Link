@@ -1,9 +1,7 @@
 {% extends "base.html" %}
-
-{% block title %}Dashboard - Anilist-Link{% endblock %}
+{% block title %}Dashboard — Anilist-Link{% endblock %}
 
 {% block content %}
-<h1>Dashboard</h1>
 
 {% if error == "no_credentials" %}
 <div class="alert alert-danger">AniList client credentials are not configured. Go to <a href="/settings">Settings</a> to add them.</div>
@@ -16,112 +14,130 @@
 <div class="alert alert-success">{{ message }}</div>
 {% endif %}
 
-<section class="card">
-    <h2>System Status</h2>
-    <div class="stats-grid">
-        <div class="stat">
-            <span class="stat-value">{{ mapping_count }}</span>
-            <span class="stat-label">Media Mappings</span>
-        </div>
-        <div class="stat">
-            <span class="stat-value">{{ users | length }}</span>
-            <span class="stat-label">Linked Accounts</span>
-        </div>
+<!-- Stats bar -->
+<div class="dashboard-stats-bar">
+    <div class="dash-stat">
+        <span class="dash-stat-value">{{ mapping_count }}</span>
+        <span class="dash-stat-label">Matched</span>
     </div>
-</section>
-
-<section class="card">
-    <h2>Linked Accounts</h2>
-    {% if users %}
-    <table class="table">
-        <thead>
-            <tr>
-                <th>Username</th>
-                <th>Service</th>
-                <th>Linked</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for user in users %}
-            <tr>
-                <td>{{ user.username }}</td>
-                <td>{{ user.service }}</td>
-                <td>{{ user.created_at }}</td>
-                <td>
-                    <form method="post" action="/auth/anilist/unlink/{{ user.user_id }}" style="display:inline">
-                        <button type="submit" class="btn btn-danger btn-sm">Unlink</button>
-                    </form>
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    {% else %}
-    <p class="text-muted">No accounts linked yet.</p>
+    <div class="dash-stat">
+        <span class="dash-stat-value">{{ user_count }}</span>
+        <span class="dash-stat-label">Account{{ 's' if user_count != 1 else '' }}</span>
+    </div>
+    <div class="dash-stat">
+        <span class="dash-stat-value">{{ currently_watching | length }}</span>
+        <span class="dash-stat-label">Watching</span>
+    </div>
+    {% if next_sync %}
+    <div class="dash-stat">
+        <span class="dash-stat-value">{{ next_sync[:16] }}</span>
+        <span class="dash-stat-label">Next Sync</span>
+    </div>
     {% endif %}
-    {% if anilist_configured %}
-    <a href="/auth/anilist" class="btn btn-primary">Link AniList Account</a>
-    {% else %}
-    <p class="text-muted" style="margin-top:0.75rem">Configure AniList credentials in <a href="/settings">Settings</a> to link accounts.</p>
-    {% endif %}
-</section>
-
-<section class="card">
-    <h2>Scheduled Jobs</h2>
-    {% if job_status %}
-    <table class="table">
-        <thead>
-            <tr>
-                <th>Job</th>
-                <th>Next Run</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for job in job_status %}
-            <tr>
-                <td>{{ job.name }}</td>
-                <td>{{ job.next_run_time or "Not scheduled" }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    {% else %}
-    <p class="text-muted">No jobs registered.</p>
-    {% endif %}
-
-    <form method="post" action="/api/sync" style="display:inline">
-        <button type="submit" class="btn btn-primary">Trigger Crunchyroll Sync</button>
-    </form>
-    <form method="post" action="/api/sync/dry-run" style="display:inline">
-        <button type="submit" class="btn btn-secondary">Dry Run</button>
-    </form>
-</section>
-
-{% if plex_configured %}
-<section class="card">
-    <h2>Plex Metadata</h2>
-    <p>Scan your Plex show libraries, match titles to AniList, and apply metadata (descriptions, genres, posters, ratings).</p>
-    <form method="post" action="/scan/plex/preview">
-        {% if plex_libraries %}
-        <div class="form-group" style="margin-bottom:1rem">
-            <label>Libraries to scan:</label>
-            <div class="library-checkboxes">
-                {% for lib in plex_libraries %}
-                <label class="toggle">
-                    <input type="checkbox" name="library_key" value="{{ lib.key }}"
-                           {% if lib.key in selected_library_keys or not selected_library_keys %}checked{% endif %}>
-                    <span class="toggle-label">{{ lib.title }} ({{ lib.item_count }} items)</span>
-                </label>
-                {% endfor %}
-            </div>
-        </div>
+    <div style="flex:1"></div>
+    <!-- Quick actions inline with stats bar -->
+    <div class="dash-quick-actions">
+        <form method="post" action="/api/sync" style="display:inline">
+            <button type="submit" class="btn btn-secondary btn-sm">Sync Crunchyroll</button>
+        </form>
+        {% if plex_configured %}
+        <a href="/library?source=plex" class="btn btn-secondary btn-sm"><img src="/static/img/plex.png" alt="" class="btn-service-logo">Plex Library</a>
         {% endif %}
-        <div class="form-actions" style="margin-bottom:0">
-            <button type="submit" class="btn btn-primary">Preview Scan</button>
-            <button type="submit" formaction="/api/scan/plex" class="btn btn-secondary">Scan (no preview)</button>
-        </div>
-    </form>
+        {% if jellyfin_configured %}
+        <a href="/library?source=jellyfin" class="btn btn-secondary btn-sm"><img src="/static/img/jellyfin.png" alt="" class="btn-service-logo">Jellyfin Library</a>
+        {% endif %}
+        {% if anilist_configured and not users %}
+        <a href="/auth/anilist" class="btn btn-secondary btn-sm">Link AniList</a>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Currently Watching -->
+<section class="card">
+    <h2>Currently Watching</h2>
+    {% if not users %}
+    <p class="text-muted">
+        No AniList account linked.
+        {% if anilist_configured %}
+        <a href="/auth/anilist">Link your account</a> to see your watchlist.
+        {% else %}
+        Configure AniList credentials in <a href="/settings">Settings</a> first.
+        {% endif %}
+    </p>
+    {% elif not currently_watching %}
+    <p class="text-muted">No series marked "Currently Watching" on AniList.</p>
+    {% else %}
+    <div class="watching-grid">
+        {% for entry in currently_watching %}
+        {% set progress_pct = ((entry.progress / entry.anilist_episodes) * 100) | int if entry.anilist_episodes else 0 %}
+        <a href="https://anilist.co/anime/{{ entry.anilist_id }}" target="_blank" rel="noopener" class="watching-card">
+            <div class="watching-poster">
+                {% if entry.cover_image %}
+                <img src="{{ entry.cover_image }}" alt="{{ entry.anilist_title }}" loading="lazy">
+                {% else %}
+                <div class="watching-poster-empty">?</div>
+                {% endif %}
+                <div class="watching-overlay">
+                    <div class="watching-overlay-progress-bar">
+                        <div class="watching-overlay-progress-fill" style="width:{{ progress_pct }}%"></div>
+                    </div>
+                    <div class="watching-overlay-text">
+                        <span class="watching-overlay-title scroll-on-hover">
+                            {% if title_display == 'english' and entry.anilist_title_english %}{{ entry.anilist_title_english }}
+                            {% elif title_display in ('both_romaji_primary', 'both_english_primary') %}{{ entry.anilist_title }}
+                            {% else %}{{ entry.anilist_title or '(untitled)' }}{% endif %}
+                        </span>
+                        <span class="watching-overlay-ep">
+                            {% if entry.anilist_episodes %}Ep {{ entry.progress }}/{{ entry.anilist_episodes }}
+                            {% else %}Ep {{ entry.progress }}{% endif %}
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+    {% endif %}
 </section>
-{% endif %}
+
+<!-- Recent Activity (full width) -->
+<section class="card">
+    <h2>Recent Activity</h2>
+    {% if recent_activity %}
+    <div class="activity-feed">
+        {% for item in recent_activity %}
+        <div class="activity-item">
+            <span class="activity-icon">
+                {% if item.type == 'cr_sync' %}<img src="/static/img/crunchyroll.png" alt="Crunchyroll" class="activity-service-icon">
+                {% elif item.type == 'restructure' %}📁
+                {% elif item.type == 'download' %}<span class="activity-arr-icons"><img src="/static/img/sonarr.webp" alt="Sonarr" class="activity-service-icon"><img src="/static/img/radarr.png" alt="Radarr" class="activity-service-icon"></span>
+                {% else %}•{% endif %}
+            </span>
+            <span class="activity-label">{{ item.label or '(unknown)' }}</span>
+            <span class="activity-ts">{{ item.ts[:16] if item.ts else '' }}</span>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-muted">No recent activity yet. Run a sync or restructure to see history here.</p>
+    {% endif %}
+</section>
+
+<script>
+// Trigger scroll-on-hover when hovering the entire watching-card
+document.querySelectorAll('.watching-card').forEach(function(card) {
+    var titleEl = card.querySelector('.watching-overlay-title');
+    if (!titleEl) return;
+    card.addEventListener('mouseenter', function() {
+        if (titleEl.scrollWidth > titleEl.offsetWidth + 2) {
+            titleEl.style.setProperty('--scroll-dist', -(titleEl.scrollWidth - titleEl.offsetWidth) + 'px');
+            titleEl.classList.add('is-scrolling');
+        }
+    });
+    card.addEventListener('mouseleave', function() {
+        titleEl.classList.remove('is-scrolling');
+        titleEl.style.removeProperty('--scroll-dist');
+    });
+});
+</script>
 {% endblock %}

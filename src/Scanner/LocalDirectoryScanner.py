@@ -73,14 +73,39 @@ class LocalDirectoryScanner:
                 mapping = await self._db.get_mapping_by_source("local", folder_path)
                 if mapping and mapping.get("anilist_id"):
                     cached_id = mapping["anilist_id"]
+                    logger.debug(
+                        "LocalDirectoryScanner: cache hit %r -> anilist_id=%s",
+                        folder_name,
+                        cached_id,
+                    )
                     year = 0
                     romaji = ""
                     english = ""
+                    anilist_format = ""
+                    anilist_episodes = None
                     cache = await self._db.get_cached_metadata(cached_id)
                     if cache:
                         year = cache.get("year", 0) or 0
                         romaji = cache.get("title_romaji", "")
                         english = cache.get("title_english", "")
+                    # Try to get format/episodes/start_date from series_group_entries
+                    sge_row = await self._db.fetch_one(
+                        "SELECT format, episodes, start_date FROM series_group_entries"
+                        " WHERE anilist_id=? LIMIT 1",
+                        (cached_id,),
+                    )
+                    if sge_row:
+                        anilist_format = sge_row.get("format", "") or ""
+                        anilist_episodes = sge_row.get("episodes")
+                        # Fall back to start_date year when anilist_cache has no year
+                        if not year:
+                            start_date = sge_row.get("start_date") or ""
+                            try:
+                                year = (
+                                    int(start_date[:4]) if len(start_date) >= 4 else 0
+                                )
+                            except (ValueError, TypeError):
+                                year = 0
                     results.append(
                         ShowInput(
                             title=folder_name,
@@ -91,6 +116,8 @@ class LocalDirectoryScanner:
                             year=year,
                             anilist_title_romaji=romaji,
                             anilist_title_english=english,
+                            anilist_format=anilist_format,
+                            anilist_episodes=anilist_episodes,
                         )
                     )
                     continue
@@ -140,6 +167,11 @@ class LocalDirectoryScanner:
                         logger.warning("AniList search failed for '%s'", folder_name)
 
             if match_result is None:
+                logger.warning(
+                    "LocalDirectoryScanner: no AniList match for %r (query=%r)",
+                    folder_name,
+                    specific_query,
+                )
                 results.append(
                     ShowInput(
                         title=folder_name,
@@ -152,12 +184,21 @@ class LocalDirectoryScanner:
             matched_entry, score, _season = match_result
             anilist_id = matched_entry.get("id", 0)
             anilist_title = get_primary_title(matched_entry)
+            logger.debug(
+                "LocalDirectoryScanner: matched %r -> %r (id=%s, score=%.2f)",
+                folder_name,
+                anilist_title,
+                anilist_id,
+                score,
+            )
             title_obj = matched_entry.get("title") or {}
             year = matched_entry.get("seasonYear") or (
                 (matched_entry.get("startDate") or {}).get("year") or 0
             )
             romaji = title_obj.get("romaji", "")
             english = title_obj.get("english", "")
+            anilist_format = matched_entry.get("format", "") or ""
+            anilist_episodes = matched_entry.get("episodes")
 
             # Persist mapping for future runs
             await self._db.upsert_media_mapping(
@@ -181,6 +222,8 @@ class LocalDirectoryScanner:
                     year=year,
                     anilist_title_romaji=romaji,
                     anilist_title_english=english,
+                    anilist_format=anilist_format,
+                    anilist_episodes=anilist_episodes,
                 )
             )
 

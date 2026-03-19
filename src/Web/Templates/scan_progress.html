@@ -2,17 +2,17 @@
 {% block title %}Scanning... — Anilist-Link{% endblock %}
 
 {% block content %}
-<h1>Plex Scan Preview</h1>
+<h1>{% if (source_label | default('Plex')) == 'Jellyfin' %}<img src="/static/img/jellyfin.png" alt="Jellyfin" class="page-service-logo">{% else %}<img src="/static/img/plex.png" alt="Plex" class="page-service-logo">{% endif %}{{ page_title | default("Scan Preview") }}</h1>
 
 <section class="card" id="progress-card">
-    <h2>Scanning Plex Library...</h2>
+    <h2>{{ scan_label | default("Scanning library...") }}</h2>
     <div class="progress-bar-container">
         <div class="progress-bar" id="progress-bar" style="width: 0%"></div>
     </div>
     <p class="progress-text">
         <span id="progress-count">0</span> / <span id="progress-total">?</span> shows scanned
     </p>
-    <p class="text-muted" id="current-title">Connecting to Plex...</p>
+    <p class="text-muted" id="current-title">Connecting...</p>
     <p class="text-muted" id="eta-text"></p>
 </section>
 
@@ -25,6 +25,9 @@
     var heading = document.querySelector('#progress-card h2');
     var etaText = document.getElementById('eta-text');
 
+    var progressUrl = {{ progress_api_url | default("/api/scan/plex/progress") | tojson }};
+    var resultsUrl = {{ results_url | default("/scan/plex/results") | tojson }};
+
     function formatTime(seconds) {
         if (seconds < 60) return Math.round(seconds) + 's';
         var m = Math.floor(seconds / 60);
@@ -34,7 +37,7 @@
 
     async function poll() {
         try {
-            var resp = await fetch('/api/scan/plex/progress');
+            var resp = await fetch(progressUrl);
             var data = await resp.json();
 
             if (data.status === 'complete') {
@@ -42,7 +45,7 @@
                 heading.textContent = 'Scan complete! Loading results...';
                 title.textContent = '';
                 etaText.textContent = '';
-                window.location.href = '{{ results_url | default("/scan/plex/results") }}';
+                window.location.href = resultsUrl;
                 return;
             }
 
@@ -55,7 +58,6 @@
                 return;
             }
 
-            // Update progress
             count.textContent = data.scanned;
             if (data.total > 0) {
                 total.textContent = data.total;
@@ -66,7 +68,6 @@
                 title.textContent = 'Processing: ' + data.current_title;
             }
 
-            // ETA calculation
             if (data.scanned > 0 && data.total > 0 && data.elapsed_seconds > 0) {
                 var avgPerItem = data.elapsed_seconds / data.scanned;
                 var remaining = data.total - data.scanned;

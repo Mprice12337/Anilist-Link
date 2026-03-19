@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}Crunchyroll Sync History — Anilist-Link{% endblock %}
+
+{% block content %}
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;flex-wrap:wrap;gap:1rem">
+    <h1 style="margin:0">Crunchyroll Sync History</h1>
+    <div style="display:flex;gap:0.75rem">
+        <a href="/crunchyroll/preview" class="btn btn-secondary">Preview / Sync</a>
+    </div>
+</div>
+
+{% if not user %}
+<section class="card">
+    <p class="text-muted">No AniList account linked. <a href="/auth/anilist" class="btn btn-primary btn-sm" style="margin-left:0.5rem">Link AniList</a></p>
+</section>
+
+{% elif not log_entries %}
+<section class="card" style="text-align:center;padding:3rem 1.5rem">
+    <p class="text-muted" style="margin-bottom:1.5rem">No sync history yet. Run a preview scan and apply entries to see them here.</p>
+    <a href="/crunchyroll/preview" class="btn btn-primary">Go to Preview</a>
+</section>
+
+{% else %}
+<section class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+        <h2 style="margin:0">Applied Changes</h2>
+        <span class="text-muted" style="font-size:0.85rem">{{ log_entries | length }} entries (most recent first)</span>
+    </div>
+
+    <div id="history-result" style="display:none;margin-bottom:1rem"></div>
+
+    <div style="overflow-x:auto">
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Show</th>
+                <th>Before</th>
+                <th>After</th>
+                <th>Applied At</th>
+                <th>Status</th>
+                <th>Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for entry in log_entries %}
+            <tr id="log-row-{{ entry.id }}"
+                style="{% if entry.undone_at %}opacity:0.55{% endif %}">
+                <td>
+                    <a href="https://anilist.co/anime/{{ entry.anilist_id }}" target="_blank"
+                       rel="noopener" class="title-romaji">
+                        {{ entry.show_title or ("AniList #" ~ entry.anilist_id) }}
+                    </a>
+                </td>
+                <td style="font-size:0.85rem">
+                    {% if entry.before_status %}
+                    <span class="badge {% if entry.before_status == 'COMPLETED' %}badge-success{% elif entry.before_status == 'CURRENT' %}badge-info{% else %}badge-muted{% endif %}">
+                        {{ entry.before_status }}
+                    </span>
+                    <br><span class="text-muted">ep {{ entry.before_progress }}</span>
+                    {% else %}
+                    <span class="text-muted">Not on list</span>
+                    {% endif %}
+                </td>
+                <td style="font-size:0.85rem">
+                    <span class="badge {% if entry.after_status == 'COMPLETED' %}badge-success{% elif entry.after_status == 'CURRENT' %}badge-info{% else %}badge-muted{% endif %}">
+                        {{ entry.after_status }}
+                    </span>
+                    <br><span class="text-muted">ep {{ entry.after_progress }}</span>
+                </td>
+                <td class="text-muted" style="font-size:0.85rem;white-space:nowrap">
+                    {{ entry.applied_at[:16] if entry.applied_at else "—" }}
+                </td>
+                <td id="undone-status-{{ entry.id }}">
+                    {% if entry.undone_at %}
+                    <span class="badge badge-muted">Undone</span>
+                    <br><span class="text-muted" style="font-size:0.75rem">{{ entry.undone_at[:16] }}</span>
+                    {% else %}
+                    <span class="badge badge-success">Applied</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <button type="button"
+                            class="btn btn-secondary btn-sm"
+                            id="undo-btn-{{ entry.id }}"
+                            {% if entry.undone_at %}disabled title="Already undone"{% endif %}
+                            onclick="undoEntry({{ entry.id }}, '{{ entry.show_title | e }}')">
+                        Undo
+                    </button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</section>
+{% endif %}
+
+<script>
+(function () {
+    'use strict';
+
+    window.undoEntry = function (logId, showTitle) {
+        var label = showTitle || ('Entry #' + logId);
+        if (!confirm('Undo "' + label + '"? This will revert the AniList progress back to the previous state.')) return;
+
+        var btn = document.getElementById('undo-btn-' + logId);
+        if (btn) { btn.disabled = true; btn.textContent = 'Undoing…'; }
+
+        var resultDiv = document.getElementById('history-result');
+
+        fetch('/api/crunchyroll/undo/' + logId, { method: 'POST' })
+            .then(function (resp) { return resp.json(); })
+            .then(function (data) {
+                if (data.ok) {
+                    // Update row in-place
+                    var row = document.getElementById('log-row-' + logId);
+                    if (row) row.style.opacity = '0.55';
+
+                    var statusEl = document.getElementById('undone-status-' + logId);
+                    if (statusEl) {
+                        statusEl.innerHTML = '<span class="badge badge-muted">Undone</span>';
+                    }
+
+                    if (btn) { btn.textContent = 'Undone'; btn.disabled = true; }
+
+                    resultDiv.style.display = 'block';
+                    resultDiv.className = 'alert alert-success';
+                    resultDiv.textContent = '"' + label + '" has been reverted on AniList.';
+                } else {
+                    if (btn) { btn.disabled = false; btn.textContent = 'Undo'; }
+                    resultDiv.style.display = 'block';
+                    resultDiv.className = 'alert alert-danger';
+                    resultDiv.textContent = 'Error: ' + (data.error || 'Unknown error');
+                }
+            })
+            .catch(function (err) {
+                if (btn) { btn.disabled = false; btn.textContent = 'Undo'; }
+                resultDiv.style.display = 'block';
+                resultDiv.className = 'alert alert-danger';
+                resultDiv.textContent = 'Error: ' + err;
+            });
+    };
+})();
+</script>
+{% endblock %}

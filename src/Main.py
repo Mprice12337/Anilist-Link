@@ -15,6 +15,10 @@ from src.Matching.TitleMatcher import TitleMatcher
 from src.Scanner.MetadataScanner import MetadataScanner
 from src.Scanner.SeriesGroupBuilder import SeriesGroupBuilder
 from src.Scheduler.Jobs import JobScheduler
+from src.Sync.CrunchyrollPreviewRunner import (
+    CrunchyrollPreviewProgress,
+    CrunchyrollPreviewRunner,
+)
 from src.Sync.DownloadSyncer import DownloadSyncer
 from src.Sync.WatchSyncer import WatchSyncer
 from src.Utils.Config import AppConfig, load_config, load_config_from_db_settings
@@ -59,6 +63,57 @@ async def crunchyroll_sync_task(
         await syncer.run_sync()
     except Exception:
         logger.exception("Crunchyroll sync error")
+    finally:
+        await cr_client.cleanup()
+
+
+async def crunchyroll_preview_task(
+    config: AppConfig,
+    db: DatabaseManager,
+    anilist_client: AniListClient,
+) -> None:
+    """Run a Crunchyroll preview scan (no AniList mutations).
+
+    Used by the scheduled job when auto_approve is disabled so changes
+    appear in the /crunchyroll review page rather than being applied directly.
+    """
+    if not config.crunchyroll.email or not config.crunchyroll.password:
+        logger.debug("Crunchyroll preview skipped — no credentials configured")
+        return
+
+    logger.info("Starting scheduled Crunchyroll preview scan (auto-approve off)")
+    cr_client = CrunchyrollClient(
+        email=config.crunchyroll.email,
+        password=config.crunchyroll.password,
+        headless=config.crunchyroll.headless,
+        flaresolverr_url=config.crunchyroll.flaresolverr_url,
+        max_pages=config.crunchyroll.max_pages,
+        db=db,
+    )
+
+    users = await db.get_users_by_service("anilist")
+    if not users:
+        logger.warning("Crunchyroll preview skipped — no AniList accounts linked")
+        return
+
+    title_matcher = TitleMatcher(similarity_threshold=0.75)
+    runner = CrunchyrollPreviewRunner(
+        db,
+        anilist_client,
+        title_matcher,
+        cr_client,
+        config,
+        CrunchyrollPreviewProgress(),
+    )
+
+    try:
+        authenticated = await cr_client.authenticate()
+        if not authenticated:
+            logger.error("Crunchyroll authentication failed")
+            return
+        await runner.run_preview(users[0])
+    except Exception:
+        logger.exception("Crunchyroll preview scan error")
     finally:
         await cr_client.cleanup()
 
@@ -149,14 +204,20 @@ async def main() -> None:
 
     # Create scheduler
     scheduler = JobScheduler(config.scheduler)
-
     # Build FastAPI app (stores references on app.state)
     app = create_app(config, db, anilist_client, scheduler)
 
     # Register the Crunchyroll sync job — reads config/client from app.state
     # so settings page changes take effect without restart
     async def _cr_sync() -> None:
-        await crunchyroll_sync_task(app.state.config, db, app.state.anilist_client)
+        cfg = app.state.config
+        if not cfg.crunchyroll.auto_sync_enabled:
+            logger.debug("Crunchyroll auto-sync is disabled — skipping scheduled run")
+            return
+        if cfg.crunchyroll.auto_approve:
+            await crunchyroll_sync_task(cfg, db, app.state.anilist_client)
+        else:
+            await crunchyroll_preview_task(cfg, db, app.state.anilist_client)
 
     async def _plex_scan() -> None:
         await plex_metadata_scan_task(app.state.config, db, app.state.anilist_client)
@@ -171,9 +232,12 @@ async def main() -> None:
         download_sync_interval_minutes=config.download_sync.sync_interval_minutes,
     )
 
-    # Expose callables for ad-hoc triggering (used by dry-run endpoints)
+    # Expose callables for ad-hoc triggering (used by manual-run endpoints)
     app.state.cr_sync_task = lambda dry_run=False: crunchyroll_sync_task(
         app.state.config, db, app.state.anilist_client, dry_run=dry_run
+    )
+    app.state.cr_preview_task = lambda: crunchyroll_preview_task(
+        app.state.config, db, app.state.anilist_client
     )
     app.state.plex_scan_task = (
         lambda dry_run=False, library_keys=None: plex_metadata_scan_task(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -234,9 +235,48 @@ class PlexClient:
 
     async def refresh_library(self, library_key: str) -> None:
         """Trigger a library scan/refresh for the given section key."""
-        resp = await self._http.put(f"/library/sections/{library_key}/refresh")
+        resp = await self._http.get(f"/library/sections/{library_key}/refresh")
         resp.raise_for_status()
         logger.info("Triggered refresh for library section %s", library_key)
+
+    async def is_library_scanning(self, library_key: str) -> bool:
+        """Check if a Plex library section is currently scanning."""
+        try:
+            resp = await self._http.get("/library/sections")
+            resp.raise_for_status()
+            for d in resp.json().get("MediaContainer", {}).get("Directory", []):
+                if str(d.get("key")) == str(library_key):
+                    return d.get("refreshing", False) or d.get("scanning", False)
+        except Exception:
+            logger.debug("Failed to check scan status for section %s", library_key)
+        return False
+
+    async def refresh_library_and_wait(
+        self,
+        library_key: str,
+        poll_interval: float = 2.0,
+        timeout: float = 120.0,
+    ) -> bool:
+        """Trigger a library refresh and wait for it to complete.
+
+        Returns True if the scan completed, False if it timed out.
+        """
+        await self.refresh_library(library_key)
+        # Brief pause to let Plex register the scan
+        await asyncio.sleep(1.0)
+
+        elapsed = 0.0
+        while elapsed < timeout:
+            if not await self.is_library_scanning(library_key):
+                logger.info("Plex library %s scan complete", library_key)
+                return True
+            await asyncio.sleep(poll_interval)
+            elapsed += poll_interval
+
+        logger.warning(
+            "Plex library %s scan timed out after %.0fs", library_key, timeout
+        )
+        return False
 
     # ------------------------------------------------------------------
     # Helpers

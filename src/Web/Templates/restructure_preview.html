@@ -18,8 +18,8 @@
 <div class="card">
     {% if operation_level == "full_restructure" %}
     <h2>No restructuring needed</h2>
-    <p>No Structure A series groups with multiple Plex shows were found. Your library
-       is already organized, or the shows have not been matched to AniList yet.</p>
+    <p>All matched shows already have the correct folder and file names, or no
+       shows have been matched to AniList yet.</p>
     {% else %}
     <h2>No renaming needed</h2>
     <p>All matched show folders already match their AniList titles, or no matched shows were found.</p>
@@ -41,8 +41,8 @@
        to rename with <strong>{{ plan.total_files }}</strong> file{{ "s" if plan.total_files != 1 else "" }} to standardize.
        Select the shows you want to rename.</p>
     {% else %}
-    <p>Found <strong>{{ plan.total_groups }}</strong> series group{{ "s" if plan.total_groups != 1 else "" }}
-       with <strong>{{ plan.total_files }}</strong> total files to move.
+    <p>Found <strong>{{ plan.total_groups }}</strong> group{{ "s" if plan.total_groups != 1 else "" }}
+       with <strong>{{ plan.total_files }}</strong> total files to reorganize.
        Select the groups you want to restructure.</p>
     {% endif %}
 </div>
@@ -56,7 +56,21 @@
                 <span class="toggle-label restructure-group-title">{{ group.display_title }}</span>
             </label>
             {% if operation_level == "full_restructure" %}
-            <span class="badge badge-muted">{{ group.season_count }} seasons</span>
+                {% if group.operation_type.startswith("standalone") %}
+                    {% if group.operation_type == "standalone_movie" %}
+                    <span class="badge badge-muted">Movie</span>
+                    {% elif group.operation_type == "standalone_ova" %}
+                    <span class="badge badge-muted">OVA</span>
+                    {% elif group.operation_type == "standalone_special" %}
+                    <span class="badge badge-muted">Special</span>
+                    {% elif group.operation_type == "standalone_ona" %}
+                    <span class="badge badge-muted">ONA</span>
+                    {% else %}
+                    <span class="badge badge-muted">TV</span>
+                    {% endif %}
+                {% else %}
+                <span class="badge badge-muted">{{ group.season_count }} seasons</span>
+                {% endif %}
             <span class="badge badge-muted">{{ group.file_moves | length }} files</span>
             {% elif operation_level == "folder_file_rename" %}
             <span class="badge badge-muted">{{ group.file_moves | length }} file{{ "s" if group.file_moves | length != 1 else "" }}</span>
@@ -64,12 +78,21 @@
         </div>
 
         <div class="restructure-paths">
-            {% if operation_level == "full_restructure" %}
+            {% if operation_level == "full_restructure" and not group.operation_type.startswith("standalone") %}
             <div class="restructure-path-section">
                 <span class="restructure-path-label">Source folders:</span>
                 {% for folder in group.source_folders %}
                 <code class="restructure-path">{{ folder }}</code>
                 {% endfor %}
+            </div>
+            <div class="restructure-path-section">
+                <span class="restructure-path-label">Target folder:</span>
+                <code class="restructure-path">{{ group.target_folder }}</code>
+            </div>
+            {% elif group.operation_type.startswith("standalone") %}
+            <div class="restructure-path-section">
+                <span class="restructure-path-label">Current folder:</span>
+                <code class="restructure-path">{{ group.current_folder }}</code>
             </div>
             <div class="restructure-path-section">
                 <span class="restructure-path-label">Target folder:</span>

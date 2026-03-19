@@ -1,0 +1,456 @@
+{% extends "base.html" %}
+{% block title %}Library — Anilist-Link{% endblock %}
+{% block container_class %}container-wide{% endblock %}
+
+{% block content %}
+
+{% if message %}
+<div class="alert alert-success">{{ message }}</div>
+{% endif %}
+{% if error %}
+<div class="alert alert-danger">{{ error }}</div>
+{% endif %}
+
+<!-- Toolbar row 1: filter dropdown + source chips + spacer + count + view toggle -->
+<div class="lib-toolbar-row1">
+    <select id="matchFilter" onchange="applyFilters()" class="lib-select">
+        <option value="all">All</option>
+        <option value="matched">Matched</option>
+        <option value="unmatched">Unmatched</option>
+    </select>
+    <a href="/library?source=all"      class="filter-chip {% if source == 'all' %}active{% endif %}">All ({{ item_count }})</a>
+    <a href="/library?source=local"    class="filter-chip {% if source == 'local' %}active{% endif %}">Local</a>
+    {% if plex_configured %}
+    <a href="/library?source=plex"     class="filter-chip {% if source == 'plex' %}active{% endif %}"><img src="/static/img/plex.png" alt="" class="chip-service-logo">Plex</a>
+    {% endif %}
+    {% if jellyfin_configured %}
+    <a href="/library?source=jellyfin" class="filter-chip {% if source == 'jellyfin' %}active{% endif %}"><img src="/static/img/jellyfin.png" alt="" class="chip-service-logo">Jellyfin</a>
+    {% endif %}
+    <span style="flex:1"></span>
+    <span class="text-muted" style="font-size:0.82rem;white-space:nowrap">{{ matched_count }}/{{ item_count }}</span>
+    <div class="view-toggle">
+        <button class="view-btn active" id="gridViewBtn" onclick="setView('grid')" title="Grid view">&#8862;</button>
+        <button class="view-btn" id="listViewBtn" onclick="setView('list')" title="List view">&#9776;</button>
+    </div>
+</div>
+<!-- Toolbar row 2: search -->
+<div class="lib-toolbar-row2">
+    <input type="text" id="searchInput" class="search-input" placeholder="Search titles&hellip;" oninput="applyFilters()">
+</div>
+
+<!-- Grid view -->
+<div class="library-grid" id="gridView">
+    {% for item in items %}
+    {% set primary_title = item.title_english if (title_display == 'english' and item.title_english) else (item.title_romaji or item.title) %}
+    {% set secondary_title = item.title_romaji if (title_display in ('both_english_primary',) and item.title_romaji and item.title_romaji != primary_title) else (item.title_english if (title_display in ('both_romaji_primary',) and item.title_english) else '') %}
+    <div class="library-card"
+         data-title="{{ (item.title or '') | lower }} {{ (item.title_romaji or '') | lower }} {{ (item.title_english or '') | lower }}"
+         data-matched="{{ 'yes' if item.anilist_id else 'no' }}"
+         data-source="{{ item.source }}"
+         onclick="openEntryDetail({{ loop.index0 }})">
+        <div class="library-card-poster">
+            {% if item.cover_url %}
+            <img src="{{ item.cover_url }}" alt="{{ primary_title }}" loading="lazy">
+            {% else %}
+            <div class="library-card-poster-empty"><span>?</span></div>
+            {% endif %}
+            <!-- Source badges (may be multiple for aggregated items) -->
+            <div class="lib-source-badges">
+                {% for s in item.sources %}
+                <span class="source-badge source-badge-{{ s }}">{{ s | title }}</span>
+                {% endfor %}
+            </div>
+            <!-- Edit overlay button (shows on hover) -->
+            <button class="lib-edit-btn" onclick="event.stopPropagation(); openMatchModal({{ loop.index0 }})" title="Edit AniList match">&#x270E;</button>
+            <!-- Refresh overlay button (shows on hover) -->
+            {% if item.anilist_id %}
+            <button class="lib-refresh-btn" onclick="event.stopPropagation(); refreshItem({{ loop.index0 }})" title="Refresh metadata from AniList">&#x21BB;</button>
+            {% endif %}
+        </div>
+        <div class="library-card-info">
+            {% if item.anilist_id %}
+            <a href="https://anilist.co/anime/{{ item.anilist_id }}" target="_blank" rel="noopener"
+               class="lib-title-link scroll-on-hover"
+               onclick="event.stopPropagation()">{{ primary_title }}</a>
+            {% else %}
+            <div class="lib-title-link scroll-on-hover">{{ primary_title }}</div>
+            {% endif %}
+            {% if secondary_title %}
+            <div class="title-english scroll-on-hover" style="font-size:0.7rem;color:var(--text-muted)">{{ secondary_title }}</div>
+            {% endif %}
+            {% if not item.anilist_id %}
+            <div class="library-card-year" style="color:var(--danger);font-size:0.7rem">Unmatched</div>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- List view -->
+<div class="table-scroll-container hidden" id="listView">
+    <table class="library-table">
+        <thead>
+            <tr>
+                <th></th>
+                <th class="sortable-th" data-col="title" onclick="sortLibrary('title')">Title <span class="sort-indicator">&#x2195;</span></th>
+                <th class="sortable-th" data-col="year" onclick="sortLibrary('year')">Year <span class="sort-indicator">&#x2195;</span></th>
+                <th>Episodes</th>
+                <th>Status</th>
+                <th>Source</th>
+                <th>AniList Match</th>
+                <th class="sortable-th" data-col="confidence" onclick="sortLibrary('confidence')">Confidence <span class="sort-indicator">&#x2195;</span></th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody id="listBody">
+            {% for item in items %}
+            {% set primary_title = item.title_english if (title_display == 'english' and item.title_english) else (item.title_romaji or item.title) %}
+            <tr class="library-row"
+                data-title="{{ (item.title or '') | lower }} {{ (item.title_romaji or '') | lower }} {{ (item.title_english or '') | lower }}"
+                data-matched="{{ 'yes' if item.anilist_id else 'no' }}"
+                data-source="{{ item.source }}"
+                data-sort-title="{{ (item.title_romaji or item.title or '') | lower }}"
+                data-sort-year="{{ item.year or 0 }}"
+                data-sort-confidence="{{ item.match_confidence or 0 }}"
+                style="cursor:pointer"
+                onclick="openEntryDetail({{ loop.index0 }})">
+                <td style="width:48px" onclick="event.stopPropagation()">
+                    {% if item.cover_url %}
+                    <img src="{{ item.cover_url }}" alt="" style="width:36px;height:50px;object-fit:cover;border-radius:3px">
+                    {% else %}
+                    <div style="width:36px;height:50px;background:var(--border);border-radius:3px"></div>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if item.anilist_id %}
+                    <a href="https://anilist.co/anime/{{ item.anilist_id }}" target="_blank" rel="noopener"
+                       onclick="event.stopPropagation()"
+                       style="font-weight:500;color:inherit;text-decoration:none">{{ primary_title }}</a>
+                    {% else %}
+                    <div style="font-weight:500">{{ primary_title }}</div>
+                    {% endif %}
+                    {% if item.title_romaji and item.title_romaji != primary_title %}
+                    <div style="font-size:0.78rem;color:var(--text-muted)">{{ item.title_romaji }}</div>
+                    {% endif %}
+                </td>
+                <td style="color:var(--text-muted)">{{ item.year or '—' }}</td>
+                <td style="color:var(--text-muted)">{{ item.episodes or '—' }}</td>
+                <td>
+                    {% set as = item.anilist_status | lower if item.anilist_status else '' %}
+                    {% if as == 'releasing' %}
+                    <span class="badge badge-releasing" style="font-size:0.72rem;padding:0.1rem 0.4rem">Airing</span>
+                    {% elif as in ('finished', 'finished_airing') %}
+                    <span class="badge badge-finished" style="font-size:0.72rem;padding:0.1rem 0.4rem">Finished</span>
+                    {% elif as == 'not_yet_released' %}
+                    <span class="badge badge-upcoming" style="font-size:0.72rem;padding:0.1rem 0.4rem">Upcoming</span>
+                    {% elif as %}
+                    <span class="badge badge-unknown" style="font-size:0.72rem;padding:0.1rem 0.4rem">{{ item.anilist_status }}</span>
+                    {% else %}
+                    <span style="color:var(--text-muted)">&mdash;</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <div style="display:flex;flex-direction:column;gap:0.2rem;align-items:flex-start">
+                        {% for s in item.sources %}
+                        <span class="source-badge source-badge-{{ s }}" style="position:static">{{ s | title }}</span>
+                        {% endfor %}
+                        {% if item.library_name %}
+                        <div style="font-size:0.78rem;color:var(--text-muted)">{{ item.library_name }}</div>
+                        {% endif %}
+                    </div>
+                </td>
+                <td>
+                    {% if item.anilist_id %}
+                    <div style="font-size:0.85rem;font-weight:500">{{ item.title_romaji or '—' }}</div>
+                    {% if item.title_english and item.title_english != item.title_romaji %}
+                    <div style="font-size:0.78rem;color:var(--text-muted)">{{ item.title_english }}</div>
+                    {% endif %}
+                    {% else %}
+                    <span style="color:var(--danger)">Unmatched</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if item.match_confidence %}
+                    <span style="font-size:0.85rem">{{ (item.match_confidence * 100) | int }}%</span>
+                    {% if item.match_method %}
+                    <div style="font-size:0.75rem;color:var(--text-muted)">{{ item.match_method }}</div>
+                    {% endif %}
+                    {% else %}
+                    <span style="color:var(--text-muted)">&mdash;</span>
+                    {% endif %}
+                </td>
+                <td style="white-space:nowrap" onclick="event.stopPropagation()">
+                    <button class="btn btn-secondary btn-xs" onclick="openMatchModal({{ loop.index0 }})" style="flex-shrink:0">Edit</button>
+                    {% if item.anilist_id %}
+                    <button class="btn btn-secondary btn-xs" onclick="refreshItem({{ loop.index0 }})" style="flex-shrink:0" title="Refresh metadata">&#x21BB;</button>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div><!-- end #listView -->
+
+<!-- Edit Match Modal -->
+<div class="modal-backdrop hidden" id="matchModal" onclick="if(event.target===this)closeMatchModal()">
+    <div class="modal-box" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <h2 id="modalTitle">Edit Match</h2>
+            <button class="modal-close" onclick="closeMatchModal()">&#x2715;</button>
+        </div>
+        <div class="modal-body">
+            <div id="modalItemTitle" style="margin-bottom:0.5rem;font-weight:500"></div>
+            <div id="modalPathInfo" style="margin-bottom:0.75rem"></div>
+            <input type="text" id="modalSearch" class="modal-search" placeholder="Search AniList&hellip;" oninput="scheduleSearch(this.value)">
+            <div id="modalResults" class="candidate-list" style="margin-top:0.5rem"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeMatchModal()">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<!-- Entry Detail Modal -->
+<div class="modal-backdrop hidden" id="entryDetailModal" onclick="if(event.target===this)closeEntryDetail()">
+    <div class="modal-box entry-detail-box" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <h2 id="edModalTitle">Details</h2>
+            <button class="modal-close" onclick="closeEntryDetail()">&#x2715;</button>
+        </div>
+        <div class="modal-body entry-detail-body">
+            <div class="entry-detail-poster-col">
+                <div id="edPosterWrap"></div>
+                <div id="edSourceBadges" class="entry-detail-badges" style="margin-top:0.25rem"></div>
+            </div>
+            <div class="entry-detail-info-col">
+                <div id="edTitleWrap"></div>
+                <div id="edInfoGrid" class="entry-detail-grid"></div>
+                <div id="edActions" class="entry-detail-actions"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+var ITEMS = {{ items | tojson }};
+var currentView = localStorage.getItem('unified_library_view') || 'grid';
+var currentItem = null;
+var searchTimer = null;
+var libSortCol = null;
+var libSortDir = 1;
+
+function setView(v) {
+    currentView = v;
+    localStorage.setItem('unified_library_view', v);
+    document.getElementById('gridView').classList.toggle('hidden', v !== 'grid');
+    document.getElementById('listView').classList.toggle('hidden', v !== 'list');
+    document.getElementById('gridViewBtn').classList.toggle('active', v === 'grid');
+    document.getElementById('listViewBtn').classList.toggle('active', v === 'list');
+}
+
+function applyFilters() {
+    var q = document.getElementById('searchInput').value.toLowerCase();
+    var mf = document.getElementById('matchFilter').value;
+    var gridCards = document.querySelectorAll('#gridView .library-card');
+    var listRows = document.querySelectorAll('#listView .library-row');
+    function matches(el) {
+        var title = el.dataset.title || '';
+        var matched = el.dataset.matched;
+        if (q && title.indexOf(q) === -1) return false;
+        if (mf === 'matched' && matched !== 'yes') return false;
+        if (mf === 'unmatched' && matched !== 'no') return false;
+        return true;
+    }
+    gridCards.forEach(function(el) { el.classList.toggle('hidden', !matches(el)); });
+    listRows.forEach(function(el) { el.style.display = matches(el) ? '' : 'none'; });
+}
+
+function sortLibrary(col) {
+    if (libSortCol === col) { libSortDir = -libSortDir; } else { libSortCol = col; libSortDir = 1; }
+    document.querySelectorAll('#listView .sortable-th').forEach(function(th) {
+        th.classList.remove('sort-asc', 'sort-desc');
+        var ind = th.querySelector('.sort-indicator');
+        if (ind) ind.textContent = '\u2195';
+    });
+    var activeTh = document.querySelector('#listView .sortable-th[data-col="' + col + '"]');
+    if (activeTh) {
+        activeTh.classList.add(libSortDir === 1 ? 'sort-asc' : 'sort-desc');
+        var ind = activeTh.querySelector('.sort-indicator');
+        if (ind) ind.textContent = libSortDir === 1 ? '\u2191' : '\u2193';
+    }
+    var tbody = document.getElementById('listBody');
+    var rows = Array.from(tbody.querySelectorAll('tr'));
+    rows.sort(function(a, b) {
+        var av = a.getAttribute('data-sort-' + col) || '';
+        var bv = b.getAttribute('data-sort-' + col) || '';
+        if (col === 'year' || col === 'confidence') return (parseFloat(av) - parseFloat(bv)) * libSortDir;
+        return av.localeCompare(bv) * libSortDir;
+    });
+    rows.forEach(function(r) { tbody.appendChild(r); });
+}
+
+function openEntryDetail(idx) {
+    var item = ITEMS[idx];
+    if (!item) return;
+    document.getElementById('entryDetailModal').classList.remove('hidden');
+    document.getElementById('edModalTitle').textContent = item.title_romaji || item.title || '(unknown)';
+
+    // Poster
+    var posterWrap = document.getElementById('edPosterWrap');
+    if (item.cover_url) {
+        posterWrap.innerHTML = '<img src="' + escHtml(item.cover_url) + '" class="entry-detail-poster" alt="">';
+    } else {
+        posterWrap.innerHTML = '<div class="entry-detail-poster-empty">?</div>';
+    }
+
+    // Source badges
+    var badgesEl = document.getElementById('edSourceBadges');
+    badgesEl.innerHTML = (item.sources || []).map(function(s) {
+        return '<span class="source-badge source-badge-' + s + '" style="position:static;display:inline-block">' + s.charAt(0).toUpperCase() + s.slice(1) + '</span>';
+    }).join('');
+
+    // Title
+    var titleWrap = document.getElementById('edTitleWrap');
+    if (item.anilist_id) {
+        titleWrap.innerHTML = '<a href="https://anilist.co/anime/' + item.anilist_id + '" target="_blank" rel="noopener" class="entry-detail-title">' + escHtml(item.title_romaji || item.title || '') + '</a>';
+        if (item.title_english && item.title_english !== item.title_romaji) {
+            titleWrap.innerHTML += '<div class="entry-detail-subtitle">' + escHtml(item.title_english) + '</div>';
+        }
+    } else {
+        titleWrap.innerHTML = '<div class="entry-detail-title">' + escHtml(item.title || item.folder_name || '') + '</div>';
+    }
+
+    // Info grid
+    var grid = document.getElementById('edInfoGrid');
+    var rows = [];
+    if (item.year) rows.push(['Year', item.year]);
+    if (item.episodes) rows.push(['Episodes', item.episodes]);
+    if (item.anilist_status) rows.push(['Status', item.anilist_status.charAt(0) + item.anilist_status.slice(1).toLowerCase()]);
+    if (item.match_method) rows.push(['Match', item.match_method + (item.match_confidence ? ' (' + Math.round(item.match_confidence * 100) + '%)' : '')]);
+    if (item.library_name) rows.push(['Library', item.library_name]);
+    if (item.folder_path || item.folder_name) rows.push(['Path', item.folder_path || item.folder_name]);
+    grid.innerHTML = rows.map(function(r) {
+        return '<span class="entry-detail-label">' + escHtml(r[0]) + '</span><span class="entry-detail-value" title="' + escHtml(String(r[1])) + '">' + escHtml(String(r[1])) + '</span>';
+    }).join('');
+
+    // Actions
+    var actions = document.getElementById('edActions');
+    var html = '<button class="btn btn-secondary btn-xs" onclick="closeEntryDetail(); openMatchModal(' + idx + ')">Edit Match</button>';
+    if (item.anilist_id) {
+        html += ' <button class="btn btn-secondary btn-xs" onclick="refreshItem(' + idx + ')">\u21BB Refresh</button>';
+    }
+    actions.innerHTML = html;
+}
+
+function closeEntryDetail() {
+    document.getElementById('entryDetailModal').classList.add('hidden');
+}
+
+function openMatchModal(idx) {
+    currentItem = ITEMS[idx];
+    if (!currentItem) return;
+    document.getElementById('matchModal').classList.remove('hidden');
+    document.getElementById('modalItemTitle').textContent = currentItem.title || currentItem.folder_name || '(unknown)';
+
+    var pathInfo = document.getElementById('modalPathInfo');
+    var fp = currentItem.folder_path || currentItem.folder_name || '';
+    if (fp) {
+        pathInfo.innerHTML = '<div style="font-size:0.8rem;color:var(--text-muted);background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:0.35rem 0.6rem;font-family:monospace;word-break:break-all">'
+            + escHtml(fp) + '</div>';
+    } else {
+        pathInfo.innerHTML = '';
+    }
+
+    document.getElementById('modalSearch').value = currentItem.title_romaji || currentItem.title || '';
+    document.getElementById('modalResults').innerHTML = '';
+    scheduleSearch(currentItem.title_romaji || currentItem.title || '');
+}
+
+function closeMatchModal() {
+    document.getElementById('matchModal').classList.add('hidden');
+    currentItem = null;
+}
+
+function scheduleSearch(q) {
+    clearTimeout(searchTimer);
+    if (!q.trim()) { document.getElementById('modalResults').innerHTML = ''; return; }
+    searchTimer = setTimeout(function() { doSearch(q); }, 350);
+}
+
+async function doSearch(q) {
+    var resp = await fetch('/api/search/anilist?q=' + encodeURIComponent(q));
+    var results = await resp.json();
+    var html = results.map(function(r) {
+        return '<div class="candidate-card" onclick="selectCandidate(' + r.id + ', \'' + escJs(r.title_romaji) + '\')">'
+            + (r.cover_image ? '<img src="' + escHtml(r.cover_image) + '" class="candidate-poster">' : '<div class="candidate-poster-ph"></div>')
+            + '<div class="candidate-info">'
+            + '<div class="candidate-title">' + escHtml(r.title_romaji || r.title_english || '') + '</div>'
+            + '<div class="candidate-meta">' + escHtml((r.format || '') + (r.year ? ' \u00b7 ' + r.year : '') + (r.episodes ? ' \u00b7 ' + r.episodes + ' eps' : '')) + '</div>'
+            + '</div></div>';
+    }).join('');
+    document.getElementById('modalResults').innerHTML = html || '<p class="text-muted" style="font-size:0.85rem">No results found.</p>';
+}
+
+function selectCandidate(anilistId, title) {
+    if (!currentItem) return;
+    var sources = currentItem.sources || [currentItem.source];
+    var sourceId = currentItem.source_id;
+    fetch('/library/update-match', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            source: currentItem.source === 'multi' ? (sources[0] || 'local') : currentItem.source,
+            source_id: sourceId,
+            source_title: currentItem.title || '',
+            anilist_id: anilistId
+        })
+    }).then(function(r) { return r.json(); }).then(function(data) {
+        if (data.ok) { closeMatchModal(); window.location.reload(); }
+        else { alert('Error: ' + (data.error || 'unknown')); }
+    }).catch(function(e) { alert('Error: ' + e.message); });
+}
+
+async function refreshItem(idx) {
+    var item = ITEMS[idx];
+    if (!item || !item.anilist_id) return;
+    var source = item.source === 'multi' ? (item.sources[0] || 'local') : item.source;
+    var resp = await fetch('/library/update-match', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            source: source,
+            source_id: item.source_id,
+            source_title: item.title || '',
+            anilist_id: item.anilist_id
+        })
+    });
+    var data = await resp.json();
+    if (data.ok) { window.location.reload(); }
+    else { alert('Refresh failed: ' + (data.error || 'unknown')); }
+}
+
+function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escJs(s) {
+    return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+}
+
+// Scroll-on-hover for titles
+document.querySelectorAll('.scroll-on-hover').forEach(function(el) {
+    el.addEventListener('mouseenter', function() {
+        if (el.scrollWidth > el.offsetWidth + 2) {
+            var dist = -(el.scrollWidth - el.offsetWidth);
+            el.style.setProperty('--scroll-dist', dist + 'px');
+            el.classList.add('is-scrolling');
+        }
+    });
+    el.addEventListener('mouseleave', function() {
+        el.classList.remove('is-scrolling');
+        el.style.removeProperty('--scroll-dist');
+    });
+});
+
+setView(currentView);
+</script>
+{% endblock %}

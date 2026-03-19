@@ -19,16 +19,9 @@ Anilist-Link/                                     # Project root
 │
 ├── _resources/                                   # NOT IN GIT - Development references
 │   ├── Examples/                                 # API response samples
-│   │   ├── AnilistMediaResponse.json             # AniList GraphQL response example
-│   │   ├── PlexLibraryResponse.json              # Plex library API response
-│   │   └── JellyfinItemsResponse.json            # Jellyfin items API response
 │   ├── Research/                                 # Technology research, API notes
-│   │   ├── CrunchyrollApi.md                     # Reverse-engineered API documentation
-│   │   └── TitleMatchingAlgorithms.md            # Matching algorithm comparisons
 │   ├── Assets/                                   # Design files, mockups
-│   │   └── DashboardMockup.png                   # Web dashboard design
 │   └── Notes/                                    # Development notes, scratchpad
-│       └── TechDebtIdeas.md                      # Technical debt tracking
 │
 ├── docs/                                         # All documentation
 │   ├── ARCHITECTURE.md                           # Required - system design
@@ -37,66 +30,141 @@ Anilist-Link/                                     # Project root
 │   ├── QUICK-REFERENCE.md                        # Best practices quick reference
 │   └── PROJECT-STRUCTURE.md                      # This document
 │
+├── scripts/                                      # Automation and testing scripts
+│   ├── reset_for_testing.py                      # Reset DB state for manual testing
+│   ├── test_connector_integration.py             # Connector integration smoke tests
+│   └── test_series_groups.py                     # Series group builder smoke tests
+│
 ├── src/                                          # Main application source code
 │   ├── __init__.py
 │   ├── Main.py                                   # Application entry point
+│   │
 │   ├── Clients/                                  # External API client modules
 │   │   ├── __init__.py
-│   │   ├── AnilistClient.py                      # AniList GraphQL + OAuth2 client
-│   │   ├── PlexClient.py                         # Plex API client
-│   │   ├── JellyfinClient.py                     # Jellyfin API client
-│   │   └── CrunchyrollClient.py                  # Crunchyroll reverse-engineered client
+│   │   ├── AnilistClient.py                      # AniList GraphQL + OAuth2 + rate limiter
+│   │   ├── PlexClient.py                         # Plex API — library, metadata, watch
+│   │   ├── JellyfinClient.py                     # Jellyfin API — library, metadata, watch
+│   │   ├── CrunchyrollClient.py                  # Crunchyroll — reverse-engineered auth
+│   │   ├── SonarrClient.py                       # Sonarr API v3 — series add/lookup [P4]
+│   │   ├── RadarrClient.py                       # Radarr API v3 — movie add/lookup [P4]
+│   │   ├── ProwlarrClient.py                     # Prowlarr API — indexer search [P4]
+│   │   └── QBittorrentClient.py                  # qBittorrent API — torrent status [P4]
+│   │
 │   ├── Matching/                                 # Title matching engine
 │   │   ├── __init__.py
 │   │   ├── TitleMatcher.py                       # Multi-algorithm fuzzy matching
 │   │   └── Normalizer.py                         # Anime-specific title normalization
+│   │
 │   ├── Scanner/                                  # Metadata scanning pipeline
 │   │   ├── __init__.py
-│   │   └── MetadataScanner.py                    # Scan → match → cache → apply
+│   │   ├── MetadataScanner.py                    # Plex: scan → match → cache → apply
+│   │   ├── JellyfinMetadataScanner.py            # Jellyfin: scan → match → cache → apply
+│   │   ├── LibraryRestructurer.py                # File organization engine (L1/L2/L3)
+│   │   ├── LibraryScanner.py                     # Shared library scan utilities
+│   │   ├── LocalDirectoryScanner.py              # Local filesystem directory scanner
+│   │   ├── PlexShowProvider.py                   # Plex → ShowInput adapter
+│   │   └── JellyfinShowProvider.py               # Jellyfin → ShowInput adapter
+│   │
 │   ├── Sync/                                     # Watch status synchronization
 │   │   ├── __init__.py
-│   │   └── WatchSyncer.py                        # Bidirectional watch progress sync
+│   │   ├── WatchSyncer.py                        # Crunchyroll→AniList watch sync
+│   │   ├── DownloadSyncer.py                     # Download status sync [P4]
+│   │   └── CrunchyrollPreviewRunner.py           # CR sync preview pipeline
+│   │
+│   ├── Download/                                 # Download management [P4]
+│   │   ├── __init__.py
+│   │   ├── DownloadManager.py                    # Orchestrate Sonarr/Radarr add requests
+│   │   ├── MappingResolver.py                    # AniList → TVDB/TMDB ID resolution
+│   │   └── ArrPostProcessor.py                   # Webhook post-processing for *arr
+│   │
 │   ├── Web/                                      # FastAPI web dashboard
 │   │   ├── __init__.py
 │   │   ├── App.py                                # FastAPI application factory
+│   │   │
 │   │   ├── Routes/                               # API route handlers
 │   │   │   ├── __init__.py
-│   │   │   ├── Dashboard.py                      # Dashboard and stats endpoints
-│   │   │   ├── Auth.py                           # OAuth2 account linking endpoints
-│   │   │   └── Mappings.py                       # Mapping review/override endpoints
+│   │   │   ├── Dashboard.py                      # Dashboard + stats endpoints
+│   │   │   ├── Auth.py                           # AniList OAuth2 account linking
+│   │   │   ├── Settings.py                       # GUI settings management
+│   │   │   ├── Mappings.py                       # Manual override management
+│   │   │   ├── PlexLibrary.py                    # Plex library browser
+│   │   │   ├── PlexScan.py                       # Plex scan pipeline endpoints
+│   │   │   ├── JellyfinLibrary.py                # Jellyfin library browser
+│   │   │   ├── JellyfinScan.py                   # Jellyfin scan pipeline endpoints
+│   │   │   ├── Restructure.py                    # File restructure wizard
+│   │   │   ├── Library.py                        # Unified library manager
+│   │   │   ├── UnifiedLibrary.py                 # Unified library view
+│   │   │   ├── WatchlistLibrary.py               # AniList watchlist library
+│   │   │   ├── ManualGrab.py                     # Manual torrent grab
+│   │   │   ├── Downloads.py                      # Download manager UI [P4]
+│   │   │   ├── CrunchyrollSync.py                # Crunchyroll sync UI
+│   │   │   ├── Onboarding.py                     # First-run onboarding wizard
+│   │   │   ├── ConnectionTest.py                 # Service connection test endpoints
+│   │   │   ├── ArrWebhook.py                     # Sonarr/Radarr webhook handlers [P4]
+│   │   │   └── Tools.py                          # Developer/admin tools
+│   │   │
 │   │   ├── Templates/                            # Jinja2 HTML templates
-│   │   └── Static/                               # CSS, JS, static assets
+│   │   │   ├── base.html                         # Base layout with nav + progress widget
+│   │   │   ├── dashboard.html                    # Main dashboard
+│   │   │   ├── settings.html                     # Settings page
+│   │   │   ├── mappings.html                     # Manual override management
+│   │   │   ├── scan_preview.html                 # Scan preview (Plex + Jellyfin)
+│   │   │   ├── scan_progress.html                # Live scan progress (Plex + Jellyfin)
+│   │   │   ├── restructure_wizard.html           # Restructure wizard step 1
+│   │   │   ├── restructure_preview.html          # Restructure preview/confirm
+│   │   │   ├── restructure_report.html           # Restructure execution report
+│   │   │   ├── watchlist_library.html            # AniList watchlist view
+│   │   │   ├── library_detail.html               # Library item detail
+│   │   │   ├── library_scan_progress.html        # Library scan progress
+│   │   │   ├── unified_library.html              # Unified cross-platform library
+│   │   │   ├── jellyfin_library.html             # Jellyfin library browser
+│   │   │   ├── jellyfin_scan.html                # Jellyfin scan trigger
+│   │   │   ├── manual_grab.html                  # Manual torrent grab
+│   │   │   ├── download_manager.html             # Download manager [P4]
+│   │   │   ├── crunchyroll.html                  # Crunchyroll sync page
+│   │   │   ├── crunchyroll_preview.html          # CR sync preview
+│   │   │   ├── crunchyroll_history.html          # CR sync history
+│   │   │   ├── onboarding.html                   # 4-step onboarding wizard
+│   │   │   └── tools.html                        # Developer tools page
+│   │   │
+│   │   └── Static/                               # Static assets
+│   │       ├── style.css                         # Application stylesheet
+│   │       └── img/                              # Image assets
+│   │
 │   ├── Database/                                 # Database layer
 │   │   ├── __init__.py
 │   │   ├── Connection.py                         # SQLite/aiosqlite connection management
-│   │   ├── Models.py                             # Table definitions and data models
-│   │   └── Migrations.py                         # Schema migration utilities
+│   │   ├── Models.py                             # Table DDL definitions (TABLES dict)
+│   │   └── Migrations.py                         # Schema migrations v1–v17
+│   │
 │   ├── Scheduler/                                # Background job scheduling
 │   │   ├── __init__.py
 │   │   └── Jobs.py                               # APScheduler job definitions
-│   └── Utils/                                    # Shared utility functions
+│   │
+│   └── Utils/                                    # Shared utilities
 │       ├── __init__.py
-│       ├── Config.py                             # Configuration management
-│       └── Logging.py                            # Logging configuration
+│       ├── Config.py                             # Config dataclass + env var loading
+│       ├── NamingTemplate.py                     # File naming template engine
+│       └── NamingTranslator.py                   # AniList → filename translation
 │
 ├── tests/                                        # Test suite
-│   ├── __init__.py
+│   ├── conftest.py                               # Shared fixtures (DB, config, clients)
 │   ├── Unit/                                     # Unit tests
-│   │   ├── __init__.py
-│   │   ├── TestTitleMatcher.py                   # Title matching engine tests
-│   │   ├── TestAnilistClient.py                  # AniList client tests
-│   │   └── TestWatchSyncer.py                    # Watch syncer tests
-│   └── Integration/                              # Integration tests
-│       ├── __init__.py
-│       ├── TestApiClients.py                     # Client integration tests
-│       └── TestScannerPipeline.py                # Scanner pipeline tests
-│
-├── scripts/                                      # Automation scripts
-│   └── Setup.sh                                  # Initial setup script
+│   │   ├── test_arr_post_processor.py            # ArrPostProcessor unit tests
+│   │   ├── test_config.py                        # Config loading and validation
+│   │   ├── test_database.py                      # Database CRUD operations
+│   │   ├── test_naming_template.py               # NamingTemplate parsing tests
+│   │   ├── test_normalizer.py                    # Title normalization (68 tests)
+│   │   ├── test_plex_client.py                   # PlexClient methods (33 tests)
+│   │   ├── test_prowlarr_client.py               # ProwlarrClient parsing (29 tests)
+│   │   ├── test_rate_limiter.py                  # Token-bucket rate limiter (18 tests)
+│   │   ├── test_series_group_builder.py          # BFS group builder (22 tests)
+│   │   └── test_title_matcher.py                 # Title matching engine (55 tests)
+│   └── Integration/                              # Integration tests (placeholder)
 │
 └── .github/                                      # GitHub CI/CD
     └── workflows/
-        └── CI.yml                                # Continuous integration pipeline
+        └── CI.yml                                # Lint, type-check, test pipeline
 ```
 
 ---
@@ -134,6 +202,16 @@ services:
       - JELLYFIN_API_KEY=your-jellyfin-api-key
       - ANILIST_CLIENT_ID=your-anilist-client-id
       - ANILIST_CLIENT_SECRET=your-anilist-client-secret
+      # P4 Download Management (optional)
+      - SONARR_URL=http://192.168.1.100:8989
+      - SONARR_API_KEY=your-sonarr-api-key
+      - RADARR_URL=http://192.168.1.100:7878
+      - RADARR_API_KEY=your-radarr-api-key
+      - PROWLARR_URL=http://192.168.1.100:9696
+      - PROWLARR_API_KEY=your-prowlarr-api-key
+      - QBITTORRENT_URL=http://192.168.1.100:8080
+      - QBITTORRENT_USER=admin
+      - QBITTORRENT_PASS=your-password
 
     ports:
       - "9876:9876"
@@ -144,46 +222,6 @@ services:
 networks:
   AnilistNetwork:
     driver: bridge
-```
-
-### Dockerfile (Optimized)
-```dockerfile
-# Multi-stage build for smaller image
-FROM python:3.11-alpine AS BuildStage
-
-WORKDIR /app
-
-# Dependencies first (layer caching)
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir .
-
-# Then application code
-COPY . .
-
-# Final stage
-FROM python:3.11-alpine
-
-WORKDIR /app
-
-# Binhex standard volumes
-VOLUME ["/config", "/data"]
-
-# Binhex standard environment variables with defaults
-ENV PUID=99 \
-    PGID=100 \
-    UMASK=000 \
-    TZ=UTC \
-    DEBUG=false
-
-# Copy only necessary files
-COPY --from=BuildStage /app .
-
-# Create standard directories
-RUN mkdir -p /config /data
-
-EXPOSE 9876
-
-CMD ["python", "-m", "src.Main"]
 ```
 
 ---
@@ -250,132 +288,14 @@ temp/
 
 # Ruff cache
 .ruff_cache/
+
+# SQLite database (local dev)
+*.db
 ```
 
 ---
 
-## Initial Setup Commands
-
-### 1. Create Project Structure
-```bash
-# Navigate to project
-cd Anilist-Link
-
-# Create source code structure
-mkdir -p src/{Clients,Matching,Scanner,Sync,Web/Routes,Web/Templates,Web/Static,Database,Scheduler,Utils}
-
-# Create test structure
-mkdir -p tests/{Unit,Integration}
-
-# Create other directories
-mkdir -p scripts docs _resources/{Examples,Research,Assets,Notes}
-mkdir -p .github/workflows
-
-# Create __init__.py files for all Python packages
-touch src/__init__.py
-touch src/{Clients,Matching,Scanner,Sync,Web,Web/Routes,Database,Scheduler,Utils}/__init__.py
-touch tests/__init__.py
-touch tests/{Unit,Integration}/__init__.py
-```
-
-### 2. Set Up Documentation
-```bash
-# Documentation files should already exist in docs/
-ls docs/
-
-# Verify CLAUDE.md symlink
-ls -la CLAUDE.md
-# Output: CLAUDE.md -> docs/CLAUDE.md
-```
-
-### 3. Initialize Docker with Binhex Standards
-```bash
-# Create local volume directories for development
-mkdir -p config data
-
-# Set permissions (match PUID/PGID)
-sudo chown -R $(id -u):$(id -g) config data
-chmod -R 775 config data
-```
-
-### 4. Initialize Git
-```bash
-# Add all files (excluding _resources due to .gitignore)
-git add .
-
-# Initial commit
-git commit -m "Initial project setup with Binhex standards and documentation structure"
-
-# Verify _resources is ignored
-git status
-# Should not show _resources/
-```
-
----
-
-## Documentation File Templates
-
-### README.md (Root Level)
-```markdown
-# Anilist-Link
-
-A self-hosted Docker container that bridges AniList with Plex, Jellyfin, and Crunchyroll — syncing watch progress and providing AniList-powered metadata.
-
-## Quick Start
-
-```bash
-docker-compose up -d
-```
-
-## Documentation
-
-- [Architecture](docs/ARCHITECTURE.md) - System design and architecture
-- [Developer Setup](docs/DEV-SETUP.md) - Development environment setup
-- [Quick Reference](docs/QUICK-REFERENCE.md) - Best practices and common commands
-- [Project Structure](docs/PROJECT-STRUCTURE.md) - Project organization reference
-
-## License
-
-[Your License]
-```
-
-### docs/ARCHITECTURE.md (Required)
-```markdown
-# Architecture Overview
-[See docs/ARCHITECTURE.md for the complete filled-out version]
-
-Minimum content:
-- System Overview with component diagram
-- Technology Stack with rationale
-- Design Decisions (Context → Decision → Rationale → Consequences)
-- Data Flow description
-- Security Architecture
-- Scalability Considerations
-```
-
-### docs/CLAUDE.md (Symlinked to Root)
-```markdown
-# CLAUDE.md - Anilist-Link
-[See docs/CLAUDE.md for the complete filled-out version]
-
-Minimum content:
-- Project Overview and Key Features
-- Claude Code Preferences (model, planning, testing)
-- Technology Stack
-- Project Structure with special directories
-- Coding Conventions
-- Common Commands
-```
-
-**Symlink Setup**:
-```bash
-# Create symlink so Claude auto-detects it
-ln -s docs/CLAUDE.md CLAUDE.md
-```
-
----
-
-## File Naming Examples
+## File Naming Conventions
 
 ### PascalCase (Code Files & Directories)
 ```
@@ -423,75 +343,58 @@ Incorrect:
 
 ---
 
-## Using _resources/ Folder
+## Database Schema (v17)
 
-### Example Workflow
+Current tables (24 total):
 
-**1. Research Phase**
-```bash
-# Store AniList API research
-echo "# AniList GraphQL Queries" > _resources/Research/AnilistQueries.md
-
-# Save example API responses
-curl -X POST https://graphql.anilist.co \
-  -H "Content-Type: application/json" \
-  -d '{"query":"{ Media(id: 1) { title { romaji english } } }"}' \
-  > _resources/Examples/AnilistMediaResponse.json
-```
-
-**2. Development Phase**
-```bash
-# Reference in code or with Claude
-"Check the AniList API example in _resources/Examples/AnilistMediaResponse.json"
-
-# Store Crunchyroll API findings
-echo "# Crunchyroll API Endpoints" > _resources/Research/CrunchyrollApi.md
-```
-
-**3. Documentation Phase**
-```bash
-# Draft documentation in _resources
-nano _resources/Notes/ApiDocDraft.md
-
-# Once finalized, create in docs
-mv _resources/Notes/ApiDocDraft.md docs/API.md
-git add docs/API.md
-```
+| Table | Purpose |
+|---|---|
+| `schema_version` | Migration version tracking |
+| `users` | Linked AniList accounts with OAuth tokens |
+| `sync_state` | Per-user, per-item watch sync tracking |
+| `anilist_cache` | Cached AniList metadata (7-day TTL) |
+| `media_mappings` | Media server item → AniList ID mappings |
+| `manual_overrides` | User-specified title→AniList overrides |
+| `cr_session_cache` | Crunchyroll auth session (30-day TTL) |
+| `app_settings` | GUI-managed configuration |
+| `plex_media` | Persistent Plex library snapshot |
+| `series_groups` | AniList SEQUEL/PREQUEL relation groups |
+| `series_group_entries` | Entries within a series group |
+| `restructure_log` | File move operation audit trail |
+| `libraries` | Library manager library definitions |
+| `library_items` | Items within managed libraries |
+| `jellyfin_media` | Persistent Jellyfin library snapshot |
+| `plex_users` | Per-user Plex tokens (P1) |
+| `jellyfin_users` | Per-user Jellyfin credentials (P1) |
+| `cr_sync_preview` | Crunchyroll sync preview runs |
+| `cr_sync_log` | Crunchyroll sync operation history |
+| `download_requests` | Sonarr/Radarr request tracking (P4) |
+| `anilist_sonarr_mapping` | AniList → Sonarr series mapping (P4) |
+| `anilist_radarr_mapping` | AniList → Radarr movie mapping (P4) |
+| `sonarr_series_cache` | Sonarr series metadata cache (P4) |
+| `radarr_movie_cache` | Radarr movie metadata cache (P4) |
+| `anilist_sonarr_season_mapping` | Per-season AniList title resolution (P4) |
+| `anilist_arr_skip` | Cache of auto-sync resolution failures (P4) |
+| `user_watchlist` | AniList watchlist snapshot per user |
 
 ---
 
-## Verification Checklist
+## Test Suite Summary
 
-After setup, verify everything is correct:
+Total: ~315 tests across 10 files
 
-### Project Structure
-- [ ] `docs/` folder exists with ARCHITECTURE.md, CLAUDE.md, DEV-SETUP.md, QUICK-REFERENCE.md
-- [ ] `_resources/` folder exists with Examples/, Research/, Assets/, Notes/
-- [ ] CLAUDE.md symlink in root points to docs/CLAUDE.md
-- [ ] README.md in root (not in docs)
-- [ ] All `src/` subdirectories have `__init__.py` files
-
-### Git Configuration
-- [ ] `.gitignore` includes `_resources/`
-- [ ] `git status` does not show _resources/
-- [ ] Symlink is committed: `git ls-files | grep CLAUDE.md`
-
-### Docker Configuration
-- [ ] docker-compose.yml uses Binhex standard volumes (`/config`, `/data`)
-- [ ] Environment variables include PUID, PGID, UMASK, TZ
-- [ ] .dockerignore exists and excludes unnecessary files
-
-### Documentation
-- [ ] ARCHITECTURE.md has system overview with component diagram
-- [ ] CLAUDE.md configured with project-specific details
-- [ ] README.md links to docs/ files
-
-### Naming Conventions
-- [ ] All Python source files use PascalCase (e.g., `AnilistClient.py`)
-- [ ] All directories use PascalCase (e.g., `Clients/`, `Matching/`)
-- [ ] Environment variables use UPPER_SNAKE_CASE
-- [ ] Python variables and functions use snake_case (PEP 8)
-- [ ] Python classes use PascalCase
+| Test File | Coverage Focus | Tests |
+|---|---|---|
+| `test_normalizer.py` | All 6 normalization functions | 68 |
+| `test_title_matcher.py` | Similarity, season detection, best-match | 55 |
+| `test_database.py` | CRUD operations for all core tables | 31 |
+| `test_config.py` | Dataclass loading, env vars, frozen | 30 |
+| `test_plex_client.py` | PlexShow properties, metadata params | 33 |
+| `test_prowlarr_client.py` | Quality parsing, result parsing, dedup | 29 |
+| `test_series_group_builder.py` | BFS traversal, caching, filtering | 22 |
+| `test_naming_template.py` | Quality parsing, template rendering | 21 |
+| `test_rate_limiter.py` | Token bucket, refill, high-priority | 18 |
+| `test_arr_post_processor.py` | Webhook processing | (varies) |
 
 ---
 
@@ -509,8 +412,9 @@ pytest tests/Unit/                                # Unit tests only
 pytest --cov=src                                  # With coverage
 
 # Code Quality
+black src/                                        # Format (run first)
 ruff check src/                                   # Lint
-black src/                                        # Format
+ruff check --fix src/                             # Auto-fix lint issues
 mypy src/                                         # Type check
 
 # Docker commands (Binhex style)
@@ -524,23 +428,10 @@ docker exec -it AnilistLink sh                    # Shell into container
 git pull --rebase                                 # Pull with rebase
 git status                                        # Check status
 ls -la CLAUDE.md                                  # Verify symlink
-
-# Check PUID/PGID
-id -u                                             # Your PUID
-id -g                                             # Your PGID
-docker exec AnilistLink id                        # Container's PUID/PGID
 ```
 
 ---
 
-## Additional Resources
-
-- [ARCHITECTURE.md](ARCHITECTURE.md) - System architecture and design
-- [CLAUDE.md](CLAUDE.md) - Claude Code configuration
-- [DEV-SETUP.md](DEV-SETUP.md) - Detailed developer setup guide
-- [QUICK-REFERENCE.md](QUICK-REFERENCE.md) - Quick reference and best practices
-
----
-
-**Last Updated**: 2026-02-09
-**Standards Version**: 1.0
+**Last Updated**: 2026-03-19
+**Schema Version**: 17
+**Test Count**: ~315

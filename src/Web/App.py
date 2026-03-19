@@ -63,24 +63,46 @@ def create_app(
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     # Register routers
+    from src.Web.Routes.ArrWebhook import router as arr_webhook_router
     from src.Web.Routes.Auth import router as auth_router
+    from src.Web.Routes.ConnectionTest import router as connection_test_router
+    from src.Web.Routes.CrunchyrollSync import router as cr_sync_router
     from src.Web.Routes.Dashboard import router as dashboard_router
+    from src.Web.Routes.Downloads import router as downloads_router
+    from src.Web.Routes.JellyfinLibrary import router as jellyfin_library_router
+    from src.Web.Routes.JellyfinScan import router as jellyfin_scan_router
+    from src.Web.Routes.Library import router as library_router
     from src.Web.Routes.ManualGrab import router as manual_grab_router
+    from src.Web.Routes.Mappings import router as mappings_router
+    from src.Web.Routes.Onboarding import router as onboarding_router
     from src.Web.Routes.PlexLibrary import router as plex_library_router
     from src.Web.Routes.PlexScan import router as plex_scan_router
     from src.Web.Routes.Restructure import router as restructure_router
     from src.Web.Routes.Settings import router as settings_router
     from src.Web.Routes.SonarrSync import router as sonarr_sync_router
+    from src.Web.Routes.Tools import router as tools_router
+    from src.Web.Routes.UnifiedLibrary import router as unified_library_router
     from src.Web.Routes.WatchlistLibrary import router as watchlist_library_router
 
+    app.include_router(arr_webhook_router)
+    app.include_router(downloads_router)
     app.include_router(auth_router)
+    app.include_router(tools_router)
+    app.include_router(unified_library_router)
+    app.include_router(connection_test_router)
+    app.include_router(cr_sync_router)
     app.include_router(dashboard_router)
+    app.include_router(jellyfin_library_router)
+    app.include_router(jellyfin_scan_router)
+    app.include_router(library_router)
+    app.include_router(manual_grab_router)
+    app.include_router(mappings_router)
+    app.include_router(onboarding_router)
     app.include_router(plex_library_router)
     app.include_router(plex_scan_router)
     app.include_router(restructure_router)
     app.include_router(settings_router)
     app.include_router(sonarr_sync_router)
     app.include_router(watchlist_library_router)
-    app.include_router(manual_grab_router)
 
     return app

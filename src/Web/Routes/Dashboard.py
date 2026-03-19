@@ -7,8 +7,8 @@ import logging
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from starlette.responses import Response
 
-from src.Clients.PlexClient import PlexClient
 from src.Scheduler.Jobs import JOB_CRUNCHYROLL_SYNC
 
 logger = logging.getLogger(__name__)
@@ -16,30 +16,55 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["dashboard"])
 
 
-@router.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request, error: str | None = None) -> HTMLResponse:
-    """Render the main dashboard page."""
+@router.get("/", response_class=HTMLResponse, response_model=None)
+async def dashboard(
+    request: Request, error: str | None = None, skip_onboarding: str | None = None
+) -> Response:
+    """Render the main dashboard page.
+
+    Redirects to /onboarding on first launch unless onboarding is complete
+    or the caller passes ?skip_onboarding=1 (for development/testing).
+    """
     db = request.app.state.db
+
+    if not skip_onboarding:
+        onboarding_status = await db.get_setting("onboarding.status") or "not_started"
+        if onboarding_status != "completed":
+            return RedirectResponse(url="/onboarding", status_code=302)
     config = request.app.state.config
     scheduler = request.app.state.scheduler
     templates = request.app.state.templates
 
     users = await db.get_all_users()
     mapping_count = await db.get_mapping_count()
+    user_count = await db.get_user_count()
     job_status = scheduler.get_job_status()
 
     plex_configured = bool(config.plex.url and config.plex.token)
-    plex_libraries: list = []
-    selected_library_keys: list[str] = list(config.plex.anime_library_keys)
+    jellyfin_configured = bool(config.jellyfin.url and config.jellyfin.api_key)
 
-    if plex_configured:
+    # Currently watching (CURRENT entries for first linked user)
+    currently_watching: list = []
+    anilist_user = next((u for u in users if u["service"] == "anilist"), None)
+    if anilist_user:
         try:
-            plex_client = PlexClient(url=config.plex.url, token=config.plex.token)
-            all_libs = await plex_client.get_libraries()
-            plex_libraries = [lib for lib in all_libs if lib.type in ("show", "movie")]
-            await plex_client.close()
+            watching_entries = await db.get_watchlist(
+                anilist_user["user_id"], list_statuses=["CURRENT"]
+            )
+            currently_watching = watching_entries[:20]
         except Exception:
-            logger.warning("Could not fetch Plex libraries for dashboard")
+            logger.warning("Could not fetch currently-watching list")
+
+    # Recent activity
+    recent_activity: list = []
+    try:
+        recent_activity = await db.get_recent_activity(limit=15)
+    except Exception:
+        logger.warning("Could not fetch recent activity")
+
+    next_sync: str | None = None
+    if job_status:
+        next_sync = job_status[0].get("next_run_time")
 
     return templates.TemplateResponse(
         "dashboard.html",
@@ -47,11 +72,14 @@ async def dashboard(request: Request, error: str | None = None) -> HTMLResponse:
             "request": request,
             "users": users,
             "mapping_count": mapping_count,
+            "user_count": user_count,
             "job_status": job_status,
             "anilist_configured": bool(config.anilist.client_id),
             "plex_configured": plex_configured,
-            "plex_libraries": plex_libraries,
-            "selected_library_keys": selected_library_keys,
+            "jellyfin_configured": jellyfin_configured,
+            "currently_watching": currently_watching,
+            "recent_activity": recent_activity,
+            "next_sync": next_sync,
             "error": error,
             "message": request.query_params.get("message"),
             "version": "0.1.0",
@@ -81,7 +109,7 @@ async def api_status(request: Request) -> JSONResponse:
 
 
 @router.post("/api/sync", response_model=None)
-async def trigger_sync(request: Request) -> RedirectResponse | JSONResponse:
+async def trigger_sync(request: Request) -> Response:
     """Manually trigger a Crunchyroll sync job."""
     scheduler = request.app.state.scheduler
     triggered = scheduler.trigger_job(JOB_CRUNCHYROLL_SYNC)
@@ -102,7 +130,7 @@ async def trigger_sync(request: Request) -> RedirectResponse | JSONResponse:
 
 
 @router.post("/api/sync/dry-run", response_model=None)
-async def trigger_dry_run_sync(request: Request) -> RedirectResponse | JSONResponse:
+async def trigger_dry_run_sync(request: Request) -> Response:
     """Trigger a dry-run sync that logs intended changes without mutating AniList."""
     sync_fn = getattr(request.app.state, "cr_sync_task", None)
     is_browser = "text/html" in request.headers.get("accept", "")
@@ -125,7 +153,7 @@ async def trigger_dry_run_sync(request: Request) -> RedirectResponse | JSONRespo
 
 
 @router.post("/api/scan/plex", response_model=None)
-async def trigger_plex_scan(request: Request) -> RedirectResponse | JSONResponse:
+async def trigger_plex_scan(request: Request) -> Response:
     """Manually trigger a Plex metadata scan."""
     scan_fn = getattr(request.app.state, "plex_scan_task", None)
     is_browser = "text/html" in request.headers.get("accept", "")
@@ -153,7 +181,7 @@ async def trigger_plex_scan(request: Request) -> RedirectResponse | JSONResponse
 
 
 @router.post("/api/scan/plex/dry-run", response_model=None)
-async def trigger_plex_dry_run(request: Request) -> RedirectResponse | JSONResponse:
+async def trigger_plex_dry_run(request: Request) -> Response:
     """Trigger a dry-run Plex scan that logs matches without writing to Plex."""
     scan_fn = getattr(request.app.state, "plex_scan_task", None)
     is_browser = "text/html" in request.headers.get("accept", "")

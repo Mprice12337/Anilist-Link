@@ -20,6 +20,26 @@ from src.Utils.Config import AppConfig
 logger = logging.getLogger(__name__)
 
 
+def _safe_parse_genres(raw: str) -> list[str]:
+    """Parse a genres string that may be JSON or a Python repr list."""
+    if not raw:
+        return []
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    # Handle Python repr format: "['Action', 'Drama']"
+    import ast
+
+    try:
+        result = ast.literal_eval(raw)
+        if isinstance(result, list):
+            return [str(g) for g in result]
+    except (ValueError, SyntaxError):
+        pass
+    return []
+
+
 @dataclass
 class ScanItemDetail:
     """Per-item detail from a scan."""
@@ -185,8 +205,8 @@ class MetadataScanner:
 
         effective_dry_run = dry_run or preview
         for library in show_libraries:
-            shows = library_shows.get(library.key)
-            if shows is None:
+            shows = library_shows.get(library.key) or []
+            if not shows:
                 continue
             await self._scan_library_shows(
                 shows,
@@ -813,7 +833,7 @@ class MetadataScanner:
                 "episodes": cached.get("episodes"),
                 "coverImage": {"large": cached.get("cover_image", "")},
                 "description": cached.get("description", ""),
-                "genres": json.loads(cached.get("genres", "[]")),
+                "genres": _safe_parse_genres(cached.get("genres", "[]")),
                 "averageScore": None,
                 "studios": {"nodes": []},
                 "status": cached.get("status", ""),

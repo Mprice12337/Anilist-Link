@@ -11,6 +11,10 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+class MovieAlreadyExistsError(Exception):
+    """Raised when a movie already exists in Radarr."""
+
+
 @dataclass
 class RadarrMovie:
     """Represents a movie in Radarr."""
@@ -138,6 +142,28 @@ class RadarrClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def move_movie_root_folder(
+        self, movie_id: int, new_root_folder: str
+    ) -> dict[str, Any]:
+        """Move a movie to a new root folder path, instructing Radarr to move files."""
+        from pathlib import Path as _Path
+
+        movie = await self.get_movie_by_id(movie_id)
+        if not movie:
+            raise ValueError(f"Movie {movie_id} not found in Radarr")
+        old_path = movie.get("path", "")
+        movie_folder = _Path(old_path).name if old_path else ""
+        movie["rootFolderPath"] = new_root_folder
+        if movie_folder:
+            movie["path"] = str(_Path(new_root_folder) / movie_folder)
+        resp = await self._http.put(
+            self._endpoint(f"movie/{movie_id}"),
+            json=movie,
+            params={"moveFiles": "true"},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     # ------------------------------------------------------------------
     # Naming config
     # ------------------------------------------------------------------
@@ -151,5 +177,161 @@ class RadarrClient:
     async def push_naming_config(self, config: dict[str, Any]) -> dict[str, Any]:
         """Update Radarr naming configuration."""
         resp = await self._http.put(self._endpoint("config/naming"), json=config)
+        resp.raise_for_status()
+        return resp.json()
+
+    # ------------------------------------------------------------------
+    # Release search / grab
+    # ------------------------------------------------------------------
+
+    async def update_movie_monitor(
+        self, movie_id: int, monitored: bool
+    ) -> dict[str, Any]:
+        """Toggle the monitored flag for an existing movie."""
+        movie = await self.get_movie_by_id(movie_id)
+        if not movie:
+            raise ValueError(f"Movie {movie_id} not found in Radarr")
+        movie["monitored"] = monitored
+        resp = await self._http.put(self._endpoint(f"movie/{movie_id}"), json=movie)
+        resp.raise_for_status()
+        return resp.json()
+
+    async def search_releases(self, movie_id: int) -> list[dict[str, Any]]:
+        """Search for available releases for a movie already in Radarr."""
+        resp = await self._http.get(
+            self._endpoint("release"), params={"movieId": movie_id}
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def push_release(
+        self,
+        title: str,
+        download_url: str,
+        protocol: str,
+        publish_date: str = "",
+        movie_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Push a release URL directly to Radarr without going through its search.
+
+        Pass ``movie_id`` to skip Radarr's title-based movie matching.
+        """
+        payload: dict[str, Any] = {
+            "title": title,
+            "downloadUrl": download_url,
+            "protocol": protocol,
+        }
+        if publish_date:
+            payload["publishDate"] = publish_date
+        if movie_id:
+            payload["movieId"] = movie_id
+        resp = await self._http.post(self._endpoint("release/push"), json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
+    async def search_releases_long(
+        self, movie_id: int, timeout: float = 90.0
+    ) -> list[dict[str, Any]]:
+        """Search for releases with a longer timeout (indexer queries can be slow)."""
+        resp = await self._http.get(
+            self._endpoint("release"),
+            params={"movieId": movie_id},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def grab_release(self, guid: str, indexer_id: int) -> dict[str, Any]:
+        """Instruct Radarr to grab a specific release."""
+        resp = await self._http.post(
+            self._endpoint("release"),
+            json={"guid": guid, "indexerId": indexer_id},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    # ------------------------------------------------------------------
+    # Movie files
+    # ------------------------------------------------------------------
+
+    async def get_movie_file(self, file_id: int) -> dict[str, Any] | None:
+        """Return a single movie file record by ID."""
+        try:
+            resp = await self._http.get(self._endpoint(f"moviefile/{file_id}"))
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return None
+            raise
+
+    async def get_movie_files(self, movie_id: int) -> list[dict[str, Any]]:
+        """Return all movie files for a movie."""
+        resp = await self._http.get(
+            self._endpoint("moviefile"), params={"movieId": movie_id}
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def update_movie_file(
+        self, file_id: int, relative_path: str, path: str
+    ) -> dict[str, Any]:
+        """Update stored paths for a movie file (no disk move — caller handles that)."""
+        file_obj = await self.get_movie_file(file_id)
+        if not file_obj:
+            raise ValueError(f"Movie file {file_id} not found in Radarr")
+        file_obj["relativePath"] = relative_path
+        file_obj["path"] = path
+        resp = await self._http.put(
+            self._endpoint(f"moviefile/{file_id}"), json=file_obj
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    # ------------------------------------------------------------------
+    # Webhook / notifications
+    # ------------------------------------------------------------------
+
+    async def get_notifications(self) -> list[dict[str, Any]]:
+        """Return all configured notification connections."""
+        resp = await self._http.get(self._endpoint("notification"))
+        resp.raise_for_status()
+        return resp.json()
+
+    async def register_webhook(
+        self,
+        name: str,
+        url: str,
+        on_download: bool = True,
+        on_upgrade: bool = True,
+    ) -> dict[str, Any]:
+        """Register a webhook in Radarr; no-op if the name already exists."""
+        for n in await self.get_notifications():
+            if n.get("name") == name:
+                return n
+        payload: dict[str, Any] = {
+            "onGrab": False,
+            "onDownload": on_download,
+            "onUpgrade": on_upgrade,
+            "onMovieAdded": False,
+            "onMovieDelete": False,
+            "onMovieFileDelete": False,
+            "onMovieFileDeleteForUpgrade": False,
+            "onHealthIssue": False,
+            "onApplicationUpdate": False,
+            "name": name,
+            "fields": [
+                {"name": "Url", "value": url},
+                {"name": "Method", "value": 1},
+                {"name": "Username", "value": ""},
+                {"name": "Password", "value": ""},
+            ],
+            "implementationName": "Webhook",
+            "implementation": "Webhook",
+            "configContract": "WebhookSettings",
+            "infoLink": "https://wiki.servarr.com/radarr/supported#webhook",
+            "tags": [],
+        }
+        resp = await self._http.post(self._endpoint("notification"), json=payload)
         resp.raise_for_status()
         return resp.json()

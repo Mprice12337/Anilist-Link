@@ -2,20 +2,20 @@
 
 This document defines the architecture of Anilist-Link, organized around its four functional pillars. It serves as the primary reference for understanding the system's design, components, and implementation status. Update this document as the codebase evolves.
 
-**Date of Last Update**: 2026-02-13
+**Date of Last Update**: 2026-03-19
 
 ---
 
 ## 1. Project Vision & The 4 Pillars
 
-Anilist-Link is a self-hosted Docker container that connects AniList with media platforms (Plex, Jellyfin, Crunchyroll) and download managers (Sonarr, Radarr). Rather than being a single-purpose sync tool, it delivers four distinct capabilities:
+Anilist-Link is a self-hosted Docker container that connects AniList with media platforms (Plex, Jellyfin, Crunchyroll) and download managers (Sonarr, Radarr, Prowlarr). Rather than being a single-purpose sync tool, it delivers four distinct capabilities:
 
 | # | Pillar | Summary | Priority | Status |
 |---|--------|---------|----------|--------|
-| 2 | **File Organization** | Rename/reorganize anime files into a standardized folder structure using AniList data | 1st | Partially implemented |
-| 3 | **Metadata from AniList** | Write AniList metadata (titles, descriptions, posters, genres, ratings) to Plex/Jellyfin | 2nd | Implemented for Plex |
-| 1 | **Watch Status Sync** | Sync watch progress between Crunchyroll/Plex/Jellyfin and AniList | 3rd | Crunchyroll→AniList done |
-| 4 | **Download Management** | Send add requests to Sonarr/Radarr with AniList alternative titles for matching | 4th | Not started |
+| 2 | **File Organization** | Rename/reorganize anime files into a standardized folder structure using AniList data | 1st | ✅ Complete (L1/L2/L3) |
+| 3 | **Metadata from AniList** | Write AniList metadata (titles, descriptions, posters, genres, ratings) to Plex/Jellyfin | 2nd | ✅ Complete (Plex + Jellyfin) |
+| 1 | **Watch Status Sync** | Sync watch progress between Crunchyroll/Plex/Jellyfin and AniList | 3rd | Crunchyroll→AniList done; Plex/Jellyfin planned |
+| 4 | **Download Management** | Send add requests to Sonarr/Radarr with AniList alternative titles for matching | 4th | Partially implemented (clients, routes, DB) |
 
 **Implementation order**: P2 → P3 → P1 → P4
 
@@ -42,9 +42,9 @@ All four pillars share a common foundation: the AniList Client, Title Matcher, S
                          │                         │                                    │
   [Sonarr/Radarr]  <───  │  ┌──────────────────────┴──────────────────────┐           │
                          │  │  P4: Download        ┌──────────────┐       │           │
-  [Browser]        <───> │  │  Management          │  Web UI      │       │           │
+  [Prowlarr]        <──  │  │  Management          │  Web UI      │       │           │
                          │  └──────────────────────┤  (FastAPI)   │───────┘           │
-                         │                         └──────────────┘                    │
+  [Browser]        <───> │                         └──────────────┘                    │
                          └──────────────────────────────────────────────────────────────┘
                                                    │
                                                    ▼
@@ -62,10 +62,10 @@ These components are used across multiple pillars and form the core infrastructu
 **Status**: Fully implemented
 
 GraphQL client handling all AniList interactions:
-- **Public queries**: anime search (by title), fetch by ID, relations traversal with `relationType(version: 2)`
+- **Public queries**: anime search (by title), fetch by ID, relations traversal with `relationType(version: 2)`, external links (TVDB/TMDB ID extraction)
 - **Authenticated mutations**: watch status updates (per-user OAuth2 tokens)
 - **OAuth2 flow**: authorization URL generation, token exchange, viewer profile fetch
-- **Rate limiting**: token-bucket algorithm (90 capacity, 1.5/sec refill rate)
+- **Rate limiting**: token-bucket algorithm (90 capacity, 1.5/sec refill rate) — see `RateLimiter` class
 - **Retry logic**: exponential backoff on 429 and 5xx responses
 
 Used by: All 4 pillars
@@ -75,15 +75,25 @@ Used by: All 4 pillars
 **Status**: Fully implemented
 
 Multi-algorithm fuzzy matching engine:
-- Four weighted algorithms via rapidfuzz: ratio, partial ratio, token sort ratio, token set ratio
-- Anime-specific normalization: season number stripping, Unicode transliteration, punctuation removal, common prefix/suffix handling
-- Multi-pass search with configurable confidence thresholds
-- Manual override support (user-specified title→AniList ID mappings)
-- `determine_correct_entry_and_episode()` for absolute numbering resolution
+- `difflib.SequenceMatcher`-based similarity with configurable threshold (default 0.75)
+- Anime-specific normalization via `Normalizer.py`: season number stripping, punctuation removal, common prefix/suffix handling, year/tag extraction
+- Season-aware matching: `find_best_match_with_season()` detects season indicators in titles (ordinal, roman numeral, "Part N", "Season N")
+- Movie-specific matching path via `_find_best_movie_match()`
+- Format filtering: excludes MOVIE/OVA/SPECIAL by default, overrideable per call
+- `get_primary_title()` helper to extract best available title from AniList data
 
 Used by: P1, P2, P3
 
-### 3.3. Series Group Builder (`src/Scanner/SeriesGroupBuilder.py`)
+### 3.3. Naming Template & Translator (`src/Utils/NamingTemplate.py`, `src/Utils/NamingTranslator.py`)
+
+**Status**: Fully implemented
+
+- **`NamingTemplate.py`**: Template rendering engine with token substitution. `parse_quality()` extracts resolution/source/codec from filenames. File and folder naming templates used by P2 restructurer.
+- **`NamingTranslator.py`**: Translates between services. `resolve_tvdb_id()` and `resolve_tmdb_id()` extract IDs from AniList external links. `is_movie_format()` determines Sonarr vs Radarr routing. `get_preferred_title()` selects best title for a given AniList entry.
+
+Used by: P2, P4
+
+### 3.4. Series Group Builder (`src/Scanner/SeriesGroupBuilder.py`)
 
 **Status**: Fully implemented
 
@@ -92,44 +102,51 @@ Builds series groups by traversing AniList's relation graph:
 - Excludes SIDE_STORY, SPIN_OFF, ALTERNATIVE, etc. (treated as separate groups)
 - Sorts entries chronologically by `startDate`
 - Persists groups to `series_groups` and `series_group_entries` tables
-- Caches with TTL to avoid redundant traversals
+- Caches with 168-hour TTL to avoid redundant traversals
 - Returns `(group_id, entries_list)` for downstream use
 
 Used by: P2, P3 (and P1 for episode-to-entry resolution)
 
-### 3.4. Database Layer (`src/Database/`)
+### 3.5. Database Layer (`src/Database/`)
 
 **Status**: Fully implemented
 
-- **Connection.py**: Async SQLite connection manager via aiosqlite
-- **Models.py**: Dataclass definitions for all tables
-- **Migrations.py**: 6 versioned migrations (v1–v6), auto-run at startup
+- **`Connection.py`**: Async SQLite connection manager via aiosqlite with WAL mode, foreign key enforcement, and full CRUD for all tables
+- **`Models.py`**: Dataclass definitions for all tables plus `TABLES` dict (SQL DDL) and `INDEXES` list
+- **`Migrations.py`**: 17 versioned migrations (v1–v17), auto-run at startup
 
-Current schema version: **6**
+Current schema version: **17**
 
 See [Section 10: Data Stores](#10-data-stores) for full table listing.
 
-### 3.5. Web Dashboard (`src/Web/`)
+### 3.6. Web Dashboard (`src/Web/`)
 
-**Status**: Fully implemented (core pages)
+**Status**: Fully implemented (all core pages)
 
 FastAPI application with Jinja2 templates:
-- **App.py**: Factory pattern (`create_app()`) with lifespan for startup/shutdown
+- **`App.py`**: Factory pattern (`create_app()`) with lifespan for startup/shutdown; registers all routers
 - **Dashboard** (`/`): System status, job triggers, linked accounts
 - **Settings** (`/settings`): GUI-based configuration management for all credentials and intervals
 - **Auth** (`/auth/anilist/*`): AniList OAuth2 account linking flow
+- **Onboarding** (`/onboarding`): 4-step setup wizard for new users
+- **Connection Tests** (`/api/test/*`): Live connection validation for all services
+- **Floating progress widget**: In `base.html`, polls `GET /api/progress` every 2s for background task feedback
 
-### 3.6. Scheduler (`src/Scheduler/Jobs.py`)
-
-**Status**: Fully implemented
-
-APScheduler integration for periodic background tasks. Jobs are registered as callables during app startup. Currently schedules Crunchyroll watch sync at configurable intervals.
-
-### 3.7. Config (`src/Utils/Config.py`)
+### 3.7. Scheduler (`src/Scheduler/Jobs.py`)
 
 **Status**: Fully implemented
 
-Frozen dataclass loaded once via `load_config()`. Reads from environment variables with fallback to DB-stored GUI settings (`app_settings` table). Supports encrypted secret storage.
+APScheduler integration for periodic background tasks. `JobScheduler` class wraps APScheduler with:
+- Cron and interval trigger support via `_cr_trigger()`
+- Manual job trigger via `trigger_job(job_id)`
+- Job status query via `get_job_status()`
+- Registered jobs: Crunchyroll watch sync, Plex/Jellyfin metadata scan, watch sync, download sync
+
+### 3.8. Config (`src/Utils/Config.py`)
+
+**Status**: Fully implemented
+
+Frozen dataclasses loaded once via `load_config()`. Reads from environment variables with fallback to DB-stored GUI settings (`app_settings` table). Supports encrypted secret storage. Config sections: `AniListConfig`, `CrunchyrollConfig`, `PlexConfig`, `JellyfinConfig`, `SonarrConfig`, `RadarrConfig`, `DatabaseConfig`, `SchedulerConfig`, `DownloadSyncConfig`, `AppConfig`.
 
 ---
 
@@ -137,49 +154,35 @@ Frozen dataclass loaded once via `load_config()`. Reads from environment variabl
 
 ### 4.1. Overview
 
-Helps users organize their anime files into a standardized folder structure that produces clean 1:1 mappings between Plex shows and AniList entries. This is the **recommended first step** for new users — properly organized files make metadata writing (P3) and watch sync (P1) significantly more reliable.
+Helps users organize their anime files into a standardized folder structure that produces clean 1:1 mappings between Plex/Jellyfin shows and AniList entries. Recommended as the first step for new users.
 
 ### 4.2. Implementation Status
 
 | Component | Status |
 |-----------|--------|
-| LibraryRestructurer (`src/Scanner/LibraryRestructurer.py`) | Implemented — full restructure mode |
-| Restructure wizard UI (`src/Web/Routes/Restructure.py`) | Implemented — analyze/preview/execute flow |
-| Restructure templates | Implemented — wizard, preview, progress, results pages |
-| `restructure_log` DB table | Implemented (migration v6) |
-| Rename-only mode | **Not yet implemented** |
-| Operation level selection in wizard | **Not yet implemented** |
+| `LibraryRestructurer` (`src/Scanner/LibraryRestructurer.py`) | ✅ Complete — all 3 levels |
+| Folder rename only (L1) | ✅ Complete |
+| Folder + file rename (L2) | ✅ Complete |
+| Full restructure with moves (L3) | ✅ Complete |
+| Restructure wizard UI (`src/Web/Routes/Restructure.py`) | ✅ Complete — analyze/preview/execute |
+| Multi-source restructure with conflict detection | ✅ Complete |
+| Restructure templates (wizard, preview, progress, results, report) | ✅ Complete |
+| `restructure_log` DB table | ✅ Complete |
+| Plex auto-refresh post-execute | ✅ Complete |
+| Jellyfin auto-refresh post-execute | ✅ Complete |
+| `PlexShowProvider` / `JellyfinShowProvider` | ✅ Complete |
 
-### 4.3. Current Capabilities (Full Restructure Mode)
+### 4.3. Operation Levels
 
-The Library Restructurer analyzes a Plex library and generates a plan to reorganize files into Structure A (one folder per AniList entry):
+The Library Restructurer supports three levels of operation, selectable in the wizard:
 
-**Workflow**: Wizard → Analyze → Preview → Execute → Log → Plex Refresh
+1. **L1 — Folder rename**: Rename show folders to match AniList titles (no file moves)
+2. **L2 — Folder + file rename**: Also rename episode files to standardized format using naming templates
+3. **L3 — Full restructure**: Move files between directories, reorganize into series group structure with season subfolders
 
-1. **Analyze**: Scan Plex library, match shows to AniList, build series groups
-2. **Preview**: Show the user what file moves will happen (source → destination)
-3. **Execute**: Perform file moves with season number remapping, update Plex
-4. **Log**: Record all operations in `restructure_log` for audit/undo
+**Workflow**: Wizard → Select source → Analyze → Preview → Resolve conflicts → Execute → Log → Refresh
 
-**Routes**:
-- `GET /restructure` — Wizard start page
-- `POST /restructure/analyze` — Begin analysis of selected library
-- `GET /restructure/progress` — SSE progress stream during analysis
-- `GET /restructure/preview` — Show planned file moves for approval
-- `POST /restructure/execute` — Execute approved file moves
-- `GET /restructure/results` — Show results and any errors
-
-### 4.4. Planned: Rename-Only Mode
-
-A lighter alternative to full restructure that renames folders/files in place without moving them between directories. Three operation levels:
-
-1. **Folder rename**: Rename show folders to match AniList titles
-2. **Folder + file rename**: Also rename episode files to standardized format
-3. **Full consolidation**: Merge split folders into multi-season structure (current full restructure)
-
-Users will select the operation level in the wizard before analysis begins.
-
-### 4.5. Target File Structure
+### 4.4. Target File Structure
 
 The recommended output structure (Structure A) is one folder per AniList entry:
 
@@ -195,7 +198,15 @@ The recommended output structure (Structure A) is one folder per AniList entry:
     ...
 ```
 
-This produces the cleanest 1:1 mapping and avoids the complexity of season-level mapping.
+### 4.5. Routes
+
+- `GET /restructure` — Wizard start page
+- `POST /restructure/analyze` — Begin analysis of selected library
+- `GET /restructure/progress` — SSE progress stream during analysis
+- `GET /restructure/preview` — Show planned file moves for approval
+- `POST /restructure/execute` — Execute approved file moves
+- `GET /restructure/results` — Show results and any errors
+- `GET /restructure/report` — Audit log of past restructures
 
 ---
 
@@ -203,82 +214,59 @@ This produces the cleanest 1:1 mapping and avoids the complexity of season-level
 
 ### 5.1. Overview
 
-Writes AniList metadata to Plex (and eventually Jellyfin) anime libraries. Transforms Plex's default metadata (often from TVDB/TMDB) into accurate AniList-sourced information including titles, descriptions, cover art, genres, ratings, and studios.
+Writes AniList metadata to Plex and Jellyfin anime libraries. Transforms default metadata (often from TVDB/TMDB) into accurate AniList-sourced information including titles, descriptions, cover art, genres, ratings, and studios.
 
 ### 5.2. Implementation Status
 
 | Component | Status |
 |-----------|--------|
-| MetadataScanner (`src/Scanner/MetadataScanner.py`) | Implemented — full scan/match/apply pipeline |
-| PlexClient metadata writing (`src/Clients/PlexClient.py`) | Implemented — show + season level |
-| Plex library browser (`src/Web/Routes/PlexLibrary.py`) | Implemented — browse, manage mappings |
-| Plex scan routes (`src/Web/Routes/PlexScan.py`) | Implemented — preview/live/apply |
-| Plex media persistence (`plex_media` table) | Implemented (migration v4) |
-| Staff/credits writing | **Not yet implemented** |
-| JellyfinClient (`src/Clients/JellyfinClient.py`) | **Stub only** — module docstring only |
-| Jellyfin scan routes | **Not yet implemented** |
+| `MetadataScanner` (`src/Scanner/MetadataScanner.py`) | ✅ Complete — Plex scan/match/apply |
+| `JellyfinMetadataScanner` (`src/Scanner/JellyfinMetadataScanner.py`) | ✅ Complete — Jellyfin scan/match/apply |
+| `PlexClient` metadata writing | ✅ Complete — show + season level |
+| `JellyfinClient` metadata writing | ✅ Complete — item + season level |
+| Plex library browser (`/plex`) | ✅ Complete |
+| Jellyfin library browser (`/jellyfin`) | ✅ Complete |
+| Plex scan routes (`/scan/plex/*`) | ✅ Complete |
+| Jellyfin scan routes (`/scan/jellyfin/*`) | ✅ Complete |
+| Unified library browser (`/library`) | ✅ Complete — platform-agnostic view |
+| `plex_media` / `jellyfin_media` snapshot tables | ✅ Complete |
+| Manual override UI (`/mappings`) | ✅ Complete — list, add, delete |
+| Staff/credits writing to Plex | Deferred (non-blocking) |
+| GUID-based high-confidence matching | Deferred (non-blocking) |
 
 ### 5.3. Metadata Scanner Pipeline
 
-The MetadataScanner orchestrates the full pipeline:
+Both `MetadataScanner` (Plex) and `JellyfinMetadataScanner` (Jellyfin) follow the same pipeline:
 
 ```
-Enumerate Plex shows → Match titles (TitleMatcher) → Detect structure (A/B/C)
-    → Build series groups → Cache AniList metadata → Write to Plex
+Enumerate shows from server → Match titles (TitleMatcher) → Detect structure (A/B/C)
+    → Build series groups → Cache AniList metadata → Write to server
 ```
 
 **Modes**:
 - **Preview/dry-run**: Shows what would change without applying
 - **Live scan**: Applies metadata changes in real-time with SSE progress
 
-**Metadata written to Plex**:
-- Show title (AniList romaji or english title)
+**Metadata written**:
+- Show title (AniList romaji or english)
 - Summary/description
 - Genres
-- Rating (AniList score → Plex rating scale)
-- Cover art/poster
-- Season names (each AniList entry's title)
+- Rating (AniList score scaled to platform)
+- Cover art/poster (uploaded from AniList CDN URL)
+- Season names (each AniList entry's title as the season display name)
 
-### 5.4. Plex Library Browser
+### 5.4. Library Routes
 
-Full-featured web UI for managing the Plex→AniList mapping:
+**Plex** (`/plex/*`):
+- `GET /plex` — Library browser
+- `POST /plex/update-match`, `POST /plex/remove-match` — Mapping management
+- `POST /plex/scan/preview`, `POST /plex/scan/live` — Scan modes
+- `GET /plex/scan/progress`, `GET /plex/scan/results` — Progress/results
+- `POST /plex/apply-all`, `POST /plex/apply-single` — Apply metadata
 
-**Routes**:
-- `GET /plex` — Browse Plex libraries with mapping status
-- `POST /plex/update-match` — Change a show's AniList match
-- `POST /plex/remove-match` — Remove a mapping
-- `POST /plex/remove-library` — Remove a scanned library
-- `POST /plex/scan/preview` — Preview scan for a library
-- `POST /plex/scan/live` — Execute live scan
-- `GET /plex/scan/progress` — SSE progress stream
-- `GET /plex/scan/results` — Scan results page
-- `POST /plex/apply-all` — Apply metadata to all matched items
-- `POST /plex/apply-single` — Apply metadata to one item
-- `GET /api/plex/thumb` — Proxy for Plex thumbnail images
+**Jellyfin** (`/jellyfin/*`): Mirrors Plex routes exactly.
 
-### 5.5. Plex Scan Routes
-
-Additional scan management routes with AniList search integration:
-
-**Routes**:
-- `POST /scan/plex/preview` — Preview scan
-- `GET /scan/plex/progress` — SSE progress (HTML page)
-- `GET /api/scan/plex/progress` — SSE progress (API)
-- `GET /scan/plex/results` — Results page
-- `POST /scan/plex/apply` — Apply scan results
-- `GET /api/scan/plex/search` — AniList title search for manual rematch
-- `POST /scan/plex/rematch` — Manually rematch a show
-
-### 5.6. Planned: Staff/Credits Writing
-
-Write staff information (director, writer, voice actors) from AniList to Plex as credits metadata. Requires extending the AniList GraphQL queries to fetch staff data and the PlexClient to write credits.
-
-### 5.7. Planned: Jellyfin Integration
-
-Mirror the Plex metadata pipeline for Jellyfin:
-- Implement `JellyfinClient` (currently a stub)
-- Add Jellyfin scan and library browser routes
-- Jellyfin's open API makes this straightforward — no paid tier required
+**Unified** (`/library/*`): Platform-agnostic library manager for both Plex and Jellyfin items, with series group detail view.
 
 ---
 
@@ -286,30 +274,30 @@ Mirror the Plex metadata pipeline for Jellyfin:
 
 ### 6.1. Overview
 
-Syncs watch progress between media platforms and AniList. Detects when a user watches an episode on Plex, Jellyfin, or Crunchyroll, and updates their AniList entry with the correct episode count and status.
+Syncs watch progress between media platforms and AniList. Detects when a user watches an episode and updates their AniList entry with the correct episode count and status.
 
 ### 6.2. Implementation Status
 
 | Component | Status |
 |-----------|--------|
-| WatchSyncer (`src/Sync/WatchSyncer.py`) | Implemented — Crunchyroll→AniList |
-| CrunchyrollClient (`src/Clients/CrunchyrollClient.py`) | Implemented — auth + watch history |
-| CR session persistence (`cr_session_cache` table) | Implemented (migration v2) |
-| Sync state tracking (`sync_state` table) | Implemented (migration v1) |
-| Scheduler integration | Implemented — periodic CR sync |
-| Dashboard manual trigger | Implemented — `POST /api/sync` |
-| PlexWatchSyncer | **Not yet implemented** |
-| JellyfinWatchSyncer | **Not yet implemented** |
-| Plex webhook handler | **Not yet implemented** |
-| Jellyfin webhook handler | **Not yet implemented** |
-| AniList backfill syncer | **Not yet implemented** |
-| `plex_users` table | **Not yet implemented** |
-| `jellyfin_users` table | **Not yet implemented** |
+| `WatchSyncer` (`src/Sync/WatchSyncer.py`) | ✅ Implemented — Crunchyroll→AniList |
+| `CrunchyrollClient` | ✅ Implemented — auth + watch history |
+| `CrunchyrollPreviewRunner` (`src/Sync/CrunchyrollPreviewRunner.py`) | ✅ Implemented — preview/undo pipeline |
+| CR session persistence (`cr_session_cache`) | ✅ Implemented |
+| CR sync preview (`cr_sync_preview`, `cr_sync_log`) | ✅ Implemented |
+| Sync state tracking (`sync_state`) | ✅ Implemented |
+| Scheduler integration | ✅ Implemented |
+| Dashboard manual trigger | ✅ Implemented |
+| `PlexWatchSyncer` | Not yet implemented |
+| `JellyfinWatchSyncer` | Not yet implemented |
+| Plex webhook handler | Not yet implemented |
+| Jellyfin webhook handler | Not yet implemented |
+| AniList backfill syncer | Not yet implemented |
+| AniList token auto-refresh | Not yet wired up |
 
 ### 6.3. Current: Crunchyroll → AniList
 
-The WatchSyncer (ported from the original Crunchyroll-Anilist-Sync project) handles:
-
+The `WatchSyncer` handles:
 - Smart pagination of Crunchyroll watch history with early stopping
 - Title matching against AniList (fuzzy match + series group resolution)
 - Episode-to-entry resolution using cumulative episode counts
@@ -317,24 +305,19 @@ The WatchSyncer (ported from the original Crunchyroll-Anilist-Sync project) hand
 - Per-user, per-item sync tracking via `sync_state` table
 - Dry-run mode for preview without mutations
 
-**CrunchyrollClient** uses Selenium via `asyncio.to_thread()` for browser-based authentication (required due to anti-bot measures). Sessions are cached in `cr_session_cache` with 30-day TTL.
+**CrunchyrollPreviewRunner** adds a preview/approve/undo layer:
+- Proposes changes in `cr_sync_preview` table before applying
+- Records applied changes in `cr_sync_log` with undo support
+- Routes at `/crunchyroll/*` including history, preview, and undo
 
-### 6.4. Planned: Plex Watch Sync
+**CrunchyrollClient** uses Selenium via `asyncio.to_thread()` for browser-based authentication. Sessions are cached in `cr_session_cache` with 30-day TTL.
 
-- **PlexWatchSyncer**: Poll Plex for watch progress changes per linked user
-- **Plex webhook handler**: Real-time sync via Plex webhooks (requires Plex Pass)
-- **`plex_users` table**: Store per-user Plex tokens obtained via Plex.tv API (`/api/v2/home/users`)
-- Uses existing series group + structure detection to resolve episodes to AniList entries
+### 6.4. Planned: Plex & Jellyfin Watch Sync
 
-### 6.5. Planned: Jellyfin Watch Sync
-
-- **JellyfinWatchSyncer**: Poll or receive webhooks for watch progress
-- **`jellyfin_users` table**: Store per-user Jellyfin credentials
-- Jellyfin webhooks don't require a paid tier (unlike Plex)
-
-### 6.6. Planned: AniList Backfill Syncer
-
-Reverse direction: read AniList watch status and update media server "watched" flags. Useful for marking items as watched in Plex/Jellyfin based on AniList history.
+- **PlexWatchSyncer**: Poll Plex for watch progress per linked user; per-user tokens via `plex_users` table
+- **JellyfinWatchSyncer**: Poll or receive webhooks for watch progress; per-user tokens via `jellyfin_users` table
+- Both tables are already in the schema (v10)
+- Plex webhooks require Plex Pass; Jellyfin webhooks are free
 
 ---
 
@@ -342,41 +325,55 @@ Reverse direction: read AniList watch status and update media server "watched" f
 
 ### 7.1. Overview
 
-Integrates with Sonarr and Radarr to send add requests using AniList data. When a user wants to download an anime, Anilist-Link resolves the AniList entry to TVDB/TMDB IDs and sends the request to Sonarr/Radarr with alternative titles from AniList for better matching.
+Integrates with Sonarr, Radarr, and Prowlarr to send add/search requests using AniList data. Resolves AniList entries to TVDB/TMDB IDs, routes TV series to Sonarr and movies to Radarr, and pushes AniList alternative titles for better indexer matching.
 
 ### 7.2. Implementation Status
 
 | Component | Status |
 |-----------|--------|
-| SonarrClient | **Not yet implemented** |
-| RadarrClient | **Not yet implemented** |
-| DownloadManager (`src/Downloads/`) | **Not yet implemented** |
-| Download management UI routes | **Not yet implemented** |
-| `download_requests` table | **Not yet implemented** |
+| `SonarrClient` (`src/Clients/SonarrClient.py`) | ✅ Implemented — full API v3 |
+| `RadarrClient` (`src/Clients/RadarrClient.py`) | ✅ Implemented — full API v3 |
+| `ProwlarrClient` (`src/Clients/ProwlarrClient.py`) | ✅ Implemented — search + grab |
+| `QBittorrentClient` (`src/Clients/QBittorrentClient.py`) | ✅ Implemented — add/monitor |
+| `DownloadManager` (`src/Download/DownloadManager.py`) | ✅ Implemented |
+| `MappingResolver` (`src/Download/MappingResolver.py`) | ✅ Implemented |
+| `ArrPostProcessor` (`src/Download/ArrPostProcessor.py`) | ✅ Implemented |
+| `DownloadSyncer` (`src/Sync/DownloadSyncer.py`) | ✅ Implemented |
+| Download management UI (`/downloads`) | ✅ Implemented |
+| Manual grab UI (`/manual-grab`) | ✅ Implemented |
+| Arr webhook receiver (`/arr-webhook`) | ✅ Implemented |
+| Watchlist library view (`/watchlist`) | ✅ Implemented |
+| `download_requests` table | ✅ Implemented |
+| `anilist_sonarr_mapping` table | ✅ Implemented |
+| `anilist_radarr_mapping` table | ✅ Implemented |
+| `sonarr_series_cache` / `radarr_movie_cache` tables | ✅ Implemented |
+| Full automation (auto-search on new CURRENT status) | Partial — `DownloadSyncer` exists |
 
-### 7.3. Planned Architecture
+### 7.3. Architecture
 
-**New clients**:
-- `src/Clients/SonarrClient.py` — Sonarr API v3 integration (add series, search, status)
-- `src/Clients/RadarrClient.py` — Radarr API v3 integration (add movie, search, status)
+**ID Resolution** (`src/Utils/NamingTranslator.py`):
+1. Fetch AniList external links for the entry
+2. Extract TVDB ID (for Sonarr) or TMDB ID (for Radarr)
+3. If no ID found, fall back to Sonarr/Radarr title search (`lookup_series` / `lookup_movie`)
+4. `is_movie_format()` routes MOVIE/ONA/SPECIAL/MUSIC to Radarr; everything else to Sonarr
 
-**New module**:
-- `src/Downloads/DownloadManager.py` — Orchestrates AniList→Sonarr/Radarr workflow
+**`MappingResolver`** (`src/Download/MappingResolver.py`):
+- Persists AniList↔Sonarr/Radarr mappings in `anilist_sonarr_mapping` / `anilist_radarr_mapping`
+- Tracks `in_sonarr`/`in_radarr` flag, monitor status, confidence level
 
-**Workflow**:
-1. User selects an AniList entry (from search or series group browse)
-2. Resolve AniList ID → TVDB/TMDB ID via AniList `externalLinks` field
-3. Send add request to Sonarr (TV) or Radarr (movie) with AniList alternative titles
-4. Track request status in `download_requests` table
-5. Show status in dashboard
+**`ArrPostProcessor`** (`src/Download/ArrPostProcessor.py`):
+- Handles Sonarr/Radarr webhook events (on-download, on-upgrade)
+- Post-processing: file path translation, episode file updates
 
-**New environment variables**:
-- `SONARR_URL` — Sonarr server URL
-- `SONARR_API_KEY` — Sonarr API key
-- `RADARR_URL` — Radarr server URL
-- `RADARR_API_KEY` — Radarr API key
+**`DownloadSyncer`** (`src/Sync/DownloadSyncer.py`):
+- Periodic sync: checks AniList watchlist for CURRENT entries not yet in Sonarr/Radarr
+- Auto-adds entries based on configured `auto_statuses`
 
-**New DB table**: `download_requests` — Track sent requests with status, timestamps, and AniList/Sonarr/Radarr IDs.
+**Environment variables** (P4):
+- `SONARR_URL`, `SONARR_API_KEY`
+- `RADARR_URL`, `RADARR_API_KEY`
+- `PROWLARR_URL`, `PROWLARR_API_KEY`
+- `QBITTORRENT_URL`, `QBITTORRENT_USERNAME`, `QBITTORRENT_PASSWORD`
 
 ---
 
@@ -388,7 +385,7 @@ This shared architecture underpins Pillars 2 and 3. It solves the structural mis
 
 **AniList**: Every season, part, or cour is a **separate Media entry** with its own unique ID. There is no "parent series" container. Seasons are connected solely through **relation edges** (SEQUEL, PREQUEL, etc.). A show like Demon Slayer is 5+ separate entries chained together, mixing TV seasons and movies in the sequel chain.
 
-**Plex**: A show is a single entity containing Season folders with episodes numbered per season. "Demon Slayer" would typically be one show with Seasons 1-5.
+**Plex/Jellyfin**: A show is a single entity containing Season folders with episodes numbered per season. "Demon Slayer" would typically be one show with Seasons 1-5.
 
 This creates a many-to-many mapping problem that the series group architecture solves.
 
@@ -396,15 +393,11 @@ This creates a many-to-many mapping problem that the series group architecture s
 
 A **series group** is the core concept that bridges the two models. It represents a collection of AniList entries that together form one logical "show" from the user's perspective.
 
-**Definition**: A series group contains everything reachable by following only `SEQUEL` and `PREQUEL` relation edges where `type == ANIME`. This includes all formats: TV, MOVIE, OVA, ONA, and SPECIAL — if AniList considers it a sequel, it's part of the viewing order.
+**Definition**: A series group contains everything reachable by following only `SEQUEL` and `PREQUEL` relation edges where `type == ANIME`. This includes all formats: TV, MOVIE, OVA, ONA, and SPECIAL.
 
-**Excluded relations**: `SIDE_STORY`, `SPIN_OFF`, `ALTERNATIVE`, `CHARACTER`, `SUMMARY`, `COMPILATION`, `CONTAINS`, `SOURCE`, `ADAPTATION`, and `OTHER` edges are **not** followed. Entries reachable only through these relations are treated as separate series groups.
+**Excluded relations**: `SIDE_STORY`, `SPIN_OFF`, `ALTERNATIVE`, `CHARACTER`, `SUMMARY`, `COMPILATION`, `CONTAINS`, `SOURCE`, `ADAPTATION`, and `OTHER` edges are **not** followed.
 
-**Ordering**: Entries within a series group are sorted by `startDate` (chronological). This produces the intended viewing order, naturally interleaving TV seasons, movies, OVAs, and specials.
-
-**Display title**: The series group's display title is derived from the first entry's title (chronologically).
-
-**Season naming**: Each entry within the group uses its own AniList title as its season display name, rather than generic "Season 1", "Season 2" numbering.
+**Ordering**: Entries within a series group are sorted by `startDate` (chronological).
 
 #### Example: Demon Slayer
 
@@ -418,26 +411,20 @@ Series Group: "Demon Slayer: Kimetsu no Yaiba"
   └── Season 6: Kimetsu no Yaiba: Hashira Training       (TV, 8 eps, May 2024)   → AniList 166240
 ```
 
-Note: Both the Mugen Train movie and the Mugen Train TV arc appear as separate seasons since both exist in the SEQUEL chain. Users who have only one version on disk will simply not have files for the other.
-
-#### Duplicate Content Handling
-
-When AniList has both a movie and a TV adaptation of the same arc as separate sequels (e.g., Demon Slayer: Mugen Train), both are included in the series group and sorted chronologically. The system does not attempt to deduplicate — both appear as distinct seasons. Users map whichever version they have on disk.
-
 ### 8.3. Building Series Groups via Relation Traversal
 
-The SeriesGroupBuilder (`src/Scanner/SeriesGroupBuilder.py`) implements this process:
+The `SeriesGroupBuilder` (`src/Scanner/SeriesGroupBuilder.py`) implements BFS traversal:
 
-1. **Match one entry** — Fuzzy title match, GUID parsing, or manual override identifies a single AniList entry
-2. **Walk the relation graph** — BFS traversal of SEQUEL/PREQUEL edges using `relationType(version: 2)` for directional semantics
+1. **Match one entry** — Fuzzy title match or manual override identifies a single AniList entry
+2. **Walk the relation graph** — BFS traversal of SEQUEL/PREQUEL edges using `relationType(version: 2)`
 3. **Filter** — Keep only entries where `type == ANIME` (any format)
 4. **Sort** — Order by `startDate` (year, month, day) ascending
 5. **Assign season numbers** — Sequential from 1 based on chronological position
-6. **Cache** — Store the complete series group in `series_groups` and `series_group_entries` tables with TTL
+6. **Cache** — Store in `series_groups` and `series_group_entries` with 168-hour TTL
 
-### 8.4. Plex File Structure Adaptation
+### 8.4. Plex/Jellyfin File Structure Adaptation
 
-The scanner handles three common file organization patterns without requiring the user to restructure their library.
+The scanner handles three common file organization patterns:
 
 #### Structure A: Split Folders (One Folder Per AniList Entry)
 
@@ -448,10 +435,8 @@ The scanner handles three common file organization patterns without requiring th
   Demon Slayer Entertainment District/    ← Plex show (rating_key: 1003)
 ```
 
-- Each Plex show is an independent item matched to one AniList entry
-- 1:1 mapping — simplest case, works with current `media_mappings` schema
-- The scanner can optionally detect these belong to the same series group (for dashboard display) but no season-level mapping is needed
-- **This is the recommended structure** for new libraries
+- Each server item maps to one AniList entry (1:1 mapping)
+- **Recommended structure** for new libraries
 
 #### Structure B: Multi-Season Show (Traditional Plex/TVDB Style)
 
@@ -463,14 +448,10 @@ The scanner handles three common file organization patterns without requiring th
     Season 03/  S03E01-E11  (11 eps)
 ```
 
-- One Plex show with multiple seasons, each season corresponding to a different AniList entry
-- Match the show title → find one AniList entry → walk the SEQUEL/PREQUEL chain → build series group
-- Map Plex season numbers to series group entries positionally: Season 01 → group entry 1, Season 02 → group entry 2, etc.
-- Requires **season-level mapping** in the database
-- If the user has fewer Plex seasons than group entries: map what exists, leave the rest unmapped
-- If the user has more Plex seasons than group entries: extras go unmapped, flagged in dashboard for review
+- One server item with multiple seasons
+- Match show title → walk SEQUEL/PREQUEL chain → map seasons positionally
 
-#### Structure C: Absolute Numbering (ASS/HAMA Style)
+#### Structure C: Absolute Numbering
 
 ```
 /Anime/
@@ -478,16 +459,9 @@ The scanner handles three common file organization patterns without requiring th
     Demon Slayer - 001.mkv through Demon Slayer - 057.mkv
 ```
 
-- Plex sees one show, one season (or no season folders), with absolute episode numbers
-- Walk the series group chain, use cumulative episode counts to determine boundaries:
-  - Episodes 1-26 → AniList entry 1 (26 eps)
-  - Episode 27 → AniList entry 2 (1 ep, movie)
-  - Episodes 28-38 → AniList entry 3 (11 eps)
-- Reuses the logic from `TitleMatcher.determine_correct_entry_and_episode()`
+- Walk series group chain, use cumulative episode counts to determine boundaries
 
 #### Detection Strategy
-
-The scanner infers which structure is in use rather than requiring user configuration:
 
 ```
 1. Match show to AniList → build series group
@@ -496,69 +470,13 @@ The scanner infers which structure is in use rather than requiring user configur
      → Simple 1:1 mapping (show → entry)
 
 3. If series group has multiple entries:
-     a. If Plex show has multiple seasons:
+     a. If server show has multiple seasons:
           → Structure B (map seasons to group entries by position)
-     b. If Plex show has 1 season with episode count > first entry's episodes:
-          → Structure C (absolute numbering, split by cumulative episode counts)
-     c. If Plex show has 1 season with episode count ≈ first entry's episodes:
+     b. If server show has 1 season with episode count > first entry's episodes:
+          → Structure C (absolute numbering)
+     c. If server show has 1 season with episode count ≈ first entry's episodes:
           → Structure A (this show is just one entry in the group)
 ```
-
-When the positional mapping in Structure B produces mismatched episode counts, this is flagged for manual review.
-
-### 8.5. Database Schema for Media Mapping
-
-#### `series_groups`
-```sql
-CREATE TABLE series_groups (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    root_anilist_id INTEGER NOT NULL,
-    display_title TEXT NOT NULL,
-    entry_count INTEGER NOT NULL DEFAULT 1,
-    last_traversed TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(root_anilist_id)
-);
-```
-
-#### `series_group_entries`
-```sql
-CREATE TABLE series_group_entries (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    group_id INTEGER NOT NULL REFERENCES series_groups(id) ON DELETE CASCADE,
-    anilist_id INTEGER NOT NULL,
-    season_order INTEGER NOT NULL,
-    display_title TEXT NOT NULL,
-    format TEXT NOT NULL DEFAULT 'TV',
-    episodes INTEGER,
-    start_date TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(group_id, anilist_id),
-    UNIQUE(group_id, season_order)
-);
-CREATE INDEX idx_sge_anilist_id ON series_group_entries(anilist_id);
-```
-
-#### `media_mappings` (extended)
-```sql
--- Columns added via migration v5:
-ALTER TABLE media_mappings ADD COLUMN series_group_id INTEGER REFERENCES series_groups(id);
-ALTER TABLE media_mappings ADD COLUMN season_number INTEGER;
-```
-
-For Structure A: `series_group_id` set for dashboard grouping, `season_number` NULL.
-For Structure B: Each Plex season gets its own row with `source_id` = `"{rating_key}:S{season_number}"`.
-For Structure C: Single row with `series_group_id` set; episode resolution at sync time.
-
-### 8.6. GUID Parsing (Future Enhancement)
-
-Plex items carry GUID metadata that can provide high-confidence mapping without fuzzy title matching:
-
-- **HAMA agent**: `com.plexapp.agents.hama://anidb-4776?lang=en` → extract AniDB ID
-- **Plex TV Series agent**: `plex://show/XXXXX` with additional Guid entries like `tvdb://76885` or `tmdb://123456`
-
-Parsing these GUIDs and bridging to AniList IDs (via AniDB→AniList or TVDB→AniList mapping databases) would provide a high-confidence first-pass match before falling back to fuzzy title matching.
 
 ---
 
@@ -566,56 +484,89 @@ Parsing these GUIDs and bridging to AniList IDs (via AniDB→AniList or TVDB→A
 
 ```
 Anilist-Link/
-├── src/                              # Main application source code
-│   ├── Clients/                      # External API client modules
-│   │   ├── AnilistClient.py          # AniList GraphQL + OAuth2 client [implemented]
-│   │   ├── PlexClient.py             # Plex API client [implemented]
-│   │   ├── CrunchyrollClient.py      # Crunchyroll reverse-engineered client [implemented]
-│   │   ├── JellyfinClient.py         # Jellyfin API client [stub]
-│   │   ├── SonarrClient.py           # Sonarr API v3 client [planned — P4]
-│   │   └── RadarrClient.py           # Radarr API v3 client [planned — P4]
-│   ├── Matching/                     # Title matching engine [implemented]
-│   │   ├── TitleMatcher.py           # Multi-algorithm fuzzy matching
-│   │   └── Normalizer.py            # Anime-specific title normalization
-│   ├── Scanner/                      # Scanning and file organization
-│   │   ├── MetadataScanner.py        # Scan → match → cache → apply pipeline [implemented]
-│   │   ├── SeriesGroupBuilder.py     # BFS relation traversal [implemented]
-│   │   └── LibraryRestructurer.py    # File reorganization tool [implemented]
-│   ├── Sync/                         # Watch status synchronization
-│   │   └── WatchSyncer.py            # Crunchyroll→AniList sync [implemented]
-│   │   # PlexWatchSyncer.py          # [planned — P1]
-│   │   # JellyfinWatchSyncer.py      # [planned — P1]
-│   ├── Downloads/                    # Download management [planned — P4]
-│   │   # DownloadManager.py          # Sonarr/Radarr orchestration
-│   ├── Web/                          # FastAPI web dashboard
-│   │   ├── App.py                    # Application factory [implemented]
+├── src/                                          # Main application source code
+│   ├── Clients/                                  # External API client modules
+│   │   ├── AnilistClient.py                      # AniList GraphQL + OAuth2 + rate limiter [✅]
+│   │   ├── PlexClient.py                         # Plex API client [✅]
+│   │   ├── JellyfinClient.py                     # Jellyfin API client [✅]
+│   │   ├── CrunchyrollClient.py                  # Crunchyroll reverse-engineered client [✅]
+│   │   ├── SonarrClient.py                       # Sonarr API v3 client [✅]
+│   │   ├── RadarrClient.py                       # Radarr API v3 client [✅]
+│   │   ├── ProwlarrClient.py                     # Prowlarr API v1 client [✅]
+│   │   └── QBittorrentClient.py                  # qBittorrent Web API v2 client [✅]
+│   ├── Matching/                                 # Title matching engine
+│   │   ├── TitleMatcher.py                       # Multi-algorithm fuzzy matching [✅]
+│   │   └── Normalizer.py                         # Anime-specific title normalization [✅]
+│   ├── Scanner/                                  # Scanning, metadata, and file organization
+│   │   ├── MetadataScanner.py                    # Plex scan → match → cache → apply [✅]
+│   │   ├── JellyfinMetadataScanner.py            # Jellyfin scan → match → cache → apply [✅]
+│   │   ├── SeriesGroupBuilder.py                 # BFS relation traversal [✅]
+│   │   ├── LibraryRestructurer.py                # File reorganization (L1/L2/L3) [✅]
+│   │   ├── LibraryScanner.py                     # Generic library scanner [✅]
+│   │   ├── LocalDirectoryScanner.py              # Local filesystem scanner [✅]
+│   │   ├── PlexShowProvider.py                   # Fetches Plex shows → ShowInput [✅]
+│   │   └── JellyfinShowProvider.py               # Fetches Jellyfin shows → ShowInput [✅]
+│   ├── Sync/                                     # Watch status and download synchronization
+│   │   ├── WatchSyncer.py                        # Crunchyroll→AniList watch sync [✅]
+│   │   ├── CrunchyrollPreviewRunner.py           # CR sync preview/approve/undo pipeline [✅]
+│   │   └── DownloadSyncer.py                     # AniList watchlist→Sonarr/Radarr sync [✅]
+│   ├── Download/                                 # Download management (P4)
+│   │   ├── DownloadManager.py                    # Orchestrates AniList→Sonarr/Radarr [✅]
+│   │   ├── MappingResolver.py                    # AniList↔Arr mapping persistence [✅]
+│   │   └── ArrPostProcessor.py                   # Sonarr/Radarr webhook post-processing [✅]
+│   ├── Web/                                      # FastAPI web dashboard
+│   │   ├── App.py                                # Application factory [✅]
 │   │   ├── Routes/
-│   │   │   ├── Dashboard.py          # Dashboard and status [implemented]
-│   │   │   ├── Settings.py           # GUI configuration [implemented]
-│   │   │   ├── Auth.py               # AniList OAuth2 [implemented]
-│   │   │   ├── PlexLibrary.py        # Plex library browser [implemented]
-│   │   │   ├── PlexScan.py           # Plex scan management [implemented]
-│   │   │   ├── Restructure.py        # File restructure wizard [implemented]
-│   │   │   └── Mappings.py           # Mapping review/overrides [stub]
-│   │   ├── Templates/                # Jinja2 HTML templates
-│   │   └── Static/                   # CSS, JS, static assets
-│   ├── Database/                     # Database layer [implemented]
-│   │   ├── Connection.py             # Async SQLite connection manager
-│   │   ├── Models.py                 # Table definitions and dataclasses
-│   │   └── Migrations.py            # Versioned schema migrations (v1–v6)
-│   ├── Scheduler/                    # Background job scheduling [implemented]
-│   │   └── Jobs.py                   # APScheduler job definitions
-│   ├── Utils/                        # Shared utilities [implemented]
-│   │   ├── Config.py                 # Configuration management
-│   │   └── Logging.py               # Logging configuration
-│   └── Main.py                       # Application entry point [implemented]
+│   │   │   ├── Dashboard.py                      # Dashboard and status [✅]
+│   │   │   ├── Settings.py                       # GUI configuration [✅]
+│   │   │   ├── Auth.py                           # AniList OAuth2 [✅]
+│   │   │   ├── Onboarding.py                     # 4-step setup wizard [✅]
+│   │   │   ├── ConnectionTest.py                 # Live connection test endpoints [✅]
+│   │   │   ├── PlexLibrary.py                    # Plex library browser [✅]
+│   │   │   ├── PlexScan.py                       # Plex scan management [✅]
+│   │   │   ├── JellyfinLibrary.py                # Jellyfin library browser [✅]
+│   │   │   ├── JellyfinScan.py                   # Jellyfin scan management [✅]
+│   │   │   ├── Library.py                        # Unified library manager [✅]
+│   │   │   ├── UnifiedLibrary.py                 # Unified library view (Plex + Jellyfin) [✅]
+│   │   │   ├── Restructure.py                    # File restructure wizard [✅]
+│   │   │   ├── Mappings.py                       # Manual override management [✅]
+│   │   │   ├── CrunchyrollSync.py                # Crunchyroll sync + history/undo [✅]
+│   │   │   ├── Downloads.py                      # Download management UI [✅]
+│   │   │   ├── ManualGrab.py                     # Manual release grab UI [✅]
+│   │   │   ├── WatchlistLibrary.py               # AniList watchlist browser [✅]
+│   │   │   ├── SonarrSync.py                     # Sonarr sync management [✅]
+│   │   │   ├── ArrWebhook.py                     # Sonarr/Radarr webhook receiver [✅]
+│   │   │   └── Tools.py                          # Admin tools [✅]
+│   │   ├── Templates/                            # Jinja2 HTML templates (20+ files)
+│   │   └── Static/                               # CSS, images, static assets
+│   ├── Database/                                 # Database layer
+│   │   ├── Connection.py                         # Async SQLite connection manager [✅]
+│   │   ├── Models.py                             # Table definitions and dataclasses [✅]
+│   │   └── Migrations.py                         # Versioned schema migrations (v1–v17) [✅]
+│   ├── Scheduler/                                # Background job scheduling
+│   │   └── Jobs.py                               # APScheduler job definitions [✅]
+│   ├── Utils/                                    # Shared utilities
+│   │   ├── Config.py                             # Configuration management [✅]
+│   │   ├── Logging.py                            # Logging configuration [✅]
+│   │   ├── NamingTemplate.py                     # File/folder naming templates [✅]
+│   │   └── NamingTranslator.py                   # ID resolution + title helpers [✅]
+│   └── Main.py                                   # Application entry point [✅]
 ├── tests/
-├── scripts/
-├── docs/
-├── _resources/                       # Development references (NOT in git)
-├── Dockerfile
-├── docker-compose.yml
-└── pyproject.toml
+│   ├── conftest.py                               # Shared fixtures (DB, config, mocks)
+│   └── Unit/
+│       ├── test_arr_post_processor.py            # ArrPostProcessor tests (25+ cases)
+│       ├── test_config.py                        # Config loading tests (30 cases)
+│       ├── test_database.py                      # DatabaseManager CRUD tests (31 cases)
+│       ├── test_naming_template.py               # Quality parsing tests (21 cases)
+│       ├── test_normalizer.py                    # Title normalizer tests (68 cases)
+│       ├── test_plex_client.py                   # PlexClient helper tests (33 cases)
+│       ├── test_prowlarr_client.py               # ProwlarrClient tests (29 cases)
+│       ├── test_rate_limiter.py                  # RateLimiter tests (18 cases)
+│       ├── test_series_group_builder.py          # SeriesGroupBuilder tests (22 cases)
+│       └── test_title_matcher.py                 # TitleMatcher tests (55 cases)
+├── scripts/                                      # Utility scripts (not production code)
+├── docs/                                         # All documentation
+└── pyproject.toml                                # Python project configuration
 ```
 
 ---
@@ -624,14 +575,14 @@ Anilist-Link/
 
 ### 10.1. SQLite Database (Primary)
 
-**Location**: `/config/anilist_link.db` (Docker) or `./data/anilist_link.db` (local dev)
+**Location**: `/config/anilist_link.db` (Docker) or `./anilist_link.db` (local dev)
 
-**Current tables** (schema version 6):
+**Current schema version**: **17**
 
-| Table | Purpose | Migration |
-|-------|---------|-----------|
+| Table | Purpose | Added |
+|-------|---------|-------|
 | `schema_version` | Migration tracking | v1 |
-| `media_mappings` | Plex/Jellyfin → AniList mappings with confidence scores | v1, extended v5 |
+| `media_mappings` | Plex/Jellyfin → AniList mappings with confidence scores | v1 |
 | `users` | Linked AniList accounts with OAuth tokens | v1 |
 | `sync_state` | Per-user, per-item sync progress tracking | v1 |
 | `anilist_cache` | AniList metadata cache (7-day TTL) | v1 |
@@ -639,21 +590,26 @@ Anilist-Link/
 | `cr_session_cache` | Crunchyroll auth session persistence (30-day TTL) | v2 |
 | `app_settings` | GUI-managed configuration (encrypted secrets) | v3 |
 | `plex_media` | Persistent Plex library item snapshot | v4 |
-| `series_groups` | Series group metadata | v5 |
-| `series_group_entries` | Individual entries within a series group | v5 |
+| `series_groups` | Series group metadata (root entry, display title) | v5 |
+| `series_group_entries` | Individual entries within a series group, ordered | v5 |
 | `restructure_log` | File move operation audit trail | v6 |
-
-**Planned tables**:
-
-| Table | Purpose | Pillar |
-|-------|---------|--------|
-| `plex_users` | Per-user Plex tokens for watch tracking | P1 |
-| `jellyfin_users` | Per-user Jellyfin credentials | P1 |
-| `download_requests` | Sonarr/Radarr request tracking | P4 |
+| `jellyfin_media` | Persistent Jellyfin library item snapshot | v7 |
+| `libraries` | Local library definitions (name, paths) | v8 |
+| `library_items` | Items in a local library with match data | v8 |
+| `plex_users` | Per-user Plex tokens for watch tracking | v10 |
+| `jellyfin_users` | Per-user Jellyfin credentials | v10 |
+| `cr_sync_preview` | Pending Crunchyroll sync changes awaiting approval | v10 |
+| `cr_sync_log` | Applied CR sync changes with undo support | v10 |
+| `download_requests` | Sonarr/Radarr add request tracking | v11 |
+| `anilist_sonarr_mapping` | AniList↔Sonarr series mappings | v13 |
+| `anilist_radarr_mapping` | AniList↔Radarr movie mappings | v13 |
+| `sonarr_series_cache` | Cached Sonarr series data (by TVDB ID) | v13 |
+| `radarr_movie_cache` | Cached Radarr movie data (by TMDB ID) | v13 |
+| `user_watchlist` | Cached AniList watchlist per linked user | v14+ |
 
 ### 10.2. In-Memory Cache
 
-Short-lived caching of frequently accessed AniList API responses and rate limit state during active scan/sync operations.
+Short-lived caching of frequently accessed data during active scan/sync operations. Rate limit state is maintained in the `RateLimiter` instance on the `AniListClient`.
 
 ---
 
@@ -661,13 +617,15 @@ Short-lived caching of frequently accessed AniList API responses and rate limit 
 
 | Service | Client | Purpose | Auth Method | Status |
 |---------|--------|---------|-------------|--------|
-| AniList GraphQL API | `AnilistClient` | Metadata source, watch status target | OAuth2 | Implemented |
-| Plex Media Server | `PlexClient` | Library enumeration, metadata writing, watch status | X-Plex-Token | Implemented |
-| Crunchyroll | `CrunchyrollClient` | Watch history retrieval | Session-based (Selenium) | Implemented |
-| Plex.tv API | (via `PlexClient`) | Per-user token retrieval for multi-user support | X-Plex-Token | Planned (P1) |
-| Jellyfin API | `JellyfinClient` | Library access, metadata writing, watch status | API key | Stub only |
-| Sonarr API v3 | `SonarrClient` | Add series requests with alt titles | API key | Planned (P4) |
-| Radarr API v3 | `RadarrClient` | Add movie requests with alt titles | API key | Planned (P4) |
+| AniList GraphQL API | `AnilistClient` | Metadata source, watch status target | OAuth2 | ✅ Implemented |
+| Plex Media Server | `PlexClient` | Library enumeration, metadata writing, watch status | X-Plex-Token | ✅ Implemented |
+| Crunchyroll | `CrunchyrollClient` | Watch history retrieval | Session-based (Selenium) | ✅ Implemented |
+| Jellyfin | `JellyfinClient` | Library access, metadata writing, watch status | API key | ✅ Implemented |
+| Sonarr API v3 | `SonarrClient` | Add/search TV series with alt titles | API key | ✅ Implemented |
+| Radarr API v3 | `RadarrClient` | Add/search movies with alt titles | API key | ✅ Implemented |
+| Prowlarr API v1 | `ProwlarrClient` | Release search across indexers | API key | ✅ Implemented |
+| qBittorrent Web API v2 | `QBittorrentClient` | Torrent add/monitor | Username/Password | ✅ Implemented |
+| Plex.tv API | (via `PlexClient`) | Per-user token retrieval | X-Plex-Token | Planned (P1) |
 
 ---
 
@@ -690,48 +648,38 @@ P1 (Watch Status Sync)
   ▼
 P4 (Download Management)
   │  Uses AniList data to resolve TVDB/TMDB IDs
-  │  → Sends add requests to Sonarr/Radarr
+  │  → Sends add requests to Sonarr/Radarr with alt titles
 ```
 
-Each pillar can function independently, but the recommended order maximizes data reuse. P2's file organization makes P3's matching more reliable, P3's cached series groups are reused by P1 for episode resolution, and P4 leverages AniList metadata already cached by P3.
+Each pillar can function independently, but the recommended order maximizes data reuse.
 
 ---
 
 ## 13. Implementation Roadmap
 
-### Current: P2 + P3 Foundation
+### Completed
 
-What's built:
-- Full scan/match/apply pipeline for Plex metadata (P3)
-- Library restructure wizard with analyze/preview/execute (P2)
-- Series group builder with BFS relation traversal
-- Crunchyroll→AniList watch sync (P1 partial)
-- Web dashboard with settings, library browser, OAuth2
+- **P2 (File Organization)**: All 3 levels (folder rename, file rename, full restructure). Multi-source, conflict detection, Jellyfin support, restructure log.
+- **P3 (Metadata)**: Full scan/match/apply for both Plex and Jellyfin. Unified library browser. Manual overrides.
+- **P1 (Crunchyroll)**: WatchSyncer, CrunchyrollPreviewRunner with preview/approve/undo.
+- **P4 (Clients)**: SonarrClient, RadarrClient, ProwlarrClient, QBittorrentClient fully implemented.
+- **P4 (Manager)**: DownloadManager, MappingResolver, ArrPostProcessor, DownloadSyncer implemented.
+- **P4 (UI)**: Downloads page, manual grab, watchlist browser, Sonarr sync, webhook receiver.
+- **Infrastructure**: Onboarding wizard, connection test endpoints, floating progress widget.
 
-### Next: P2 Enhancements
+### In Progress / Next
 
-- Rename-only mode (folder rename without file moves)
-- Operation level selection in restructure wizard
+- **P1 (Plex watch sync)**: PlexWatchSyncer — polling + webhook handler. `plex_users` table exists.
+- **P1 (Jellyfin watch sync)**: JellyfinWatchSyncer. `jellyfin_users` table exists.
+- **P4 (full automation)**: DownloadSyncer auto-search polish; status feedback loop.
 
-### Then: P3 Completion
+### Future / Deferred
 
+- AniList token auto-refresh
+- AniList backfill syncer (AniList → Plex/Jellyfin watched flags)
+- GUID-based high-confidence Plex matching
 - Staff/credits writing to Plex
-- Jellyfin client implementation
-- Jellyfin scan and library browser routes
-
-### Then: P1 Expansion
-
-- Plex watch sync (polling + webhook)
-- Jellyfin watch sync
-- AniList backfill syncer
-- `plex_users` and `jellyfin_users` tables
-
-### Future: P4
-
-- Sonarr/Radarr client implementations
-- Download manager module
-- Download management UI
-- `download_requests` table
+- Plex multi-user support (Plex.tv per-user token flow)
 
 ---
 
@@ -743,42 +691,83 @@ What's built:
 - **Process Manager**: Supervisord
 - **Port**: 9876
 - **Volumes**: `/config` (database, logs, config), `/data` (reserved)
-- **CI/CD**: GitHub Actions (lint, test, Docker build)
+- **CI/CD**: GitHub Actions (lint, type check, test, Docker build)
 
-See `docker-compose.yml` and CLAUDE.md for full Docker configuration details.
+See `docker-compose.yml` and `docs/CLAUDE.md` for full Docker configuration.
 
 ---
 
 ## 15. Security
 
-- **AniList OAuth2**: Per-user tokens, each user only modifies their own AniList
+- **AniList OAuth2**: Per-user tokens; each user only modifies their own AniList
 - **Plex/Jellyfin**: Token/API key authentication
+- **Arr services**: API key authentication
 - **Dashboard**: Local-only, no built-in auth (relies on network access control)
-- **Data**: OAuth tokens stored locally in SQLite, no external data sharing beyond configured platforms
-- **Code**: Parameterized queries, input validation, no secrets in committed code
+- **Data**: OAuth tokens stored locally in SQLite; no external data sharing beyond configured platforms
+- **Code**: Parameterized queries throughout, input validation, no secrets in committed code
 
 ---
 
-## 16. Glossary
+## 16. Testing
+
+### Test Suite
+
+315 unit tests across 10 test files. All pass. Run in 0.98s (in-memory SQLite, no external calls).
+
+| File | Tests | Focus |
+|------|-------|-------|
+| `test_normalizer.py` | 68 | All Normalizer pure functions (100% coverage) |
+| `test_title_matcher.py` | 55 | Matching algorithms, season detection, format filtering |
+| `test_config.py` | 30 | Config dataclass construction, env var loading |
+| `test_database.py` | 31 | DatabaseManager CRUD via in-memory SQLite |
+| `test_plex_client.py` | 33 | PlexClient helpers, metadata building, HTML stripping |
+| `test_prowlarr_client.py` | 29 | Quality parsing, search dedup, release result parsing |
+| `test_series_group_builder.py` | 22 | BFS traversal, caching, sorting, format filtering |
+| `test_naming_template.py` | 21 | Quality parsing from filenames |
+| `test_rate_limiter.py` | 18 | Token bucket acquire/refill, high-priority bypass |
+| `test_arr_post_processor.py` | 8 | Path translation, folder naming, dry-run |
+
+### Commands
+
+```bash
+pytest                          # Run all tests
+pytest tests/Unit/              # Unit tests only
+pytest --cov=src                # With coverage report
+pytest -x                       # Stop on first failure
+```
+
+### Quality Tools
+
+```bash
+ruff check src/                 # Lint (passes clean)
+black --check src/              # Format check (passes clean)
+mypy src/                       # Type check (0 errors)
+```
+
+---
+
+## 17. Glossary
 
 - **AniList**: Anime/manga tracking platform with a public GraphQL API
 - **Series Group**: Collection of AniList entries connected by SEQUEL/PREQUEL relations forming one logical show (Section 8.2)
-- **Structure A/B/C**: Three Plex file organization patterns the scanner adapts to (Section 8.4)
+- **Structure A/B/C**: Three Plex/Jellyfin file organization patterns the scanner adapts to (Section 8.4)
 - **Pillar**: One of the four major functional areas of Anilist-Link (Section 1)
 - **HAMA**: HTTP AniDB Metadata Agent — community Plex agent using AniDB for anime metadata
 - **ASS**: Absolute Series Scanner — community Plex scanner supporting absolute episode numbering
 - **AniDB**: Anime database; entries can be cross-referenced to AniList IDs
 - **Sonarr**: PVR for Usenet and BitTorrent TV show downloads
 - **Radarr**: PVR for Usenet and BitTorrent movie downloads (Sonarr fork)
+- **Prowlarr**: Indexer manager/proxy for Sonarr and Radarr
 - **Binhex**: Docker container standardization conventions for volume paths and env vars
 - **PUID/PGID**: Process User ID / Process Group ID for Docker file permission management
 - **TTL**: Time To Live — duration before cached data expires
 - **BFS**: Breadth-First Search — graph traversal algorithm used for relation walking
 - **SSE**: Server-Sent Events — used for real-time progress streaming in scan/restructure operations
+- **L1/L2/L3**: Library Restructurer operation levels (folder rename / +file rename / full restructure)
 
 ---
 
-## 17. Project Identification
+## 18. Project Identification
 
 **Project Name**: Anilist-Link
 **Repository**: https://github.com/Mprice12337/Anilist-Link

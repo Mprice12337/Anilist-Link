@@ -82,7 +82,7 @@ def parse_quality(filename: str) -> QualityInfo:
 
 
 # ---------------------------------------------------------------------------
-# Naming template
+# Credentials.md template
 # ---------------------------------------------------------------------------
 
 # Regex to find {token} or {token.sub} placeholders
@@ -136,38 +136,57 @@ class NamingTemplate:
         return text.strip()
 
     @staticmethod
-    def sanitize(text: str) -> str:
-        """Remove filesystem-unsafe characters."""
-        return _UNSAFE_CHARS.sub("", text).strip()
+    def sanitize(text: str, replacement: str = "") -> str:
+        """Remove or replace filesystem-unsafe characters."""
+        return _UNSAFE_CHARS.sub(replacement, text).strip()
 
 
 # ---------------------------------------------------------------------------
 # Presets and defaults
 # ---------------------------------------------------------------------------
 
+DEFAULT_ILLEGAL_CHAR_REPLACEMENT = (
+    ""  # "" = remove, "-" = hyphen, " " = space, "_" = underscore
+)
+
 DEFAULT_FILE_TEMPLATE = "{title} - S{season}E{episode}"
 DEFAULT_FOLDER_TEMPLATE = "{title}"
 DEFAULT_SEASON_FOLDER_TEMPLATE = "Season {season}"
+DEFAULT_MOVIE_FILE_TEMPLATE = "{title} [{year}]"
+
+FORMAT_SHORT: dict[str, str] = {
+    "TV": "TV",
+    "MOVIE": "Movie",
+    "OVA": "OVA",
+    "ONA": "ONA",
+    "SPECIAL": "Special",
+    "TV_SHORT": "Short",
+    "MUSIC": "Music",
+}
 
 NAMING_PRESETS: dict[str, dict[str, str]] = {
     "standard": {
         "file": "{title} - S{season}E{episode}",
         "folder": "{title}",
         "season_folder": "Season {season}",
+        "movie_file": "{title} [{year}]",
     },
     "with_year": {
         "file": "{title} [{year}] - S{season}E{episode}",
         "folder": "{title} [{year}]",
         "season_folder": "Season {season}",
+        "movie_file": "{title} [{year}]",
     },
     "with_quality": {
         "file": "{title} [{year}] - S{season}E{episode} [{quality}]",
         "folder": "{title} [{year}]",
         "season_folder": "Season {season}",
+        "movie_file": "{title} [{year}] [{quality}]",
     },
     "dots": {
         "file": "{title}.S{season}E{episode}.{quality.resolution}",
         "folder": "{title}.({year})",
         "season_folder": "Season.{season}",
+        "movie_file": "{title}.({year})",
     },
 }

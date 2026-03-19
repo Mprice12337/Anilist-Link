@@ -112,6 +112,18 @@ class ProwlarrClient:
         raw: list[dict[str, Any]] = resp.json()
         return [self._parse_result(r) for r in raw]
 
+    async def grab_release(self, guid: str, indexer_id: int) -> dict[str, Any]:
+        """Tell Prowlarr to grab a release.
+
+        Routes it to the configured download client.
+        """
+        resp = await self._http.post(
+            self._endpoint("release"),
+            json={"guid": guid, "indexerId": indexer_id},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     async def search_anime(
         self,
         query: str,

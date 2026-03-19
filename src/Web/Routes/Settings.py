@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -27,6 +28,13 @@ router = APIRouter(tags=["settings"])
 # Each entry: (db_key, label, input_type)
 FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
     (
+        "Library",
+        [
+            ("library.name", "Library Name", "text"),
+            ("library.paths", "Anime Library Paths", "textarea"),
+        ],
+    ),
+    (
         "Crunchyroll",
         [
             ("crunchyroll.email", "Email", "email"),
@@ -34,6 +42,8 @@ FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
             ("crunchyroll.flaresolverr_url", "FlareSolverr URL", "url"),
             ("crunchyroll.headless", "Headless mode", "checkbox"),
             ("crunchyroll.max_pages", "Max pages", "number"),
+            ("crunchyroll.auto_sync_enabled", "Auto sync enabled", "checkbox"),
+            ("crunchyroll.auto_approve", "Auto-approve changes", "checkbox"),
         ],
     ),
     (
@@ -59,9 +69,46 @@ FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
         ],
     ),
     (
+        "Sonarr",
+        [
+            ("sonarr.url", "Server URL", "url"),
+            ("sonarr.api_key", "API Key", "password"),
+            ("sonarr.anime_root_folder", "Anime root folder path", "text"),
+            ("sonarr.path_prefix", "Sonarr path prefix (e.g. /media/tv)", "text"),
+            (
+                "sonarr.local_path_prefix",
+                "Local path prefix (e.g. /mnt/media/tv)",
+                "text",
+            ),
+        ],
+    ),
+    (
+        "Radarr",
+        [
+            ("radarr.url", "Server URL", "url"),
+            ("radarr.api_key", "API Key", "password"),
+            ("radarr.anime_root_folder", "Anime root folder path", "text"),
+            ("radarr.path_prefix", "Radarr path prefix (e.g. /media/movies)", "text"),
+            (
+                "radarr.local_path_prefix",
+                "Local path prefix (e.g. /mnt/media/movies)",
+                "text",
+            ),
+        ],
+    ),
+    (
         "Options",
         [
-            ("scheduler.sync_interval_minutes", "Sync interval (minutes)", "number"),
+            (
+                "scheduler.cr_sync_time",
+                "Crunchyroll daily sync time (HH:MM, 24h)",
+                "text",
+            ),
+            (
+                "scheduler.sync_interval_minutes",
+                "Crunchyroll sync interval (minutes, used if no time set)",
+                "number",
+            ),
             ("scheduler.scan_interval_hours", "Scan interval (hours)", "number"),
             ("app.debug", "Debug logging", "checkbox"),
             ("app.title_display", "Title display", "select"),
@@ -78,45 +125,24 @@ FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
         "Naming Templates",
         [
             ("naming.file_template", "Episode file naming", "text"),
+            ("naming.movie_file_template", "Movie file naming", "text"),
             ("naming.folder_template", "Show folder naming", "text"),
             ("naming.season_folder_template", "Season folder naming", "text"),
-        ],
-    ),
-    (
-        "Sonarr",
-        [
-            ("sonarr.url", "Server URL", "url"),
-            ("sonarr.api_key", "API Key", "password"),
-        ],
-    ),
-    (
-        "Radarr",
-        [
-            ("radarr.url", "Server URL", "url"),
-            ("radarr.api_key", "API Key", "password"),
-        ],
-    ),
-    (
-        "Prowlarr",
-        [
-            ("prowlarr.url", "Server URL", "url"),
-            ("prowlarr.api_key", "API Key", "password"),
-        ],
-    ),
-    (
-        "qBittorrent",
-        [
-            ("qbittorrent.url", "Web UI URL", "url"),
-            ("qbittorrent.username", "Username", "text"),
-            ("qbittorrent.password", "Password", "password"),
+            ("naming.illegal_char_replacement", "Illegal character handling", "select"),
         ],
     ),
     (
         "Downloads",
         [
             (
+                "downloads.arr_enabled",
+                "Enable Sonarr/Radarr integration (add, grab, post-process)",
+                "checkbox",
+            ),
+            (
                 "downloads.auto_statuses",
-                "Auto-sync list statuses (comma-separated: CURRENT,PLANNING)",
+                "Auto-add list statuses (comma-separated: "
+                "CURRENT,PLANNING — leave blank to disable)",
                 "text",
             ),
             (
@@ -162,6 +188,17 @@ async def settings_page(request: Request, saved: int = 0) -> HTMLResponse:
         else:
             display[key] = code_default
 
+    # Populate library fields from the libraries table (not app_settings)
+    libraries = await db.get_all_libraries()
+    if libraries:
+        lib = libraries[0]
+        display["library.name"] = lib["name"]
+        path_list = json.loads(lib["paths"]) if lib["paths"] else []
+        display["library.paths"] = "\n".join(path_list)
+    else:
+        display["library.name"] = ""
+        display["library.paths"] = ""
+
     # Build the AniList callback URL from the current request so the user
     # knows exactly what to register on AniList's developer page.
     anilist_callback_url = str(request.url_for("anilist_callback"))
@@ -171,17 +208,18 @@ async def settings_page(request: Request, saved: int = 0) -> HTMLResponse:
     selected_library_keys: list[str] = []
     config = request.app.state.config
     if config.plex.url and config.plex.token:
+        plex_client = PlexClient(url=config.plex.url, token=config.plex.token)
         try:
-            plex_client = PlexClient(url=config.plex.url, token=config.plex.token)
-            libs = await plex_client.get_libraries()
+            libs = await asyncio.wait_for(plex_client.get_libraries(), timeout=5.0)
             plex_libraries = [
                 {"key": lib.key, "title": lib.title}
                 for lib in libs
                 if lib.type in ("show", "movie")
             ]
-            await plex_client.close()
         except Exception:
             logger.warning("Could not fetch Plex libraries for settings page")
+        finally:
+            await plex_client.close()
         selected_library_keys = list(config.plex.anime_library_keys)
 
     return templates.TemplateResponse(
@@ -200,6 +238,7 @@ async def settings_page(request: Request, saved: int = 0) -> HTMLResponse:
             "plex_libraries": plex_libraries,
             "selected_library_keys": selected_library_keys,
             "naming_presets": NAMING_PRESETS,
+            "setup": request.query_params.get("setup", ""),
         },
     )
 
@@ -211,6 +250,19 @@ async def settings_save(request: Request) -> RedirectResponse:
     form = await request.form()
 
     old_config = request.app.state.config
+
+    # Handle library fields (stored in libraries table, not app_settings)
+    lib_name = str(form.get("library.name", "")).strip()
+    lib_paths_raw = str(form.get("library.paths", "")).strip()
+    lib_path_list = [p.strip() for p in lib_paths_raw.splitlines() if p.strip()]
+    if lib_name and lib_path_list:
+        libraries = await db.get_all_libraries()
+        if libraries:
+            await db.update_library(
+                libraries[0]["id"], lib_name, json.dumps(lib_path_list)
+            )
+        else:
+            await db.create_library(lib_name, json.dumps(lib_path_list))
 
     # Process each known setting key
     for key in SETTINGS_MAP:
@@ -225,7 +277,8 @@ async def settings_save(request: Request) -> RedirectResponse:
             # Checkbox: present in form = true, absent = false
             value = "true" if form.get(key) else "false"
         else:
-            value = (form.get(key) or "").strip()
+            raw = form.get(key) or ""
+            value = raw.strip() if isinstance(raw, str) else ""
             # For secret fields, empty submission means "don't change"
             if is_secret and not value:
                 continue

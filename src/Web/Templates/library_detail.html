@@ -1,0 +1,567 @@
+{% extends "base.html" %}
+{% block title %}{{ library.name }} — Anilist-Link{% endblock %}
+{% block container_class %}container-wide{% endblock %}
+
+{# ── Title rendering macro ── #}
+{% macro render_title(item, title_display) %}
+{% set romaji = item.title_romaji or "" %}
+{% set english = item.title_english or "" %}
+{% set folder = item.folder_name or "" %}
+{% if title_display == "english" %}
+    <span class="title-romaji">{{ english or romaji or item.anilist_title or folder }}</span>
+{% elif title_display == "both_romaji_primary" %}
+    <span class="title-romaji">{{ romaji or item.anilist_title or folder }}</span>
+    {% if english and english != (romaji or item.anilist_title or folder) %}
+    <span class="title-english">{{ english }}</span>
+    {% endif %}
+{% elif title_display == "both_english_primary" %}
+    <span class="title-romaji">{{ english or romaji or item.anilist_title or folder }}</span>
+    {% if romaji and romaji != (english or item.anilist_title or folder) %}
+    <span class="title-english">{{ romaji }}</span>
+    {% endif %}
+{% else %}{# romaji (default) #}
+    <span class="title-romaji">{{ romaji or item.anilist_title or folder }}</span>
+{% endif %}
+{% endmacro %}
+
+{% block content %}
+<div style="display:flex;align-items:center;gap:1rem;margin-bottom:0.5rem">
+    <h1 style="margin:0">{{ library.name }}</h1>
+</div>
+
+{% if message %}
+<div class="alert alert-success">{{ message | replace("+", " ") }}</div>
+{% endif %}
+{% if error %}
+<div class="alert alert-danger">{{ error | replace("+", " ") }}</div>
+{% endif %}
+
+<!-- Change detection banner (hidden by default, shown by JS) -->
+<div class="change-banner" id="changeBanner" style="display:none">
+    <span id="changeBannerText"></span>
+    <form method="post" action="/library/{{ library.id }}/scan" style="display:inline">
+        <button type="submit" class="btn btn-sm btn-primary">Scan Now</button>
+    </form>
+</div>
+
+{# ── Action Bar ── #}
+<div class="card action-bar">
+    <div class="action-bar-row">
+        <span class="action-bar-label">Scan</span>
+        <form method="post" action="/library/{{ library.id }}/scan" style="display:inline">
+            <button type="submit" class="btn btn-primary btn-sm" {% if scan_running %}disabled{% endif %}>
+                {% if scan_running %}Scanning...{% else %}Scan Library{% endif %}
+            </button>
+        </form>
+        <form method="post" action="/library/{{ library.id }}/scan" style="display:inline">
+            <input type="hidden" name="force_rescan" value="on">
+            <button type="submit" class="btn btn-sm btn-secondary" {% if scan_running %}disabled{% endif %}>Force Re-scan</button>
+        </form>
+        {% if scan_running %}
+        <a href="/library/{{ library.id }}/scan/progress" class="btn btn-sm btn-secondary">View Progress</a>
+        {% endif %}
+    </div>
+    <div class="action-bar-row">
+        <span class="action-bar-label">Organize</span>
+        <a href="/restructure?library_id={{ library.id }}" class="btn btn-sm btn-secondary">Restructure Library</a>
+        <a href="/restructure/report" class="btn btn-sm btn-secondary">View Report</a>
+    </div>
+    {% if plex_configured %}
+    <div class="action-bar-row">
+        <span class="action-bar-label">Plex</span>
+        {% if plex_matched_count > 0 %}
+        <form method="post" action="/library/{{ library.id }}/plex-apply-all" style="display:inline">
+            <button type="submit" class="btn btn-sm btn-plex">Apply All to Plex ({{ plex_matched_count }} items)</button>
+        </form>
+        {% else %}
+        <span class="text-muted" style="font-size:0.85rem">No items found in Plex. Scan your Plex library first from the <a href="/plex" style="color:var(--accent)">Plex page</a>.</span>
+        {% endif %}
+    </div>
+    {% endif %}
+    {% if jellyfin_configured %}
+    <div class="action-bar-row">
+        <span class="action-bar-label">Jellyfin</span>
+        {% if jellyfin_matched_count > 0 %}
+        <form method="post" action="/library/{{ library.id }}/jellyfin-apply-all" style="display:inline">
+            <button type="submit" class="btn btn-sm btn-secondary">Apply All to Jellyfin ({{ jellyfin_matched_count }} items)</button>
+        </form>
+        {% else %}
+        <span class="text-muted" style="font-size:0.85rem">No items found in Jellyfin. Scan your Jellyfin library first from the <a href="/jellyfin" style="color:var(--accent)">Jellyfin page</a>.</span>
+        {% endif %}
+        {% if jellyfin_scan_running %}
+        <a href="/jellyfin/scan/progress" class="btn btn-sm btn-secondary">Scan In Progress...</a>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+
+{% if items %}
+<div class="card library-toolbar">
+    <div class="toolbar-left">
+        <span class="text-muted" id="itemCount">{{ counts.total }} item{{ "s" if counts.total != 1 else "" }}
+            ({{ counts.matched }} matched, {{ counts.unmatched }} unmatched)</span>
+        <div class="toolbar-controls">
+            <select id="sortSelect">
+                <option value="title">Title</option>
+                <option value="year-desc">Year (Newest)</option>
+                <option value="year-asc">Year (Oldest)</option>
+                <option value="folder">Folder Name</option>
+                <option value="format">Format</option>
+            </select>
+            <select id="filterSelect">
+                <option value="all">All</option>
+                <option value="matched">Matched Only</option>
+                <option value="unmatched">Unmatched Only</option>
+                {% if plex_configured %}
+                <option value="in-plex">In Plex</option>
+                <option value="not-in-plex">Not in Plex</option>
+                {% endif %}
+                {% if jellyfin_configured %}
+                <option value="in-jellyfin">In Jellyfin</option>
+                <option value="not-in-jellyfin">Not in Jellyfin</option>
+                {% endif %}
+            </select>
+        </div>
+    </div>
+    <div class="toolbar-right">
+        <button class="btn btn-sm view-toggle" data-view="grid" title="Grid view">&#9638;</button>
+        <button class="btn btn-sm view-toggle" data-view="list" title="List view">&#9776;</button>
+    </div>
+</div>
+
+<!-- Grid View -->
+<div class="library-grid" id="view-grid">
+    {% for item in items %}
+    {% set _romaji = item.title_romaji or "" %}
+    {% set _english = item.title_english or "" %}
+    {% set _folder = item.folder_name or "" %}
+    {% if title_display == "english" %}
+        {% set _sort_title = (_english or _romaji or item.anilist_title or _folder)|lower %}
+    {% elif title_display == "both_english_primary" %}
+        {% set _sort_title = (_english or _romaji or item.anilist_title or _folder)|lower %}
+    {% else %}
+        {% set _sort_title = (_romaji or item.anilist_title or _folder)|lower %}
+    {% endif %}
+    {% set _in_plex = item.folder_name in plex_matches %}
+    {% set _in_jellyfin = item.folder_name in jellyfin_matches %}
+    <div class="library-card {% if item.anilist_id %}matched{% else %}unmatched{% endif %}"
+         data-item-id="{{ item.id }}"
+         data-folder-name="{{ item.folder_name }}"
+         data-anilist-id="{{ item.anilist_id or '' }}"
+         data-title-sort="{{ _sort_title }}"
+         data-year="{{ item.year or 0 }}"
+         data-format="{{ item.anilist_format or '' }}"
+         data-matched="{{ '1' if item.anilist_id else '0' }}"
+         data-has-plex="{{ '1' if _in_plex else '0' }}"
+         data-has-jellyfin="{{ '1' if _in_jellyfin else '0' }}">
+        <div class="library-card-poster">
+            {% if item.display_cover %}
+            <img src="{{ item.display_cover }}" alt="{{ item.folder_name }}" loading="lazy">
+            {% else %}
+            <div class="poster-placeholder"></div>
+            {% endif %}
+            {% if item.anilist_id %}
+            <span class="badge badge-success library-card-badge">Matched</span>
+            {% else %}
+            <span class="badge badge-warning library-card-badge">Unmatched</span>
+            {% endif %}
+            {% if _in_plex %}
+            <span class="badge badge-plex library-card-badge" style="left:auto;right:0.35rem">Plex</span>
+            {% endif %}
+            {% if item.anilist_format %}
+            <span class="format-badge">{{ item.anilist_format }}</span>
+            {% endif %}
+            <div class="library-card-actions">
+                <button class="btn btn-sm btn-primary" onclick="openEditModal(this.closest('.library-card'))">
+                    {{ "Edit" if item.anilist_id else "Match" }}
+                </button>
+                {% if _in_plex and item.anilist_id %}
+                <button class="btn btn-sm btn-plex" onclick="syncToPlex({{ item.id }}, this)">Sync to Plex</button>
+                {% endif %}
+                {% if _in_jellyfin and item.anilist_id %}
+                <button class="btn btn-sm btn-secondary" onclick="syncToJellyfin({{ item.id }}, this)">Sync to Jellyfin</button>
+                {% endif %}
+            </div>
+        </div>
+        <div class="library-card-info">
+            {% if item.anilist_id %}
+            {{ render_title(item, title_display) }}
+            {% else %}
+            <span class="title-romaji">{{ item.folder_name }}</span>
+            {% endif %}
+            {% if item.anilist_id and item.folder_name != (item.title_romaji or item.anilist_title) %}
+            <span class="library-card-folder">{{ item.folder_name }}</span>
+            {% endif %}
+            {% if item.year %}<span class="library-card-year">{{ item.year }}</span>{% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- List View -->
+<div class="library-list" id="view-list" style="display:none">
+    {% for item in items %}
+    {% set _romaji = item.title_romaji or "" %}
+    {% set _english = item.title_english or "" %}
+    {% set _folder = item.folder_name or "" %}
+    {% if title_display == "english" %}
+        {% set _sort_title = (_english or _romaji or item.anilist_title or _folder)|lower %}
+    {% elif title_display == "both_english_primary" %}
+        {% set _sort_title = (_english or _romaji or item.anilist_title or _folder)|lower %}
+    {% else %}
+        {% set _sort_title = (_romaji or item.anilist_title or _folder)|lower %}
+    {% endif %}
+    {% set _in_plex_list = item.folder_name in plex_matches %}
+    {% set _in_jellyfin_list = item.folder_name in jellyfin_matches %}
+    <div class="library-list-row {% if item.anilist_id %}matched{% else %}unmatched{% endif %}"
+         data-item-id="{{ item.id }}"
+         data-folder-name="{{ item.folder_name }}"
+         data-anilist-id="{{ item.anilist_id or '' }}"
+         data-title-sort="{{ _sort_title }}"
+         data-year="{{ item.year or 0 }}"
+         data-format="{{ item.anilist_format or '' }}"
+         data-matched="{{ '1' if item.anilist_id else '0' }}"
+         data-has-plex="{{ '1' if _in_plex_list else '0' }}"
+         data-has-jellyfin="{{ '1' if _in_jellyfin_list else '0' }}">
+        {% if item.display_cover %}
+        <img class="library-list-poster" src="{{ item.display_cover }}" alt="" loading="lazy">
+        {% else %}
+        <div class="library-list-poster poster-placeholder"></div>
+        {% endif %}
+        <div class="library-list-info">
+            {% if item.anilist_id %}
+            {{ render_title(item, title_display) }}
+            {% else %}
+            <span class="title-romaji">{{ item.folder_name }}</span>
+            {% endif %}
+            {% if item.anilist_id and item.folder_name != (item.title_romaji or item.anilist_title) %}
+            <span class="library-card-folder">{{ item.folder_name }}</span>
+            {% endif %}
+            {% if item.year %}<span class="library-card-year">{{ item.year }}</span>{% endif %}
+        </div>
+        {% if item.anilist_format %}
+        <span class="format-badge">{{ item.anilist_format }}</span>
+        {% endif %}
+        {% if _in_plex_list %}
+        <span class="badge badge-plex">Plex</span>
+        {% endif %}
+        {% if _in_jellyfin_list %}
+        <span class="badge badge-secondary">Jellyfin</span>
+        {% endif %}
+        <span class="badge {% if item.anilist_id %}badge-success{% else %}badge-warning{% endif %}">
+            {{ "Matched" if item.anilist_id else "Unmatched" }}
+        </span>
+        {% if _in_plex_list and item.anilist_id %}
+        <button class="btn btn-sm btn-plex" onclick="syncToPlex({{ item.id }}, this)">Sync Plex</button>
+        {% endif %}
+        {% if _in_jellyfin_list and item.anilist_id %}
+        <button class="btn btn-sm btn-secondary" onclick="syncToJellyfin({{ item.id }}, this)">Sync Jellyfin</button>
+        {% endif %}
+        <button class="btn btn-sm btn-primary" onclick="openEditModal(this.closest('.library-list-row'))">
+            {{ "Edit" if item.anilist_id else "Match" }}
+        </button>
+    </div>
+    {% endfor %}
+</div>
+
+{% else %}
+<div class="card">
+    <p class="text-muted">No items scanned yet. Click "Scan Library" above to discover your anime folders.</p>
+</div>
+{% endif %}
+
+<!-- Edit Match Modal -->
+<div class="modal" id="editModal" style="display:none">
+    <div class="modal-backdrop" onclick="closeEditModal()"></div>
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="editModalTitle">Edit Match</h3>
+            <button class="modal-close" onclick="closeEditModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="search-bar">
+                <input type="text" id="editSearchInput" placeholder="Search AniList...">
+                <button class="btn btn-primary btn-sm" onclick="doEditSearch()">Search</button>
+            </div>
+            <div id="editSearchResults"></div>
+            <div id="editRemoveSection" style="display:none; margin-top:1rem; border-top:1px solid var(--border); padding-top:1rem;">
+                <button class="btn btn-danger btn-sm" onclick="removeMatch()">Remove Match</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+var libraryId = {{ library.id }};
+var totalCount = {{ counts.total }};
+
+// ── Sort & Filter ──
+var sortSelect = document.getElementById('sortSelect');
+var filterSelect = document.getElementById('filterSelect');
+
+// Restore from localStorage
+var savedSort = localStorage.getItem('library_sort');
+var savedFilter = localStorage.getItem('library_filter');
+if (savedSort) sortSelect.value = savedSort;
+if (savedFilter) filterSelect.value = savedFilter;
+
+function applyFilterSort() {
+    var sortVal = sortSelect.value;
+    var filterVal = filterSelect.value;
+    localStorage.setItem('library_sort', sortVal);
+    localStorage.setItem('library_filter', filterVal);
+
+    var gridContainer = document.getElementById('view-grid');
+    var listContainer = document.getElementById('view-list');
+    if (!gridContainer || !listContainer) return;
+
+    var gridCards = Array.from(gridContainer.children);
+    var listRows = Array.from(listContainer.children);
+
+    // Build paired array so grid and list stay in sync
+    var pairs = [];
+    for (var i = 0; i < gridCards.length; i++) {
+        pairs.push({ grid: gridCards[i], list: listRows[i] });
+    }
+
+    // Filter
+    var visibleCount = 0;
+    pairs.forEach(function(p) {
+        var matched = p.grid.dataset.matched === '1';
+        var hasPlex = p.grid.dataset.hasPlex === '1';
+        var hasJellyfin = p.grid.dataset.hasJellyfin === '1';
+        var show = filterVal === 'all'
+            || (filterVal === 'matched' && matched)
+            || (filterVal === 'unmatched' && !matched)
+            || (filterVal === 'in-plex' && hasPlex)
+            || (filterVal === 'not-in-plex' && !hasPlex)
+            || (filterVal === 'in-jellyfin' && hasJellyfin)
+            || (filterVal === 'not-in-jellyfin' && !hasJellyfin);
+        p.grid.style.display = show ? '' : 'none';
+        p.list.style.display = show ? '' : 'none';
+        p.visible = show;
+        if (show) visibleCount++;
+    });
+
+    // Sort
+    pairs.sort(function(a, b) {
+        if (!a.visible && !b.visible) return 0;
+        if (!a.visible) return 1;
+        if (!b.visible) return -1;
+        switch (sortVal) {
+            case 'title':
+                return a.grid.dataset.titleSort.localeCompare(b.grid.dataset.titleSort);
+            case 'year-desc':
+                return (parseInt(b.grid.dataset.year) || 0) - (parseInt(a.grid.dataset.year) || 0);
+            case 'year-asc':
+                return (parseInt(a.grid.dataset.year) || 0) - (parseInt(b.grid.dataset.year) || 0);
+            case 'folder':
+                return (a.grid.dataset.folderName || '').toLowerCase().localeCompare((b.grid.dataset.folderName || '').toLowerCase());
+            case 'format':
+                return (a.grid.dataset.format || '').localeCompare(b.grid.dataset.format || '');
+            default:
+                return 0;
+        }
+    });
+
+    // Reorder DOM
+    pairs.forEach(function(p) {
+        gridContainer.appendChild(p.grid);
+        listContainer.appendChild(p.list);
+    });
+
+    // Update count display
+    var countEl = document.getElementById('itemCount');
+    if (filterVal === 'all') {
+        countEl.textContent = totalCount + ' item' + (totalCount !== 1 ? 's' : '') +
+            ' ({{ counts.matched }} matched, {{ counts.unmatched }} unmatched)';
+    } else {
+        countEl.textContent = 'Showing ' + visibleCount + ' of ' + totalCount + ' items';
+    }
+}
+
+sortSelect.addEventListener('change', applyFilterSort);
+filterSelect.addEventListener('change', applyFilterSort);
+
+// Apply on load (after DOM is ready)
+applyFilterSort();
+
+// ── Change detection on load ──
+(async function() {
+    try {
+        var resp = await fetch('/api/library/' + libraryId + '/changes');
+        var data = await resp.json();
+        var parts = [];
+        if (data.new_count > 0) parts.push(data.new_count + ' new folder' + (data.new_count !== 1 ? 's' : ''));
+        if (data.removed_count > 0) parts.push(data.removed_count + ' removed');
+        if (parts.length > 0) {
+            document.getElementById('changeBannerText').textContent = 'Changes detected: ' + parts.join(', ') + '. ';
+            document.getElementById('changeBanner').style.display = '';
+        }
+    } catch(e) {}
+})();
+
+// ── View toggle ──
+var viewGrid = document.getElementById('view-grid');
+var viewList = document.getElementById('view-list');
+var toggleBtns = document.querySelectorAll('.view-toggle');
+
+function setView(view) {
+    if (!viewGrid) return;
+    if (view === 'list') {
+        viewGrid.style.display = 'none';
+        viewList.style.display = '';
+    } else {
+        viewGrid.style.display = '';
+        viewList.style.display = 'none';
+    }
+    toggleBtns.forEach(function(b) { b.classList.toggle('active', b.dataset.view === view); });
+    localStorage.setItem('library_detail_view', view);
+}
+
+toggleBtns.forEach(function(b) { b.addEventListener('click', function() { setView(b.dataset.view); }); });
+setView(localStorage.getItem('library_detail_view') || 'grid');
+
+// ── Edit Modal ──
+var currentItemId = '';
+var currentFolderName = '';
+var currentAnilistId = '';
+
+function openEditModal(el) {
+    currentItemId = el.dataset.itemId;
+    currentFolderName = el.dataset.folderName;
+    currentAnilistId = el.dataset.anilistId || '';
+    document.getElementById('editModalTitle').textContent = currentFolderName;
+    document.getElementById('editSearchInput').value = currentFolderName;
+    document.getElementById('editSearchResults').innerHTML = '';
+    document.getElementById('editRemoveSection').style.display = currentAnilistId ? '' : 'none';
+    document.getElementById('editModal').style.display = '';
+    doEditSearch();
+}
+
+function closeEditModal() {
+    document.getElementById('editModal').style.display = 'none';
+}
+
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeEditModal();
+});
+
+document.getElementById('editSearchInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') { e.preventDefault(); doEditSearch(); }
+});
+
+async function doEditSearch() {
+    var q = document.getElementById('editSearchInput').value.trim();
+    if (!q) return;
+    var container = document.getElementById('editSearchResults');
+    container.innerHTML = '<p class="text-muted">Searching...</p>';
+    try {
+        var resp = await fetch('/api/library/search?q=' + encodeURIComponent(q));
+        var data = await resp.json();
+        if (!data.length) {
+            container.innerHTML = '<p class="text-muted">No results found.</p>';
+            return;
+        }
+        container.innerHTML = data.map(function(r) {
+            return '<div class="search-result">' +
+                (r.cover_image
+                    ? '<img class="search-result-cover" src="' + r.cover_image + '" alt="">'
+                    : '<div class="search-result-cover-placeholder"></div>') +
+                '<div class="search-result-info">' +
+                    '<div class="title-romaji">' + (r.title_romaji || '') + '</div>' +
+                    (r.title_english ? '<div class="title-english">' + r.title_english + '</div>' : '') +
+                    '<div class="search-result-meta text-muted">' +
+                        [r.season, r.year, r.format, r.episodes ? r.episodes + ' ep' : ''].filter(Boolean).join(' &middot; ') +
+                    '</div>' +
+                '</div>' +
+                '<button class="btn btn-sm btn-primary" onclick="selectMatch(' + r.id + ')">Select</button>' +
+            '</div>';
+        }).join('');
+    } catch(err) {
+        container.innerHTML = '<p class="text-muted">Search failed.</p>';
+    }
+}
+
+async function selectMatch(anilistId) {
+    try {
+        var resp = await fetch('/library/' + libraryId + '/update-match', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({item_id: parseInt(currentItemId), anilist_id: anilistId}),
+        });
+        if (resp.ok) location.reload();
+    } catch(err) {
+        alert('Failed to save match.');
+    }
+}
+
+async function removeMatch() {
+    try {
+        var resp = await fetch('/library/' + libraryId + '/remove-match', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({item_id: parseInt(currentItemId)}),
+        });
+        if (resp.ok) location.reload();
+    } catch(err) {
+        alert('Failed to remove match.');
+    }
+}
+
+// ── Jellyfin Sync ──
+async function syncToJellyfin(itemId, btn) {
+    var origText = btn.textContent;
+    btn.textContent = '...';
+    btn.disabled = true;
+    try {
+        var resp = await fetch('/library/' + libraryId + '/jellyfin-sync', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({item_id: itemId}),
+        });
+        if (resp.ok) {
+            btn.textContent = 'Done';
+            setTimeout(function() { btn.textContent = origText; btn.disabled = false; }, 2000);
+        } else {
+            var data = await resp.json();
+            alert('Sync failed: ' + (data.error || 'unknown error'));
+            btn.textContent = origText;
+            btn.disabled = false;
+        }
+    } catch(err) {
+        alert('Sync failed.');
+        btn.textContent = origText;
+        btn.disabled = false;
+    }
+}
+
+// ── Plex Sync ──
+async function syncToPlex(itemId, btn) {
+    var origText = btn.textContent;
+    btn.textContent = '...';
+    btn.disabled = true;
+    try {
+        var resp = await fetch('/library/' + libraryId + '/plex-sync', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({item_id: itemId}),
+        });
+        if (resp.ok) {
+            btn.textContent = 'Done';
+            btn.classList.add('btn-success-temp');
+            setTimeout(function() { btn.textContent = origText; btn.disabled = false; btn.classList.remove('btn-success-temp'); }, 2000);
+        } else {
+            var data = await resp.json();
+            alert('Sync failed: ' + (data.error || 'unknown error'));
+            btn.textContent = origText;
+            btn.disabled = false;
+        }
+    } catch(err) {
+        alert('Sync failed.');
+        btn.textContent = origText;
+        btn.disabled = false;
+    }
+}
+</script>
+{% endblock %}

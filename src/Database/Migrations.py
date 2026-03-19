@@ -10,7 +10,7 @@ from src.Database.Models import INDEXES, TABLES
 
 logger = logging.getLogger(__name__)
 
-LATEST_VERSION = 14
+LATEST_VERSION = 17
 
 
 async def run_migrations(db: aiosqlite.Connection) -> None:
@@ -59,6 +59,15 @@ async def run_migrations(db: aiosqlite.Connection) -> None:
 
     if current < 14:
         await _apply_v14(db)
+
+    if current < 15:
+        await _apply_v15(db)
+
+    if current < 16:
+        await _apply_v16(db)
+
+    if current < 17:
+        await _apply_v17(db)
 
 
 async def _get_current_version(db: aiosqlite.Connection) -> int:
@@ -177,12 +186,18 @@ async def _apply_v6(db: aiosqlite.Connection) -> None:
 
 
 async def _apply_v7(db: aiosqlite.Connection) -> None:
-    """Add year column to anilist_cache."""
+    """Add year column to anilist_cache (no-op if column already exists in schema)."""
     logger.info("Applying migration v7: adding year column to anilist_cache")
 
-    await db.execute(
-        "ALTER TABLE anilist_cache ADD COLUMN year INTEGER NOT NULL DEFAULT 0"
-    )
+    try:
+        await db.execute(
+            "ALTER TABLE anilist_cache ADD COLUMN year INTEGER NOT NULL DEFAULT 0"
+        )
+    except aiosqlite.OperationalError as exc:
+        if "duplicate column name" in str(exc):
+            logger.debug("v7: year column already present, skipping ALTER")
+        else:
+            raise
 
     await db.execute("INSERT INTO schema_version (version) VALUES (?)", (7,))
     await db.commit()
@@ -190,15 +205,22 @@ async def _apply_v7(db: aiosqlite.Connection) -> None:
 
 
 async def _apply_v8(db: aiosqlite.Connection) -> None:
-    """Add anilist_sonarr_mapping table."""
-    logger.info("Applying migration v8: adding anilist_sonarr_mapping table")
+    """Add libraries and library_items tables for Library Manager."""
+    logger.info("Applying migration v8: adding libraries and library_items tables")
 
-    await db.execute(TABLES["anilist_sonarr_mapping"])
-    logger.debug("Created table: anilist_sonarr_mapping")
+    await db.execute(TABLES["libraries"])
+    logger.debug("Created table: libraries")
+
+    await db.execute(TABLES["library_items"])
+    logger.debug("Created table: library_items")
 
     await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_sonarr_mapping_tvdb"
-        " ON anilist_sonarr_mapping(tvdb_id)"
+        "CREATE INDEX IF NOT EXISTS idx_library_items_library"
+        " ON library_items(library_id)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_library_items_anilist"
+        " ON library_items(anilist_id)"
     )
 
     await db.execute("INSERT INTO schema_version (version) VALUES (?)", (8,))
@@ -207,15 +229,15 @@ async def _apply_v8(db: aiosqlite.Connection) -> None:
 
 
 async def _apply_v9(db: aiosqlite.Connection) -> None:
-    """Add anilist_radarr_mapping table."""
-    logger.info("Applying migration v9: adding anilist_radarr_mapping table")
+    """Add jellyfin_media table for persistent Jellyfin library browsing."""
+    logger.info("Applying migration v9: adding jellyfin_media table")
 
-    await db.execute(TABLES["anilist_radarr_mapping"])
-    logger.debug("Created table: anilist_radarr_mapping")
+    await db.execute(TABLES["jellyfin_media"])
+    logger.debug("Created table: jellyfin_media")
 
     await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_radarr_mapping_tmdb"
-        " ON anilist_radarr_mapping(tmdb_id)"
+        "CREATE INDEX IF NOT EXISTS idx_jellyfin_media_library"
+        " ON jellyfin_media(library_id)"
     )
 
     await db.execute("INSERT INTO schema_version (version) VALUES (?)", (9,))
@@ -224,11 +246,29 @@ async def _apply_v9(db: aiosqlite.Connection) -> None:
 
 
 async def _apply_v10(db: aiosqlite.Connection) -> None:
-    """Add sonarr_series_cache table."""
-    logger.info("Applying migration v10: adding sonarr_series_cache table")
+    """Add plex_users, jellyfin_users, cr_sync_preview, cr_sync_log tables."""
+    logger.info("Applying migration v10: adding Phase A tables")
 
-    await db.execute(TABLES["sonarr_series_cache"])
-    logger.debug("Created table: sonarr_series_cache")
+    await db.execute(TABLES["plex_users"])
+    logger.debug("Created table: plex_users")
+
+    await db.execute(TABLES["jellyfin_users"])
+    logger.debug("Created table: jellyfin_users")
+
+    await db.execute(TABLES["cr_sync_preview"])
+    logger.debug("Created table: cr_sync_preview")
+
+    await db.execute(TABLES["cr_sync_log"])
+    logger.debug("Created table: cr_sync_log")
+
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_cr_sync_preview_run"
+        " ON cr_sync_preview(run_id)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_cr_sync_log_anilist"
+        " ON cr_sync_log(anilist_id)"
+    )
 
     await db.execute("INSERT INTO schema_version (version) VALUES (?)", (10,))
     await db.commit()
@@ -236,11 +276,20 @@ async def _apply_v10(db: aiosqlite.Connection) -> None:
 
 
 async def _apply_v11(db: aiosqlite.Connection) -> None:
-    """Add radarr_movie_cache table."""
-    logger.info("Applying migration v11: adding radarr_movie_cache table")
+    """Add download_requests table for P4 Sonarr/Radarr integration."""
+    logger.info("Applying migration v11: adding download_requests table")
 
-    await db.execute(TABLES["radarr_movie_cache"])
-    logger.debug("Created table: radarr_movie_cache")
+    await db.execute(TABLES["download_requests"])
+    logger.debug("Created table: download_requests")
+
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_download_requests_anilist"
+        " ON download_requests(anilist_id)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_download_requests_status"
+        " ON download_requests(status)"
+    )
 
     await db.execute("INSERT INTO schema_version (version) VALUES (?)", (11,))
     await db.commit()
@@ -248,16 +297,12 @@ async def _apply_v11(db: aiosqlite.Connection) -> None:
 
 
 async def _apply_v12(db: aiosqlite.Connection) -> None:
-    """Add sonarr_id, radarr_id lookup indexes."""
-    logger.info("Applying migration v12: adding sonarr/radarr arr_id indexes")
+    """Add episodes_json column to cr_sync_preview for episode breakdown detail."""
+    logger.info("Applying migration v12: adding episodes_json to cr_sync_preview")
 
     await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_sonarr_mapping_sonarr_id"
-        " ON anilist_sonarr_mapping(sonarr_id)"
-    )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_radarr_mapping_radarr_id"
-        " ON anilist_radarr_mapping(radarr_id)"
+        "ALTER TABLE cr_sync_preview"
+        " ADD COLUMN episodes_json TEXT NOT NULL DEFAULT '[]'"
     )
 
     await db.execute("INSERT INTO schema_version (version) VALUES (?)", (12,))
@@ -266,16 +311,37 @@ async def _apply_v12(db: aiosqlite.Connection) -> None:
 
 
 async def _apply_v13(db: aiosqlite.Connection) -> None:
-    """Add anilist_id index to sonarr/radarr mappings."""
-    logger.info("Applying migration v13: adding anilist_id indexes on *arr mappings")
+    """Add Sonarr/Radarr mapping and cache tables for P4 download management."""
+    logger.info("Applying migration v13: adding Sonarr/Radarr mapping and cache tables")
+
+    for table in (
+        "anilist_sonarr_mapping",
+        "anilist_radarr_mapping",
+        "sonarr_series_cache",
+        "radarr_movie_cache",
+    ):
+        await db.execute(TABLES[table])
+        logger.debug("Created table: %s", table)
 
     await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_sonarr_mapping_anilist"
-        " ON anilist_sonarr_mapping(anilist_id)"
+        "CREATE INDEX IF NOT EXISTS idx_sonarr_mapping_tvdb"
+        " ON anilist_sonarr_mapping(tvdb_id)"
     )
     await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_radarr_mapping_anilist"
-        " ON anilist_radarr_mapping(anilist_id)"
+        "CREATE INDEX IF NOT EXISTS idx_sonarr_mapping_group"
+        " ON anilist_sonarr_mapping(series_group_id)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_radarr_mapping_tmdb"
+        " ON anilist_radarr_mapping(tmdb_id)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sonarr_cache_sonarr_id"
+        " ON sonarr_series_cache(sonarr_id)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_radarr_cache_radarr_id"
+        " ON radarr_movie_cache(radarr_id)"
     )
 
     await db.execute("INSERT INTO schema_version (version) VALUES (?)", (13,))
@@ -302,3 +368,70 @@ async def _apply_v14(db: aiosqlite.Connection) -> None:
     await db.execute("INSERT INTO schema_version (version) VALUES (?)", (14,))
     await db.commit()
     logger.info("Migration v14 applied successfully")
+
+
+async def _apply_v15(db: aiosqlite.Connection) -> None:
+    """Add anilist_sonarr_season_mapping for per-season AniList title resolution."""
+    logger.info("Applying migration v15: adding anilist_sonarr_season_mapping table")
+
+    await db.execute("""CREATE TABLE IF NOT EXISTS anilist_sonarr_season_mapping (
+            sonarr_id     INTEGER NOT NULL,
+            season_number INTEGER NOT NULL,
+            anilist_id    INTEGER NOT NULL,
+            created_at    TEXT DEFAULT (datetime('now')),
+            PRIMARY KEY (sonarr_id, season_number)
+        )""")
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_assm_sonarr"
+        " ON anilist_sonarr_season_mapping (sonarr_id)"
+    )
+
+    await db.execute("INSERT INTO schema_version (version) VALUES (?)", (15,))
+    await db.commit()
+    logger.info("Migration v15 applied successfully")
+
+
+async def _apply_v16(db: aiosqlite.Connection) -> None:
+    """Add anilist_arr_skip for caching auto-sync TVDB/TMDB resolution failures."""
+    logger.info("Applying migration v16: adding anilist_arr_skip table")
+
+    await db.execute("""CREATE TABLE IF NOT EXISTS anilist_arr_skip (
+            anilist_id   INTEGER PRIMARY KEY,
+            reason       TEXT NOT NULL,
+            skipped_at   TEXT DEFAULT (datetime('now'))
+        )""")
+
+    await db.execute("INSERT INTO schema_version (version) VALUES (?)", (16,))
+    await db.commit()
+    logger.info("Migration v16 applied successfully")
+
+
+async def _apply_v17(db: aiosqlite.Connection) -> None:
+    """Add monitor_type column to Sonarr/Radarr mapping tables."""
+    logger.info("Applying migration v17: adding monitor_type to mapping tables")
+
+    for table in ("anilist_sonarr_mapping", "anilist_radarr_mapping"):
+        try:
+            await db.execute(
+                f"ALTER TABLE {table}"
+                " ADD COLUMN monitor_type TEXT NOT NULL DEFAULT 'future'"
+            )
+        except aiosqlite.OperationalError as exc:
+            if "duplicate column name" in str(exc):
+                logger.debug("v17: monitor_type already present in %s, skipping", table)
+            else:
+                raise
+
+    # Back-fill: entries with monitored=0 should be 'none'
+    await db.execute(
+        "UPDATE anilist_sonarr_mapping SET monitor_type='none'"
+        " WHERE sonarr_monitored=0"
+    )
+    await db.execute(
+        "UPDATE anilist_radarr_mapping SET monitor_type='none'"
+        " WHERE radarr_monitored=0"
+    )
+
+    await db.execute("INSERT INTO schema_version (version) VALUES (?)", (17,))
+    await db.commit()
+    logger.info("Migration v17 applied successfully")

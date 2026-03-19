@@ -13,15 +13,20 @@
   .results-table th:hover { background: var(--bg-secondary, #f5f5f5); }
   .results-table td { padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--border-color, #eee); vertical-align: middle; }
   .results-table tr:hover td { background: var(--bg-secondary, #f8f9fa); }
-  .badge-quality { display: inline-block; padding: 0.15rem 0.45rem; border-radius: 3px; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; }
-  .q-4k { background: #6a1b9a; color: #fff; }
-  .q-1080p { background: #1565c0; color: #fff; }
-  .q-720p { background: #2e7d32; color: #fff; }
-  .q-480p, .q-unknown { background: #555; color: #fff; }
-  .seeders-cell { color: #2e7d32; font-weight: 600; }
-  .leechers-cell { color: #c62828; }
+  .results-table tr.rejected td { opacity: 0.55; }
+  .badge-quality { display: inline-block; padding: 0.15rem 0.45rem; border-radius: 3px; font-size: 0.75rem; font-weight: 700; }
+  .q-bluray-1080 { background: #1565c0; color: #fff; }
+  .q-bluray-2160, .q-remux-2160, .q-remux-1080 { background: #6a1b9a; color: #fff; }
+  .q-hdtv-1080, .q-web-1080 { background: #2e7d32; color: #fff; }
+  .q-720, .q-480 { background: #555; color: #fff; }
+  .q-unknown { background: #888; color: #fff; }
+  .badge-proto { display: inline-block; padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; }
+  .proto-torrent { background: #e65100; color: #fff; }
+  .proto-usenet { background: #0277bd; color: #fff; }
+  .badge-ok { color: #2e7d32; font-size: 1rem; }
+  .badge-rej { color: #c62828; font-size: 0.75rem; cursor: help; }
+  .release-title { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .size-cell { color: var(--text-muted, #666); white-space: nowrap; }
-  .release-title { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .spinner-large { display: block; width: 2.5rem; height: 2.5rem; border: 3px solid rgba(0,0,0,0.08); border-top-color: #4a90d9; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 3rem auto; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .toast-container { position: fixed; top: 1rem; right: 1rem; z-index: 9999; display: flex; flex-direction: column; gap: 0.5rem; }
@@ -35,6 +40,8 @@
   .search-bar { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; }
   .filter-input { padding: 0.4rem 0.75rem; border: 1px solid var(--border-color, #ddd); border-radius: 4px; font-size: 0.9rem; background: var(--bg-primary, #fff); color: inherit; width: 260px; }
   .result-count { font-size: 0.85rem; color: var(--text-muted, #777); }
+  .service-badge { font-size: 0.75rem; padding: 0.1rem 0.4rem; border-radius: 3px; background: var(--bg-secondary); color: var(--text-muted); border: 1px solid var(--border-color); }
+  .hide-rejected-wrap { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: var(--text-muted); }
 </style>
 
 <div class="toast-container" id="toastContainer"></div>
@@ -57,13 +64,22 @@
 
 <div id="loadingState">
   <span class="spinner-large"></span>
-  <p style="text-align:center;color:var(--text-muted,#777)">Searching indexers…</p>
+  <p style="text-align:center;color:var(--text-muted,#777)">Searching indexers via Sonarr/Radarr…</p>
+</div>
+
+<div id="needsAddState" style="display:none" class="alert alert-warning">
+  <strong>Not in Sonarr/Radarr yet.</strong>
+  Add this title via the <a href="/downloads">Download Manager</a> first, then return here to grab a specific release.
 </div>
 
 <div id="resultsState" style="display:none">
   <div class="search-bar">
     <input type="text" class="filter-input" id="titleFilter" placeholder="Filter results…" oninput="filterTable()">
+    <label class="hide-rejected-wrap">
+      <input type="checkbox" id="hideRejected" checked onchange="filterTable()"> Hide rejected
+    </label>
     <span class="result-count" id="resultCount"></span>
+    <span class="service-badge" id="serviceBadge"></span>
   </div>
   <div style="overflow-x:auto">
     <table class="results-table" id="resultsTable">
@@ -71,12 +87,12 @@
         <tr>
           <th onclick="sortTable('title')" class="sort-col" data-col="title">Title <span class="sort-indicator">↕</span></th>
           <th onclick="sortTable('quality')" class="sort-col" data-col="quality">Quality <span class="sort-indicator">↕</span></th>
-          <th onclick="sortTable('size_mb')" class="sort-col sort-active" data-col="size_mb">Size <span class="sort-indicator">↓</span></th>
-          <th onclick="sortTable('seeders')" class="sort-col" data-col="seeders">Seeds <span class="sort-indicator">↕</span></th>
-          <th onclick="sortTable('leechers')" class="sort-col" data-col="leechers">Peers <span class="sort-indicator">↕</span></th>
+          <th onclick="sortTable('protocol')" class="sort-col" data-col="protocol">Protocol <span class="sort-indicator">↕</span></th>
+          <th onclick="sortTable('size_mb')" class="sort-col" data-col="size_mb">Size <span class="sort-indicator">↕</span></th>
           <th>Indexer</th>
           <th onclick="sortTable('publish_date')" class="sort-col" data-col="publish_date">Age <span class="sort-indicator">↕</span></th>
-          <th>Download</th>
+          <th onclick="sortTable('approved')" class="sort-col sort-active" data-col="approved">OK <span class="sort-indicator">↓</span></th>
+          <th>Grab</th>
         </tr>
       </thead>
       <tbody id="resultsBody"></tbody>
@@ -85,7 +101,7 @@
 </div>
 
 <div id="errorState" style="display:none" class="alert alert-danger"></div>
-<div id="emptyState" style="display:none" class="no-results">No releases found. Try refreshing your watchlist or checking Prowlarr indexers.</div>
+<div id="emptyState" style="display:none" class="no-results">No releases found. Check that your indexers are configured in Sonarr/Radarr.</div>
 
 <p style="margin-top:1.5rem"><a href="/library" class="btn btn-secondary">&larr; Back to Library</a></p>
 
@@ -93,7 +109,8 @@
 (function() {
   var ANILIST_ID = {{ anilist_id }};
   var allResults = [];
-  var sortCol = 'seeders';
+  var activeService = '';
+  var sortCol = 'approved';
   var sortAsc = false;
 
   function showToast(msg, type) {
@@ -106,8 +123,14 @@
   }
 
   function qualityClass(q) {
-    var map = { '4K': 'q-4k', '1080p': 'q-1080p', '720p': 'q-720p', '480p': 'q-480p' };
-    return map[q] || 'q-unknown';
+    if (!q) return 'q-unknown';
+    var l = q.toLowerCase();
+    if (l.includes('2160') || l.includes('4k') || l.includes('remux')) return 'q-bluray-2160';
+    if (l.includes('bluray') && l.includes('1080')) return 'q-bluray-1080';
+    if ((l.includes('hdtv') || l.includes('web')) && l.includes('1080')) return 'q-hdtv-1080';
+    if (l.includes('720')) return 'q-720';
+    if (l.includes('480') || l.includes('sd')) return 'q-480';
+    return 'q-unknown';
   }
 
   function formatSize(mb) {
@@ -128,39 +151,56 @@
     return Math.floor(days / 365) + 'y';
   }
 
-  function renderRow(r) {
-    var url = r.magnet_url || r.download_url || '';
-    var isMagnet = url.startsWith('magnet:');
-    return '<tr data-title="' + escAttr(r.title.toLowerCase()) + '">'
-      + '<td class="release-title" title="' + escAttr(r.title) + '">' + esc(r.title) + '</td>'
-      + '<td><span class="badge-quality ' + qualityClass(r.quality) + '">' + esc(r.quality) + '</span></td>'
-      + '<td class="size-cell">' + formatSize(r.size_mb) + '</td>'
-      + '<td class="seeders-cell">' + (r.seeders || 0) + '</td>'
-      + '<td class="leechers-cell">' + (r.leechers || 0) + '</td>'
-      + '<td>' + esc(r.indexer || '-') + '</td>'
-      + '<td>' + formatAge(r.publish_date) + '</td>'
-      + '<td><button class="btn btn-primary btn-sm" onclick="download(' + escAttr(JSON.stringify(r)) + ')">Download</button></td>'
-      + '</tr>';
-  }
-
   function esc(s) { var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
   function escAttr(s) { return String(s || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 
+  function renderRow(r) {
+    var rejTitle = r.rejections && r.rejections.length ? r.rejections.join('; ') : '';
+    var okCell = r.approved
+      ? '<span class="badge-ok" title="Meets quality profile">✓</span>'
+      : '<span class="badge-rej" title="' + escAttr(rejTitle) + '">✗</span>';
+    var protoClass = r.protocol === 'torrent' ? 'proto-torrent' : 'proto-usenet';
+    var seeds = (r.protocol === 'torrent' && r.seeders != null) ? ' <span style="color:#888;font-size:0.75rem">(' + r.seeders + 'S)</span>' : '';
+    return '<tr data-title="' + escAttr((r.title || '').toLowerCase()) + '" data-approved="' + (r.approved ? '1' : '0') + '">'
+      + '<td class="release-title" title="' + escAttr(r.title) + '">' + esc(r.title) + '</td>'
+      + '<td><span class="badge-quality ' + qualityClass(r.quality) + '">' + esc(r.quality || '?') + '</span></td>'
+      + '<td><span class="badge-proto ' + protoClass + '">' + esc(r.protocol || '?') + '</span>' + seeds + '</td>'
+      + '<td class="size-cell">' + formatSize(r.size_mb) + '</td>'
+      + '<td>' + esc(r.indexer || '-') + '</td>'
+      + '<td>' + formatAge(r.publish_date) + '</td>'
+      + '<td style="text-align:center">' + okCell + '</td>'
+      + '<td><button class="btn btn-primary btn-sm" onclick="grabRelease(' + escAttr(JSON.stringify(r)) + ')">Grab</button></td>'
+      + '</tr>';
+  }
+
   function renderTable() {
-    var filter = document.getElementById('titleFilter').value.toLowerCase();
+    var filter = (document.getElementById('titleFilter').value || '').toLowerCase();
+    var hideRej = document.getElementById('hideRejected').checked;
     var sorted = allResults.slice().sort(function(a, b) {
-      var va = a[sortCol] || 0, vb = b[sortCol] || 0;
+      var va = a[sortCol], vb = b[sortCol];
+      // approved: sort true first when descending
+      if (typeof va === 'boolean') { va = va ? 1 : 0; vb = vb ? 1 : 0; }
+      va = va || 0; vb = vb || 0;
       if (typeof va === 'string') va = va.toLowerCase();
       if (typeof vb === 'string') vb = vb.toLowerCase();
       if (va < vb) return sortAsc ? -1 : 1;
       if (va > vb) return sortAsc ? 1 : -1;
       return 0;
     });
-    var filtered = filter ? sorted.filter(function(r) { return r.title.toLowerCase().includes(filter); }) : sorted;
+    var filtered = sorted.filter(function(r) {
+      if (filter && !r.title.toLowerCase().includes(filter)) return false;
+      if (hideRej && !r.approved) return false;
+      return true;
+    });
     var tbody = document.getElementById('resultsBody');
     tbody.innerHTML = filtered.map(renderRow).join('');
-    document.getElementById('resultCount').textContent = filtered.length + ' of ' + allResults.length + ' results';
-    document.getElementById('emptyState').style.display = filtered.length === 0 && allResults.length === 0 ? '' : 'none';
+    var shown = filtered.length;
+    var total = allResults.length;
+    document.getElementById('resultCount').textContent = shown + (shown !== total ? ' of ' + total : '') + ' results';
+    if (allResults.length === 0) {
+      document.getElementById('emptyState').style.display = '';
+      document.getElementById('resultsState').style.display = 'none';
+    }
   }
 
   window.sortTable = function(col) {
@@ -182,20 +222,19 @@
 
   window.filterTable = function() { renderTable(); };
 
-  window.download = function(rStr) {
+  window.grabRelease = function(rStr) {
     var r = typeof rStr === 'string' ? JSON.parse(rStr) : rStr;
-    var url = r.magnet_url || r.download_url || '';
-    if (!url) { showToast('No download URL available', 'error'); return; }
+    if (!r.guid) { showToast('No GUID for this release', 'error'); return; }
     fetch('/api/grab/download', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ anilist_id: ANILIST_ID, download_url_or_magnet: url, magnet_url: r.magnet_url || '', title: r.title })
+      body: JSON.stringify({ guid: r.guid, indexer_id: r.indexer_id, service: activeService })
     }).then(function(res) { return res.json(); })
       .then(function(data) {
         if (data.ok) {
-          showToast('Added to qBittorrent: ' + r.title, 'success');
+          showToast('Sent to ' + activeService + ': ' + (data.title || r.title), 'success');
         } else {
-          showToast('Error: ' + (data.error || 'Unknown error'), 'error');
+          showToast('Error: ' + (data.error || 'Unknown'), 'error');
         }
       })
       .catch(function(e) { showToast('Request failed: ' + e.message, 'error'); });
@@ -203,18 +242,28 @@
 
   // Auto-search on load
   fetch('/api/grab/search?anilist_id=' + ANILIST_ID)
-    .then(function(r) { return r.json(); })
+    .then(function(res) { return res.json(); })
     .then(function(data) {
       document.getElementById('loadingState').style.display = 'none';
+      if (data.needs_add) {
+        document.getElementById('needsAddState').style.display = '';
+        return;
+      }
       if (data.error) {
         var el = document.getElementById('errorState');
         el.textContent = 'Search failed: ' + data.error;
         el.style.display = '';
         return;
       }
+      activeService = data.service || 'sonarr';
+      document.getElementById('serviceBadge').textContent = 'via ' + activeService;
       allResults = data.results || [];
-      document.getElementById('resultsState').style.display = '';
-      renderTable();
+      if (allResults.length > 0) {
+        document.getElementById('resultsState').style.display = '';
+        renderTable();
+      } else {
+        document.getElementById('emptyState').style.display = '';
+      }
     })
     .catch(function(e) {
       document.getElementById('loadingState').style.display = 'none';

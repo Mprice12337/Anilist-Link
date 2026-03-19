@@ -40,7 +40,7 @@ class TitleMatcher:
         target_title: str,
         candidates: list[dict[str, Any]],
         target_season: int = 1,
-        year_hint: int = 0,
+        year_hint: int | None = 0,
         include_all_formats: bool = False,
     ) -> tuple[dict[str, Any], float, int] | None:
         """Find the best AniList match for *target_title* with season awareness.
@@ -135,9 +135,9 @@ class TitleMatcher:
             title_obj = candidate.get("title", {})
             all_titles = " ".join(
                 [
-                    title_obj.get("romaji", ""),
-                    title_obj.get("english", ""),
-                    title_obj.get("native", ""),
+                    title_obj.get("romaji") or "",
+                    title_obj.get("english") or "",
+                    title_obj.get("native") or "",
                 ]
             ).lower()
 
@@ -370,13 +370,9 @@ class TitleMatcher:
             )
 
             start_date = result.get("startDate", {}) or {}
-            year = (
-                start_date.get("year") if start_date.get("year") is not None else 9999
-            )
-            month = (
-                start_date.get("month") if start_date.get("month") is not None else 12
-            )
-            day = start_date.get("day") if start_date.get("day") is not None else 31
+            year: int = start_date.get("year") or 9999
+            month: int = start_date.get("month") or 12
+            day: int = start_date.get("day") or 31
             release_order = year * 10000 + month * 100 + day
 
             tv_series.append(
@@ -470,9 +466,9 @@ class TitleMatcher:
                     continue
 
                 sd = result.get("startDate", {}) or {}
-                y = sd.get("year") if sd.get("year") is not None else 9999
-                mo = sd.get("month") if sd.get("month") is not None else 12
-                d = sd.get("day") if sd.get("day") is not None else 31
+                y: int = sd.get("year") or 9999
+                mo: int = sd.get("month") or 12
+                d: int = sd.get("day") or 31
                 ro = y * 10000 + mo * 100 + d
 
                 tv_fallback.append(

@@ -1,0 +1,1165 @@
+{% extends "base.html" %}
+{% block title %}Crunchyroll — Anilist-Link{% endblock %}
+{% block container_class %}container-wide{% endblock %}
+
+{% block content %}
+{# ── Pre-compute summary counts ─────────────────────────────────────── #}
+{% set ns = namespace(add=0, update=0, skip=0, approved=0,
+                      h_applied=0, h_undone=0, h_completed=0, h_updated=0) %}
+{% for r in rows %}
+  {% if r.action == 'add' %}{% set ns.add = ns.add + 1 %}{% endif %}
+  {% if r.action == 'update' %}{% set ns.update = ns.update + 1 %}{% endif %}
+  {% if r.action == 'skip' %}{% set ns.skip = ns.skip + 1 %}{% endif %}
+  {% if r.approved %}{% set ns.approved = ns.approved + 1 %}{% endif %}
+{% endfor %}
+{% for e in log_entries %}
+  {% if e.undone_at %}{% set ns.h_undone = ns.h_undone + 1 %}
+  {% else %}{% set ns.h_applied = ns.h_applied + 1 %}{% endif %}
+  {% if e.after_status == 'COMPLETED' %}{% set ns.h_completed = ns.h_completed + 1 %}{% endif %}
+  {% if e.before_status and e.before_progress < e.after_progress %}{% set ns.h_updated = ns.h_updated + 1 %}{% endif %}
+{% endfor %}
+
+{# ── Page header ─────────────────────────────────────────────────────── #}
+<div class="cr-page-header">
+  <div class="cr-page-title">
+    <h1><img src="/static/img/crunchyroll.png" alt="Crunchyroll" class="page-service-logo">Crunchyroll</h1>
+    {% if runs %}
+    <span class="text-muted" style="font-size:0.85rem">
+      Last scan: {{ runs[0].created_at[:16] if runs[0].created_at else "—" }}
+    </span>
+    {% endif %}
+  </div>
+  <div class="cr-page-actions">
+    {% if runs %}
+    <select id="run-selector" class="form-input cr-run-selector"
+            onchange="changeRun(this.value)">
+      {% for run in runs %}
+      <option value="{{ run.run_id }}" {% if run.run_id == run_id %}selected{% endif %}>
+        {{ run.created_at[:16] if run.created_at else run.run_id[:8] }}
+        — {{ run.entry_count }} entries{% if run.approved_count %}, {{ run.approved_count }} approved{% endif %}
+      </option>
+      {% endfor %}
+    </select>
+    {% endif %}
+    <button id="new-scan-btn" class="btn btn-primary" onclick="startNewScan()">
+      ＋ New Scan
+    </button>
+  </div>
+</div>
+
+{% if not user %}
+<section class="card" style="text-align:center;padding:3rem 1.5rem">
+  <p class="text-muted" style="margin-bottom:1rem">No AniList account linked.</p>
+  <a href="/auth/anilist" class="btn btn-primary">Link AniList</a>
+</section>
+{% else %}
+
+{# ── Stats strip ─────────────────────────────────────────────────────── #}
+<div class="cr-stats-strip" id="stats-strip-preview" {% if active_tab == 'history' %}style="display:none"{% endif %}>
+  <div class="cr-stat">
+    <span class="cr-stat-value">{{ rows | length }}</span>
+    <span class="cr-stat-label">Total</span>
+  </div>
+  <div class="cr-stat" style="color:#4caf50">
+    <span class="cr-stat-value" style="color:#4caf50">{{ ns.add }}</span>
+    <span class="cr-stat-label">New Adds</span>
+  </div>
+  <div class="cr-stat">
+    <span class="cr-stat-value" style="color:#ff9800">{{ ns.update }}</span>
+    <span class="cr-stat-label">Updates</span>
+  </div>
+  <div class="cr-stat">
+    <span class="cr-stat-value" style="color:var(--text-muted)">{{ ns.skip }}</span>
+    <span class="cr-stat-label">No Change</span>
+  </div>
+  <div class="cr-stat">
+    <span class="cr-stat-value" style="color:var(--accent)">{{ ns.approved }}</span>
+    <span class="cr-stat-label">Approved</span>
+  </div>
+</div>
+
+<div class="cr-stats-strip" id="stats-strip-history" {% if active_tab != 'history' %}style="display:none"{% endif %}>
+  <div class="cr-stat">
+    <span class="cr-stat-value">{{ log_entries | length }}</span>
+    <span class="cr-stat-label">Total Applied</span>
+  </div>
+  <div class="cr-stat">
+    <span class="cr-stat-value" style="color:#4caf50">{{ ns.h_applied }}</span>
+    <span class="cr-stat-label">Active</span>
+  </div>
+  <div class="cr-stat">
+    <span class="cr-stat-value" style="color:var(--text-muted)">{{ ns.h_undone }}</span>
+    <span class="cr-stat-label">Undone</span>
+  </div>
+  <div class="cr-stat">
+    <span class="cr-stat-value" style="color:var(--accent)">{{ ns.h_completed }}</span>
+    <span class="cr-stat-label">Completed</span>
+  </div>
+  <div class="cr-stat">
+    <span class="cr-stat-value" style="color:#ff9800">{{ ns.h_updated }}</span>
+    <span class="cr-stat-label">Progress Updated</span>
+  </div>
+</div>
+
+{# ── Tab bar ─────────────────────────────────────────────────────────── #}
+<div class="cr-tab-bar">
+  <button class="cr-tab {% if active_tab != 'history' %}cr-tab-active{% endif %}"
+          id="tab-preview" onclick="switchTab('preview')">
+    Preview
+    {% if rows %}<span class="cr-tab-count">{{ rows | length }}</span>{% endif %}
+  </button>
+  <button class="cr-tab {% if active_tab == 'history' %}cr-tab-active{% endif %}"
+          id="tab-history" onclick="switchTab('history')">
+    History
+    {% if log_entries %}<span class="cr-tab-count">{{ log_entries | length }}</span>{% endif %}
+  </button>
+</div>
+
+{# ── PREVIEW TAB ──────────────────────────────────────────────────────── #}
+<div id="pane-preview" {% if active_tab == 'history' %}style="display:none"{% endif %}>
+
+  {# Filter + bulk-action toolbar #}
+  <div class="cr-toolbar">
+    <div class="cr-filters">
+      <input type="text" id="p-search" class="cr-filter-input" placeholder="Search title…"
+             oninput="filterPreview()">
+      <select id="p-action" class="cr-filter-select" onchange="filterPreview()">
+        <option value="">All actions</option>
+        <option value="add">Add</option>
+        <option value="update">Update</option>
+        <option value="skip">Synced</option>
+      </select>
+      <select id="p-conf" class="cr-filter-select" onchange="filterPreview()">
+        <option value="">All confidence</option>
+        <option value="85">≥ 85%</option>
+        <option value="70">≥ 70%</option>
+        <option value="low">&lt; 70%</option>
+      </select>
+      <select id="p-approved" class="cr-filter-select" onchange="filterPreview()">
+        <option value="">All</option>
+        <option value="yes">Approved</option>
+        <option value="no">Not approved</option>
+      </select>
+    </div>
+    <div class="cr-bulk-actions">
+      <button class="btn btn-secondary btn-sm" onclick="bulkApprove(true, true)" title="Approve entries with ≥85% confidence">
+        Approve &gt;85%
+      </button>
+      <button class="btn btn-secondary btn-sm" onclick="bulkApprove(true, false)">Approve All</button>
+      <button class="btn btn-secondary btn-sm" onclick="bulkApprove(false, false)">Unapprove All</button>
+      <button class="btn btn-primary btn-sm" id="apply-btn" onclick="applyApproved()">
+        Apply Approved →
+      </button>
+    </div>
+  </div>
+
+  <div id="apply-result" class="alert" style="display:none;margin-bottom:1rem"></div>
+  <div id="p-empty" class="text-muted" style="display:none;padding:2rem 0;text-align:center">
+    No entries match the current filters.
+  </div>
+
+  {% if not rows %}
+  <div class="card" style="text-align:center;padding:3rem 1.5rem">
+    <p class="text-muted" style="margin-bottom:1.5rem">
+      No preview runs yet. Start a scan to see what would be synced.
+    </p>
+    <button class="btn btn-primary" onclick="startNewScan()">Start Preview Scan</button>
+  </div>
+  {% else %}
+  <div style="overflow-x:auto">
+  <table class="table" id="preview-table">
+    <thead>
+      <tr>
+        <th style="width:28px"></th>
+        <th style="width:38px">
+          <input type="checkbox" id="select-all-check" title="Toggle all"
+                 onchange="toggleAllChecks(this.checked)">
+        </th>
+        <th class="sortable" data-col="cr_title" onclick="sortPreview('cr_title')">
+          CR Title <span class="sort-arrow" id="sa-cr_title">↕</span>
+        </th>
+        <th class="sortable" data-col="anilist_title" onclick="sortPreview('anilist_title')">
+          AniList Match <span class="sort-arrow" id="sa-anilist_title">↕</span>
+        </th>
+        <th class="sortable" data-col="confidence" onclick="sortPreview('confidence')" style="width:100px">
+          Confidence <span class="sort-arrow" id="sa-confidence">↕</span>
+        </th>
+        <th style="width:120px">Current</th>
+        <th style="width:120px">Proposed</th>
+        <th class="sortable" data-col="action" onclick="sortPreview('action')" style="width:80px">
+          Action <span class="sort-arrow" id="sa-action">↕</span>
+        </th>
+        <th class="sortable" data-col="approved" onclick="sortPreview('approved')" style="width:80px">
+          Approved <span class="sort-arrow" id="sa-approved">↕</span>
+        </th>
+      </tr>
+    </thead>
+    <tbody id="preview-tbody">
+      {% for row in rows %}
+      <tr class="preview-row"
+          id="prow-{{ row.id }}"
+          data-id="{{ row.id }}"
+          data-cr-title="{{ row.cr_title | lower }}"
+          data-anilist-title="{{ (row.anilist_title or '') | lower }}"
+          data-action="{{ row.action }}"
+          data-confidence="{{ row.confidence }}"
+          data-approved="{{ '1' if row.approved else '0' }}"
+          data-episodes="{{ row.episodes_json | default('[]') | e }}">
+        <td style="padding:0 0.25rem">
+          <button type="button" class="ep-expand-btn" title="Show episode breakdown"
+                  onclick="toggleEpisodes({{ row.id }}, this)">▶</button>
+        </td>
+        <td>
+          {% if row.action != 'skip' %}
+          <input type="checkbox" class="row-check" data-id="{{ row.id }}"
+                 {% if row.approved %}checked{% endif %}
+                 onchange="handleRowCheck({{ row.id }}, this.checked)">
+          {% endif %}
+        </td>
+        <td>
+          <span class="cr-title-cell">{{ row.cr_title }}</span>
+        </td>
+        <td>
+          <span id="title-{{ row.id }}">
+            {% if row.anilist_id %}
+            <a href="https://anilist.co/anime/{{ row.anilist_id }}" target="_blank"
+               rel="noopener" class="title-romaji">
+              {{ row.anilist_title or ("AniList #" ~ row.anilist_id) }}
+            </a>
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+          </span>
+          <button type="button" class="btn btn-secondary btn-sm cr-fix-btn"
+                  onclick="openRematch({{ row.id }}, {{ row.cr_title | tojson }})">
+            Fix
+          </button>
+        </td>
+        <td>
+          {% set pct = (row.confidence * 100) | round | int %}
+          <span class="badge {% if pct >= 85 %}badge-success{% elif pct >= 70 %}badge-warning{% else %}badge-danger{% endif %}">
+            {{ pct }}%
+          </span>
+        </td>
+        <td style="font-size:0.82rem">
+          {% if row.current_status %}
+          <span class="badge {% if row.current_status == 'COMPLETED' %}badge-success{% elif row.current_status == 'CURRENT' %}badge-info{% else %}badge-muted{% endif %}">
+            {{ row.current_status }}
+          </span>
+          <div class="text-muted" style="font-size:0.78rem">ep {{ row.current_progress }}</div>
+          {% else %}
+          <span class="text-muted">—</span>
+          {% endif %}
+        </td>
+        <td style="font-size:0.82rem" id="proposed-{{ row.id }}">
+          <span class="badge {% if row.proposed_status == 'COMPLETED' %}badge-success{% else %}badge-info{% endif %}">
+            {{ row.proposed_status }}
+          </span>
+          <div class="text-muted" style="font-size:0.78rem">ep {{ row.proposed_progress }}</div>
+        </td>
+        <td id="action-cell-{{ row.id }}">
+          {% if row.action == 'add' %}
+          <span class="badge cr-badge-add">add</span>
+          {% elif row.action == 'update' %}
+          <span class="badge cr-badge-update">update</span>
+          {% else %}
+          <span class="badge cr-badge-synced" title="AniList already at or ahead of this episode">✓ Synced</span>
+          {% endif %}
+        </td>
+        <td id="approved-cell-{{ row.id }}">
+          {% if row.action != 'skip' %}
+          <span class="badge {% if row.approved %}badge-success{% else %}badge-muted{% endif %}"
+                id="approved-indicator-{{ row.id }}">
+            {% if row.approved %}Yes{% else %}No{% endif %}
+          </span>
+          {% else %}
+          <span class="text-muted">—</span>
+          {% endif %}
+        </td>
+      </tr>
+      <tr class="ep-detail-row" id="eprow-{{ row.id }}" style="display:none">
+        <td colspan="9" style="padding:0">
+          <div class="ep-detail-panel" id="eppanel-{{ row.id }}">
+            <div class="ep-detail-header">
+              <span class="ep-detail-title">Episodes scanned for
+                <strong>{{ row.cr_title }}</strong>
+                → matched to
+                <a href="https://anilist.co/anime/{{ row.anilist_id }}" target="_blank" rel="noopener">{{ row.anilist_title }}</a>
+              </span>
+              <div class="ep-detail-sort-bar">
+                Sort:
+                <button class="ep-sort-btn ep-sort-active" onclick="sortEpDetail({{ row.id }}, 'episode', this)">S/E</button>
+                <button class="ep-sort-btn" onclick="sortEpDetail({{ row.id }}, 'date', this)">Date</button>
+              </div>
+            </div>
+            <div class="ep-detail-table-wrap" id="eptable-{{ row.id }}">
+              <!-- Rendered by JS from data-episodes attribute -->
+            </div>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</div>
+
+{# ── HISTORY TAB ──────────────────────────────────────────────────────── #}
+<div id="pane-history" {% if active_tab != 'history' %}style="display:none"{% endif %}>
+
+  <div class="cr-toolbar">
+    <div class="cr-filters">
+      <input type="text" id="h-search" class="cr-filter-input" placeholder="Search show…"
+             oninput="filterHistory()">
+      <select id="h-status" class="cr-filter-select" onchange="filterHistory()">
+        <option value="">All status</option>
+        <option value="applied">Active</option>
+        <option value="undone">Undone</option>
+      </select>
+      <select id="h-change" class="cr-filter-select" onchange="filterHistory()">
+        <option value="">All changes</option>
+        <option value="new">New adds</option>
+        <option value="progress">Progress update</option>
+        <option value="completed">Completed</option>
+      </select>
+      <select id="h-recent" class="cr-filter-select" onchange="filterHistory()">
+        <option value="">All runs</option>
+        <option value="recent">Latest run only</option>
+      </select>
+    </div>
+    <div class="cr-bulk-actions">
+      <span id="h-count-label" class="text-muted" style="font-size:0.85rem"></span>
+    </div>
+  </div>
+
+  <div id="history-result" class="alert" style="display:none;margin-bottom:1rem"></div>
+  <div id="h-empty" class="text-muted" style="display:none;padding:2rem 0;text-align:center">
+    No entries match the current filters.
+  </div>
+
+  {% if not log_entries %}
+  <div class="card" style="text-align:center;padding:3rem 1.5rem">
+    <p class="text-muted" style="margin-bottom:1.5rem">
+      No sync history yet. Apply a preview run to see entries here.
+    </p>
+    <button class="btn btn-secondary" onclick="switchTab('preview')">Go to Preview</button>
+  </div>
+  {% else %}
+  <div style="overflow-x:auto">
+  <table class="table" id="history-table">
+    <thead>
+      <tr>
+        <th class="sortable" onclick="sortHistory('show_title')">
+          Show <span class="sort-arrow" id="hsa-show_title">↕</span>
+        </th>
+        <th style="width:180px">Before → After</th>
+        <th class="sortable" onclick="sortHistory('applied_at')" style="width:140px">
+          Applied <span class="sort-arrow" id="hsa-applied_at">↕</span>
+        </th>
+        <th style="width:100px">Run</th>
+        <th class="sortable" onclick="sortHistory('undone')" style="width:90px">
+          Status <span class="sort-arrow" id="hsa-undone">↕</span>
+        </th>
+        <th style="width:70px">Undo</th>
+      </tr>
+    </thead>
+    <tbody id="history-tbody">
+      {% for entry in log_entries %}
+      <tr class="history-row"
+          id="hrow-{{ entry.id }}"
+          data-show="{{ entry.show_title | lower }}"
+          data-undone="{{ '1' if entry.undone_at else '0' }}"
+          data-after-status="{{ entry.after_status | lower }}"
+          data-change-type="{{ 'new' if not entry.before_status else ('completed' if entry.after_status == 'COMPLETED' else 'progress') }}"
+          data-run-id="{{ entry.sync_run_id }}"
+          data-applied="{{ entry.applied_at or '' }}"
+          style="{% if entry.undone_at %}opacity:0.5{% endif %}">
+        <td>
+          <div style="display:flex;align-items:center;gap:0.5rem">
+            {% if entry.sync_run_id == latest_sync_run_id %}
+            <span class="badge cr-badge-recent" title="From latest sync run">New</span>
+            {% endif %}
+            <a href="https://anilist.co/anime/{{ entry.anilist_id }}" target="_blank"
+               rel="noopener" class="title-romaji">
+              {{ entry.show_title or ("AniList #" ~ entry.anilist_id) }}
+            </a>
+          </div>
+        </td>
+        <td style="font-size:0.82rem">
+          <div style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap">
+            {% if entry.before_status %}
+            <span class="badge {% if entry.before_status == 'COMPLETED' %}badge-success{% elif entry.before_status == 'CURRENT' %}badge-info{% else %}badge-muted{% endif %}">
+              {{ entry.before_status }} {{ entry.before_progress }}
+            </span>
+            {% else %}
+            <span class="text-muted" style="font-size:0.8rem">none</span>
+            {% endif %}
+            <span class="text-muted">→</span>
+            <span class="badge {% if entry.after_status == 'COMPLETED' %}badge-success{% elif entry.after_status == 'CURRENT' %}badge-info{% else %}badge-muted{% endif %}">
+              {{ entry.after_status }} {{ entry.after_progress }}
+            </span>
+          </div>
+        </td>
+        <td class="text-muted" style="font-size:0.82rem;white-space:nowrap">
+          {{ entry.applied_at[:16] if entry.applied_at else "—" }}
+        </td>
+        <td>
+          <span class="text-muted" style="font-size:0.78rem;font-family:monospace"
+                title="{{ entry.sync_run_id }}">
+            {{ entry.sync_run_id[:8] if entry.sync_run_id else "—" }}
+            {% if entry.sync_run_id == latest_sync_run_id %}
+            <span style="color:var(--accent)">●</span>
+            {% endif %}
+          </span>
+        </td>
+        <td id="undone-status-{{ entry.id }}">
+          {% if entry.undone_at %}
+          <span class="badge badge-muted">Undone</span>
+          {% else %}
+          <span class="badge badge-success">Active</span>
+          {% endif %}
+        </td>
+        <td>
+          <button type="button" class="btn btn-secondary btn-sm"
+                  id="undo-btn-{{ entry.id }}"
+                  {% if entry.undone_at %}disabled{% endif %}
+                  onclick="undoEntry({{ entry.id }}, {{ entry.show_title | tojson }})">
+            Undo
+          </button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</div>
+
+{% endif %}{# end if user #}
+
+{# ── Rematch modal ────────────────────────────────────────────────────── #}
+<div id="rematch-modal" class="modal" style="display:none">
+  <div class="modal-backdrop" onclick="closeRematch()"></div>
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3>Fix Match: <span id="rematch-source-title"></span></h3>
+      <button class="modal-close" onclick="closeRematch()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="search-bar">
+        <input type="text" id="rematch-search-input" placeholder="Search AniList…">
+        <button class="btn btn-primary btn-sm" onclick="searchRematch()">Search</button>
+      </div>
+      <div id="rematch-loading" class="text-muted" style="display:none;padding:1rem 0">Searching…</div>
+      <div id="rematch-results"></div>
+    </div>
+  </div>
+</div>
+
+{# ── Scan overlay ─────────────────────────────────────────────────────── #}
+<div id="scan-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);
+     z-index:9999;align-items:center;justify-content:center">
+  <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);
+              padding:2.5rem 3rem;text-align:center;max-width:420px">
+    <div class="progress-spinner" style="width:2rem;height:2rem;margin:0 auto 1rem"></div>
+    <p style="font-size:1.1rem;margin-bottom:0.5rem">Scanning Crunchyroll history…</p>
+    <p id="scan-overlay-detail" class="text-muted" style="font-size:0.9rem;margin-bottom:0.35rem">Starting…</p>
+    <p class="text-muted" style="font-size:0.8rem">Pages are fetched one at a time. This can take a minute.</p>
+  </div>
+</div>
+
+<style>
+/* ── Crunchyroll hub styles ────────────────────────────────────────────── */
+.cr-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.25rem;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+.cr-page-title { display: flex; align-items: baseline; gap: 1rem; }
+.cr-page-title h1 { margin: 0; font-size: 1.6rem; }
+.cr-page-actions { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
+.cr-run-selector { max-width: 280px; height: 2.2rem; font-size: 0.85rem; }
+
+.cr-stats-strip {
+  display: flex;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 1.25rem;
+}
+.cr-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  background: var(--bg-card);
+  min-width: 80px;
+}
+.cr-stat-value { font-size: 1.5rem; font-weight: 700; color: var(--accent); line-height: 1.2; }
+.cr-stat-label { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.15rem; }
+
+.cr-tab-bar {
+  display: flex;
+  border-bottom: 2px solid var(--border);
+  margin-bottom: 1rem;
+  gap: 0;
+}
+.cr-tab {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  padding: 0.6rem 1.5rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  transition: color 0.15s, border-color 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.cr-tab:hover { color: var(--text); }
+.cr-tab-active { color: var(--accent); border-bottom-color: var(--accent); }
+.cr-tab-count {
+  background: var(--border);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.1rem 0.45rem;
+  border-radius: 10px;
+}
+.cr-tab-active .cr-tab-count { background: rgba(61,180,242,0.15); color: var(--accent); }
+
+.cr-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+.cr-filters { display: flex; gap: 0.5rem; flex-wrap: wrap; flex: 1; }
+.cr-filter-input {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.4rem 0.7rem;
+  font-size: 0.85rem;
+  width: 180px;
+}
+.cr-filter-input:focus { outline: none; border-color: var(--accent); }
+.cr-filter-select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.cr-bulk-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+
+.sortable { cursor: pointer; user-select: none; }
+.sortable:hover { color: var(--accent); }
+.sort-arrow { font-size: 0.75rem; color: var(--text-muted); }
+.sort-arrow.asc::after { content: "▲"; }
+.sort-arrow.desc::after { content: "▼"; }
+
+.cr-title-cell { font-size: 0.9rem; }
+.cr-fix-btn { margin-left: 0.4rem; padding: 0.1rem 0.4rem; font-size: 0.72rem; }
+
+.cr-badge-add    { background:#1e4620;color:#4caf50;border:1px solid #4caf50; }
+.cr-badge-update { background:#3d2a00;color:#ff9800;border:1px solid #ff9800; }
+.cr-badge-synced { background:rgba(76,175,80,0.08);color:#6abf69;border:1px solid rgba(76,175,80,0.3);font-size:0.72rem; }
+.cr-badge-recent { background:rgba(61,180,242,0.15);color:var(--accent);
+                   border:1px solid rgba(61,180,242,0.4);font-size:0.65rem; }
+
+/* ── Episode expand button ──────────────────────────────────────────── */
+.ep-expand-btn {
+  background: none; border: none; color: var(--text-muted);
+  cursor: pointer; font-size: 0.7rem; padding: 0.15rem 0.3rem;
+  border-radius: 3px; transition: color 0.1s, background 0.1s;
+  line-height: 1;
+}
+.ep-expand-btn:hover { background: var(--border); color: var(--text); }
+.ep-expand-btn.open { color: var(--accent); }
+
+/* ── Episode detail panel ───────────────────────────────────────────── */
+.ep-detail-row td { background: var(--bg); }
+.ep-detail-panel {
+  border-top: 1px solid var(--border);
+  padding: 0.75rem 1rem 0.75rem 2.5rem;
+}
+.ep-detail-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 0.6rem; flex-wrap: wrap; gap: 0.5rem;
+}
+.ep-detail-title { font-size: 0.82rem; color: var(--text-muted); }
+.ep-detail-title strong, .ep-detail-title a { color: var(--text); }
+.ep-detail-sort-bar { display: flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; color: var(--text-muted); }
+.ep-sort-btn {
+  background: var(--border); border: none; color: var(--text-muted);
+  padding: 0.15rem 0.55rem; border-radius: 3px; cursor: pointer; font-size: 0.75rem;
+}
+.ep-sort-btn:hover { background: var(--accent); color: #fff; }
+.ep-sort-active { background: var(--accent); color: #fff; }
+.ep-detail-table-wrap { overflow-x: auto; }
+.ep-detail-table {
+  width: 100%; border-collapse: collapse; font-size: 0.8rem;
+}
+.ep-detail-table th {
+  text-align: left; padding: 0.3rem 0.6rem;
+  border-bottom: 1px solid var(--border); color: var(--text-muted);
+  font-weight: 600; white-space: nowrap;
+}
+.ep-detail-table td {
+  padding: 0.25rem 0.6rem; border-bottom: 1px solid rgba(255,255,255,0.04);
+  white-space: nowrap;
+}
+.ep-detail-table tr:last-child td { border-bottom: none; }
+.ep-detail-table .ep-movie-badge {
+  font-size: 0.65rem; padding: 0.05rem 0.35rem;
+  background: rgba(61,180,242,0.15); color: var(--accent);
+  border-radius: 3px; margin-left: 0.3rem;
+}
+
+.badge-info { background:rgba(61,180,242,0.15); color:var(--accent); }
+.badge-danger { background:rgba(232,93,117,0.15); color:var(--danger); }
+</style>
+
+<script>
+(function () {
+'use strict';
+
+var RUN_ID = {{ run_id | tojson }};
+var LATEST_SYNC_RUN = {{ latest_sync_run_id | tojson }};
+
+// ── Tab switching ──────────────────────────────────────────────────────
+window.switchTab = function (tab) {
+  ['preview','history'].forEach(function(t) {
+    document.getElementById('pane-' + t).style.display = t === tab ? '' : 'none';
+    document.getElementById('tab-' + t).classList.toggle('cr-tab-active', t === tab);
+    var ss = document.getElementById('stats-strip-' + t);
+    if (ss) ss.style.display = t === tab ? '' : 'none';
+  });
+  history.replaceState(null, '', window.location.pathname +
+    (RUN_ID ? '?run_id=' + encodeURIComponent(RUN_ID) : '') +
+    '&tab=' + tab);
+};
+
+// ── Run selector ───────────────────────────────────────────────────────
+window.changeRun = function (runId) {
+  var tab = document.querySelector('.cr-tab-active')?.id?.replace('tab-', '') || 'preview';
+  window.location = '/crunchyroll?run_id=' + encodeURIComponent(runId) + '&tab=' + tab;
+};
+
+// ── New scan ───────────────────────────────────────────────────────────
+var _scanPollTimer = null;
+
+window.startNewScan = function () {
+  var overlay = document.getElementById('scan-overlay');
+  var overlayDetail = document.getElementById('scan-overlay-detail');
+  overlay.style.display = 'flex';
+  var btn = document.getElementById('new-scan-btn');
+  if (btn) btn.disabled = true;
+
+  fetch('/api/crunchyroll/preview-scan', { method: 'POST' })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (!d.ok) {
+        overlay.style.display = 'none';
+        alert('Could not start scan: ' + (d.error || 'Unknown'));
+        if (btn) btn.disabled = false;
+        return;
+      }
+      // Scan started — poll for completion
+      _pollScanStatus(overlay, overlayDetail, btn);
+    })
+    .catch(function(e){
+      overlay.style.display = 'none';
+      alert('Scan failed: ' + e);
+      if (btn) btn.disabled = false;
+    });
+};
+
+function _pollScanStatus(overlay, overlayDetail, btn) {
+  if (_scanPollTimer) clearTimeout(_scanPollTimer);
+  _scanPollTimer = setTimeout(function() {
+    fetch('/api/crunchyroll/preview-scan/status')
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (d.status === 'authenticating') {
+          if (overlayDetail) overlayDetail.textContent = 'Authenticating with Crunchyroll…';
+          _pollScanStatus(overlay, overlayDetail, btn);
+        } else if (d.status === 'scanning') {
+          if (overlayDetail) {
+            var msg = 'Page ' + d.current_page;
+            if (d.max_pages) msg += ' / ' + d.max_pages;
+            if (d.entries_found) msg += ' — ' + d.entries_found + ' entries found';
+            overlayDetail.textContent = msg;
+          }
+          _pollScanStatus(overlay, overlayDetail, btn);
+        } else if (d.status === 'complete') {
+          overlay.style.display = 'none';
+          window.location = '/crunchyroll?run_id=' + encodeURIComponent(d.run_id) + '&tab=preview';
+        } else if (d.status === 'error') {
+          overlay.style.display = 'none';
+          alert('Scan failed: ' + (d.error || 'Unknown error'));
+          if (btn) btn.disabled = false;
+        } else {
+          // idle or unknown — retry once more
+          _pollScanStatus(overlay, overlayDetail, btn);
+        }
+      })
+      .catch(function(){ _pollScanStatus(overlay, overlayDetail, btn); });
+  }, 1500);
+}
+
+// ── Preview filtering ──────────────────────────────────────────────────
+window.filterPreview = function () {
+  var search  = (document.getElementById('p-search')?.value || '').toLowerCase();
+  var action  = document.getElementById('p-action')?.value || '';
+  var conf    = document.getElementById('p-conf')?.value || '';
+  var approved = document.getElementById('p-approved')?.value || '';
+  var rows = document.querySelectorAll('#preview-tbody .preview-row');
+  var visible = 0;
+
+  rows.forEach(function(row) {
+    var ok = true;
+    if (search && !row.dataset.crTitle.includes(search) && !row.dataset.anilistTitle.includes(search)) ok = false;
+    if (action && row.dataset.action !== action) ok = false;
+    if (conf) {
+      var pct = parseFloat(row.dataset.confidence) * 100;
+      if (conf === '85' && pct < 85) ok = false;
+      if (conf === '70' && pct < 70) ok = false;
+      if (conf === 'low' && pct >= 70) ok = false;
+    }
+    if (approved) {
+      var isApproved = row.dataset.approved === '1';
+      if (approved === 'yes' && !isApproved) ok = false;
+      if (approved === 'no' && isApproved) ok = false;
+    }
+    row.style.display = ok ? '' : 'none';
+    // Keep detail row hidden when its parent is filtered out
+    var detailRow = document.getElementById('eprow-' + row.dataset.id);
+    if (detailRow && !ok) detailRow.style.display = 'none';
+    if (ok) visible++;
+  });
+
+  var empty = document.getElementById('p-empty');
+  if (empty) empty.style.display = visible === 0 && rows.length > 0 ? '' : 'none';
+};
+
+// ── Preview sort ───────────────────────────────────────────────────────
+var previewSortCol = '';
+var previewSortAsc = true;
+
+window.sortPreview = function (col) {
+  if (previewSortCol === col) { previewSortAsc = !previewSortAsc; }
+  else { previewSortCol = col; previewSortAsc = true; }
+
+  document.querySelectorAll('.sort-arrow[id^="sa-"]').forEach(function(el) {
+    el.className = 'sort-arrow';
+  });
+  var arrow = document.getElementById('sa-' + col);
+  if (arrow) arrow.className = 'sort-arrow ' + (previewSortAsc ? 'asc' : 'desc');
+
+  var tbody = document.getElementById('preview-tbody');
+  if (!tbody) return;
+  var rows = Array.from(tbody.querySelectorAll('.preview-row'));
+
+  rows.sort(function(a, b) {
+    var av = getPreviewVal(a, col);
+    var bv = getPreviewVal(b, col);
+    var cmp = av < bv ? -1 : av > bv ? 1 : 0;
+    return previewSortAsc ? cmp : -cmp;
+  });
+  rows.forEach(function(r) {
+    tbody.appendChild(r);
+    var detailRow = document.getElementById('eprow-' + r.dataset.id);
+    if (detailRow) tbody.appendChild(detailRow);
+  });
+};
+
+function getPreviewVal(row, col) {
+  if (col === 'cr_title') return row.dataset.crTitle || '';
+  if (col === 'anilist_title') return row.dataset.anilistTitle || '';
+  if (col === 'confidence') return parseFloat(row.dataset.confidence || '0');
+  if (col === 'action') return row.dataset.action || '';
+  if (col === 'approved') return row.dataset.approved || '0';
+  return '';
+}
+
+// ── History filtering ──────────────────────────────────────────────────
+window.filterHistory = function () {
+  var search  = (document.getElementById('h-search')?.value || '').toLowerCase();
+  var status  = document.getElementById('h-status')?.value || '';
+  var change  = document.getElementById('h-change')?.value || '';
+  var recent  = document.getElementById('h-recent')?.value || '';
+  var rows = document.querySelectorAll('#history-tbody .history-row');
+  var visible = 0;
+
+  rows.forEach(function(row) {
+    var ok = true;
+    if (search && !row.dataset.show.includes(search)) ok = false;
+    if (status === 'applied' && row.dataset.undone === '1') ok = false;
+    if (status === 'undone' && row.dataset.undone !== '1') ok = false;
+    if (change && row.dataset.changeType !== change) ok = false;
+    if (recent === 'recent' && row.dataset.runId !== LATEST_SYNC_RUN) ok = false;
+    row.style.display = ok ? '' : 'none';
+    if (ok) visible++;
+  });
+
+  var empty = document.getElementById('h-empty');
+  if (empty) empty.style.display = visible === 0 && rows.length > 0 ? '' : 'none';
+
+  var label = document.getElementById('h-count-label');
+  if (label) label.textContent = visible + ' of ' + rows.length + ' entries';
+};
+
+// ── History sort ───────────────────────────────────────────────────────
+var historySortCol = 'applied_at';
+var historySortAsc = false;
+
+window.sortHistory = function (col) {
+  if (historySortCol === col) { historySortAsc = !historySortAsc; }
+  else { historySortCol = col; historySortAsc = true; }
+
+  document.querySelectorAll('.sort-arrow[id^="hsa-"]').forEach(function(el) {
+    el.className = 'sort-arrow';
+  });
+  var arrow = document.getElementById('hsa-' + col);
+  if (arrow) arrow.className = 'sort-arrow ' + (historySortAsc ? 'asc' : 'desc');
+
+  var tbody = document.getElementById('history-tbody');
+  if (!tbody) return;
+  var rows = Array.from(tbody.querySelectorAll('.history-row'));
+
+  rows.sort(function(a, b) {
+    var av = getHistoryVal(a, col);
+    var bv = getHistoryVal(b, col);
+    var cmp = av < bv ? -1 : av > bv ? 1 : 0;
+    return historySortAsc ? cmp : -cmp;
+  });
+  rows.forEach(function(r) { tbody.appendChild(r); });
+};
+
+function getHistoryVal(row, col) {
+  if (col === 'show_title') return row.dataset.show || '';
+  if (col === 'applied_at') return row.dataset.applied || '';
+  if (col === 'undone') return row.dataset.undone || '0';
+  return '';
+}
+
+// ── Episode expand / detail ────────────────────────────────────────────
+var _epSortState = {}; // rowId -> 'episode' | 'date'
+
+window.toggleEpisodes = function (rowId, btn) {
+  var detailRow = document.getElementById('eprow-' + rowId);
+  if (!detailRow) return;
+  var open = detailRow.style.display !== 'none';
+  detailRow.style.display = open ? 'none' : '';
+  btn.textContent = open ? '▶' : '▼';
+  btn.classList.toggle('open', !open);
+  if (!open) _renderEpDetail(rowId);
+};
+
+function _renderEpDetail(rowId) {
+  var mainRow = document.getElementById('prow-' + rowId);
+  if (!mainRow) return;
+  var raw = mainRow.dataset.episodes || '[]';
+  var episodes;
+  try { episodes = JSON.parse(raw); } catch(e) { episodes = []; }
+  var sortMode = _epSortState[rowId] || 'episode';
+  _drawEpTable(rowId, episodes, sortMode);
+}
+
+function _drawEpTable(rowId, episodes, sortMode) {
+  var wrap = document.getElementById('eptable-' + rowId);
+  if (!wrap) return;
+  if (!episodes || !episodes.length) {
+    wrap.innerHTML = '<p class="text-muted" style="font-size:0.8rem;padding:0.5rem 0">No episode data recorded for this entry.</p>';
+    return;
+  }
+
+  var sorted = episodes.slice();
+  if (sortMode === 'date') {
+    sorted.sort(function(a, b) {
+      var da = a.watch_date || '', db = b.watch_date || '';
+      return da < db ? 1 : da > db ? -1 : 0; // newest first
+    });
+  } else {
+    sorted.sort(function(a, b) {
+      if (a.cr_season !== b.cr_season) return a.cr_season - b.cr_season;
+      return a.cr_episode - b.cr_episode;
+    });
+  }
+
+  var html = '<table class="ep-detail-table"><thead><tr>' +
+    '<th>S/E</th><th>Season Title</th><th>Episode Title</th><th>Watch Date</th>' +
+    '</tr></thead><tbody>';
+
+  sorted.forEach(function(ep) {
+    var se = ep.is_movie
+      ? 'Movie'
+      : ('S' + (ep.cr_season || 1) + ' E' + ep.cr_episode);
+    var movieBadge = ep.is_movie ? '<span class="ep-movie-badge">MOVIE</span>' : '';
+    html += '<tr>' +
+      '<td><strong>' + esc(se) + '</strong>' + movieBadge + '</td>' +
+      '<td>' + esc(ep.season_title || '—') + '</td>' +
+      '<td>' + esc(ep.episode_title || '—') + '</td>' +
+      '<td class="text-muted">' + esc((ep.watch_date || '').slice(0, 10) || '—') + '</td>' +
+      '</tr>';
+  });
+
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+}
+
+window.sortEpDetail = function (rowId, mode, btn) {
+  _epSortState[rowId] = mode;
+  var panel = document.getElementById('eppanel-' + rowId);
+  if (panel) {
+    panel.querySelectorAll('.ep-sort-btn').forEach(function(b) {
+      b.classList.remove('ep-sort-active');
+    });
+  }
+  if (btn) btn.classList.add('ep-sort-active');
+  _renderEpDetail(rowId);
+};
+
+// ── Approve / check helpers ────────────────────────────────────────────
+window.handleRowCheck = function (entryId, checked) {
+  if (!RUN_ID) return;
+  fetch('/api/crunchyroll/preview/' + RUN_ID + '/approve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ entry_ids: [entryId], approved: checked }),
+  })
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if (!d.ok) { alert('Error: ' + (d.error || 'Unknown')); return; }
+    var ind = document.getElementById('approved-indicator-' + entryId);
+    if (ind) { ind.textContent = checked ? 'Yes' : 'No'; ind.className = 'badge ' + (checked ? 'badge-success' : 'badge-muted'); }
+    var row = document.getElementById('prow-' + entryId);
+    if (row) row.dataset.approved = checked ? '1' : '0';
+  })
+  .catch(function(e){ alert('Error: ' + e); });
+};
+
+window.toggleAllChecks = function (checked) {
+  document.querySelectorAll('.row-check').forEach(function(cb) {
+    var entryId = parseInt(cb.dataset.id, 10);
+    if (cb.checked !== checked) { cb.checked = checked; handleRowCheck(entryId, checked); }
+  });
+};
+
+window.bulkApprove = function (approved, highConfOnly) {
+  if (!RUN_ID) return;
+  var body;
+  if (!approved && !highConfOnly) {
+    body = { approve_all: true, approved: false };
+  } else if (!highConfOnly) {
+    body = { approve_all: true, approved: true };
+  } else {
+    var ids = [];
+    document.querySelectorAll('.preview-row').forEach(function(row) {
+      if (parseFloat(row.dataset.confidence || '0') >= 0.85 && row.dataset.action !== 'skip')
+        ids.push(parseInt(row.dataset.id, 10));
+    });
+    if (!ids.length) { alert('No high-confidence entries to approve.'); return; }
+    body = { entry_ids: ids, approved: true };
+  }
+
+  fetch('/api/crunchyroll/preview/' + RUN_ID + '/approve', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  })
+  .then(function(r){ return r.json(); })
+  .then(function(d){ if (d.ok) location.reload(); else alert('Error: ' + (d.error || 'Unknown')); })
+  .catch(function(e){ alert('Error: ' + e); });
+};
+
+// ── Apply approved ─────────────────────────────────────────────────────
+window.applyApproved = function () {
+  if (!RUN_ID) return;
+  if (!confirm('Apply all approved entries to AniList?\nThis can be undone per-entry via the History tab.')) return;
+
+  var resultDiv = document.getElementById('apply-result');
+  resultDiv.style.display = 'none';
+  var btn = document.getElementById('apply-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Applying…'; }
+
+  fetch('/api/crunchyroll/preview/' + RUN_ID + '/apply', { method: 'POST' })
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if (btn) { btn.disabled = false; btn.textContent = 'Apply Approved →'; }
+    resultDiv.style.display = 'block';
+    if (d.ok) {
+      resultDiv.className = 'alert alert-success';
+      resultDiv.innerHTML = 'Applied <strong>' + d.applied + '</strong> entries to AniList.' +
+        (d.errors ? ' <span style="color:var(--danger)">' + d.errors + ' error(s).</span>' : '') +
+        ' <button class="btn btn-secondary btn-sm" style="margin-left:0.75rem" onclick="switchTab(\'history\')">View History</button>';
+    } else {
+      resultDiv.className = 'alert alert-danger';
+      resultDiv.textContent = 'Error: ' + (d.error || 'Unknown');
+    }
+  })
+  .catch(function(e){
+    if (btn) { btn.disabled = false; btn.textContent = 'Apply Approved →'; }
+    resultDiv.style.display = 'block';
+    resultDiv.className = 'alert alert-danger';
+    resultDiv.textContent = 'Error: ' + e;
+  });
+};
+
+// ── Undo ───────────────────────────────────────────────────────────────
+window.undoEntry = function (logId, showTitle) {
+  var label = showTitle || ('Entry #' + logId);
+  if (!confirm('Undo "' + label + '"?\nThis reverts the AniList progress to its previous state.')) return;
+
+  var btn = document.getElementById('undo-btn-' + logId);
+  if (btn) { btn.disabled = true; btn.textContent = 'Undoing…'; }
+  var resultDiv = document.getElementById('history-result');
+
+  fetch('/api/crunchyroll/undo/' + logId, { method: 'POST' })
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if (d.ok) {
+      var row = document.getElementById('hrow-' + logId);
+      if (row) { row.style.opacity = '0.5'; row.dataset.undone = '1'; }
+      var statusEl = document.getElementById('undone-status-' + logId);
+      if (statusEl) statusEl.innerHTML = '<span class="badge badge-muted">Undone</span>';
+      if (btn) btn.textContent = 'Undone';
+      resultDiv.style.display = 'block';
+      resultDiv.className = 'alert alert-success';
+      resultDiv.textContent = '"' + label + '" reverted on AniList.';
+    } else {
+      if (btn) { btn.disabled = false; btn.textContent = 'Undo'; }
+      resultDiv.style.display = 'block';
+      resultDiv.className = 'alert alert-danger';
+      resultDiv.textContent = 'Error: ' + (d.error || 'Unknown');
+    }
+  })
+  .catch(function(e){
+    if (btn) { btn.disabled = false; btn.textContent = 'Undo'; }
+    resultDiv.style.display = 'block';
+    resultDiv.className = 'alert alert-danger';
+    resultDiv.textContent = 'Error: ' + e;
+  });
+};
+
+// ── Rematch modal ──────────────────────────────────────────────────────
+var _rematchEntryId = null;
+var _rematchCrTitle = '';
+
+window.openRematch = function (entryId, crTitle) {
+  _rematchEntryId = entryId;
+  _rematchCrTitle = crTitle;
+  document.getElementById('rematch-source-title').textContent = crTitle;
+  var input = document.getElementById('rematch-search-input');
+  input.value = crTitle;
+  document.getElementById('rematch-results').innerHTML = '';
+  document.getElementById('rematch-modal').style.display = 'flex';
+  searchRematch();
+  setTimeout(function() { input.focus(); input.select(); }, 100);
+};
+
+window.closeRematch = function () {
+  document.getElementById('rematch-modal').style.display = 'none';
+  _rematchEntryId = null;
+};
+
+window.searchRematch = function () {
+  var q = document.getElementById('rematch-search-input').value.trim();
+  if (!q) return;
+  var resultsDiv = document.getElementById('rematch-results');
+  var loadingDiv = document.getElementById('rematch-loading');
+  resultsDiv.innerHTML = '';
+  loadingDiv.style.display = 'block';
+
+  fetch('/api/crunchyroll/search?q=' + encodeURIComponent(q))
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    loadingDiv.style.display = 'none';
+    var results = d.results || [];
+    if (!results.length) { resultsDiv.innerHTML = '<p class="text-muted" style="padding:1rem 0">No results.</p>'; return; }
+    var html = '';
+    results.forEach(function(r) {
+      var meta = [r.format || '', r.episodes ? r.episodes + ' ep' : ''].filter(Boolean).join(' · ');
+      html += '<div class="search-result">';
+      if (r.cover_image) html += '<img class="search-result-cover" src="' + esc(r.cover_image) + '" alt="">';
+      else html += '<div class="search-result-cover search-result-cover-placeholder"></div>';
+      html += '<div class="search-result-info">';
+      html += '<div class="title-romaji">' + esc(r.title) + '</div>';
+      if (r.title_english && r.title_english !== r.title)
+        html += '<div class="title-english">' + esc(r.title_english) + '</div>';
+      if (meta) html += '<div class="search-result-meta text-muted">' + esc(meta) + '</div>';
+      html += '</div>';
+      html += '<button type="button" class="btn btn-primary btn-sm" onclick="selectRematch(' + r.id + ',' + JSON.stringify(r.title) + ')">Select</button>';
+      html += '</div>';
+    });
+    resultsDiv.innerHTML = html;
+  })
+  .catch(function(){ loadingDiv.style.display = 'none'; resultsDiv.innerHTML = '<p class="text-muted">Search failed.</p>'; });
+};
+
+window.selectRematch = function (anilistId, anilistTitle) {
+  if (!_rematchEntryId || !RUN_ID) return;
+  fetch('/api/crunchyroll/preview/' + RUN_ID + '/update-entry', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ entry_id: _rematchEntryId, anilist_id: anilistId, cr_title: _rematchCrTitle }),
+  })
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if (d.ok) { closeRematch(); location.reload(); }
+    else alert('Error: ' + (d.error || 'Unknown'));
+  })
+  .catch(function(e){ alert('Error: ' + e); });
+};
+
+function esc(str) {
+  if (!str) return '';
+  var d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeRematch(); });
+var si = document.getElementById('rematch-search-input');
+if (si) si.addEventListener('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); searchRematch(); } });
+
+// Init history count label
+filterHistory();
+// Set initial sort arrow for history
+var initArrow = document.getElementById('hsa-applied_at');
+if (initArrow) initArrow.className = 'sort-arrow desc';
+
+// On load: resume polling if a scan is already in progress
+(function checkInFlightScan() {
+  fetch('/api/crunchyroll/preview-scan/status')
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d.status === 'scanning' || d.status === 'authenticating') {
+        var overlay = document.getElementById('scan-overlay');
+        var overlayDetail = document.getElementById('scan-overlay-detail');
+        var btn = document.getElementById('new-scan-btn');
+        if (overlay) overlay.style.display = 'flex';
+        if (btn) btn.disabled = true;
+        _pollScanStatus(overlay, overlayDetail, btn);
+      }
+    })
+    .catch(function(){});
+})();
+
+})();
+</script>
+{% endblock %}

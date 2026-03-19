@@ -1,4 +1,4 @@
-"""Manual grab — search Prowlarr and send torrents to qBittorrent."""
+"""Manual grab — search Sonarr/Radarr indexers and send releases to *arr."""
 
 from __future__ import annotations
 
@@ -8,15 +8,13 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from src.Clients.ProwlarrClient import ProwlarrClient
-from src.Clients.QBittorrentClient import QBittorrentClient
-from src.Utils.NamingTranslator import get_all_titles
+from src.Clients.RadarrClient import RadarrClient
+from src.Clients.SonarrClient import SonarrClient
+from src.Utils.NamingTranslator import is_movie_format
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["manual-grab"])
-
-_DEFAULT_SAVE_PATH = "/data/anime"
 
 
 @router.get("/grab/{anilist_id}", response_class=HTMLResponse)
@@ -25,7 +23,6 @@ async def grab_page(request: Request, anilist_id: int) -> HTMLResponse:
     db = request.app.state.db
     templates = request.app.state.templates
 
-    # Try to get title from watchlist first, fall back to anilist_cache
     title = ""
     anilist_format = ""
     cover_image = ""
@@ -63,107 +60,150 @@ async def grab_page(request: Request, anilist_id: int) -> HTMLResponse:
 
 @router.get("/api/grab/search")
 async def grab_search(request: Request) -> JSONResponse:
-    """Search Prowlarr for releases for a given AniList entry.
+    """Search Sonarr or Radarr for releases for a given AniList entry.
+
+    The entry must already be added to Sonarr/Radarr (via the Download Manager
+    or auto-sync). Uses the *arr's configured indexers — no Prowlarr needed.
 
     Query params: anilist_id (required)
     """
     db = request.app.state.db
     config = request.app.state.config
-    anilist_client = request.app.state.anilist_client
 
     anilist_id_str = request.query_params.get("anilist_id", "")
     if not anilist_id_str or not anilist_id_str.isdigit():
         return JSONResponse({"error": "anilist_id is required"}, status_code=400)
     anilist_id = int(anilist_id_str)
 
-    if not config.prowlarr.url or not config.prowlarr.api_key:
-        return JSONResponse({"error": "Prowlarr not configured"}, status_code=503)
-
-    # Gather title and synonyms
-    main_title = ""
-    alt_titles: list[str] = []
-
+    # Determine format (series vs movie)
+    anilist_format = ""
     users = await db.get_users_by_service("anilist")
     if users:
         entry = await db.get_watchlist_entry(users[0]["user_id"], anilist_id)
         if entry:
-            main_title = entry.get("anilist_title", "")
+            anilist_format = entry.get("anilist_format", "") or ""
 
-    if not main_title:
+    if not anilist_format:
         cached = await db.get_cached_metadata(anilist_id)
         if cached:
-            main_title = (
-                cached.get("title_romaji")
-                or cached.get("title_english")
-                or cached.get("title_native")
-                or ""
-            )
+            anilist_format = cached.get("format", "") or ""
 
-    # Fetch synonyms from AniList API if possible
-    if main_title:
-        try:
-            media = await anilist_client.get_anime_by_id(anilist_id)
-            if media:
-                all_t = get_all_titles(media)
-                alt_titles = [t for t in all_t if t != main_title]
-        except Exception:
-            logger.debug("Could not fetch AniList synonyms for id=%d", anilist_id)
+    is_movie = is_movie_format(anilist_format)
 
-    prowlarr = ProwlarrClient(
-        url=config.prowlarr.url,
-        api_key=config.prowlarr.api_key,
+    if is_movie:
+        return await _search_radarr(anilist_id, config, db)
+    else:
+        return await _search_sonarr(anilist_id, config, db)
+
+
+async def _search_sonarr(anilist_id: int, config: Any, db: Any) -> JSONResponse:
+    if not config.sonarr.url or not config.sonarr.api_key:
+        return JSONResponse({"error": "Sonarr not configured"}, status_code=503)
+
+    mapping = await db.fetch_one(
+        "SELECT sonarr_id FROM anilist_sonarr_mapping"
+        " WHERE anilist_id=? AND in_sonarr=1",
+        (anilist_id,),
     )
-    try:
-        results = await prowlarr.search_anime(
-            query=main_title or f"AniList {anilist_id}",
-            titles=alt_titles,
+    if not mapping:
+        return JSONResponse(
+            {
+                "error": "Not in Sonarr yet. Add it via the Download Manager first.",
+                "needs_add": True,
+                "service": "sonarr",
+            },
+            status_code=404,
         )
+
+    sonarr_id: int = mapping["sonarr_id"]
+    client = SonarrClient(url=config.sonarr.url, api_key=config.sonarr.api_key)
+    try:
+        raw = await client.search_releases(sonarr_id)
     except Exception as exc:
-        logger.error("Prowlarr search failed: %s", exc)
-        await prowlarr.close()
+        logger.error("Sonarr release search failed: %s", exc)
+        await client.close()
         return JSONResponse({"error": str(exc)}, status_code=500)
     finally:
-        await prowlarr.close()
-
-    result_dicts = [
-        {
-            "guid": r.guid,
-            "title": r.title,
-            "size_mb": round(r.size / (1024 * 1024), 1) if r.size else 0,
-            "seeders": r.seeders,
-            "leechers": r.leechers,
-            "indexer": r.indexer,
-            "quality": r.quality,
-            "is_torrent": r.is_torrent,
-            "download_url": r.download_url,
-            "magnet_url": r.magnet_url,
-            "publish_date": r.publish_date,
-        }
-        for r in results
-    ]
+        await client.close()
 
     return JSONResponse(
-        {
-            "ok": True,
-            "anilist_title": main_title,
-            "results": result_dicts,
-        }
+        {"ok": True, "service": "sonarr", "results": _normalise_releases(raw)}
     )
+
+
+async def _search_radarr(anilist_id: int, config: Any, db: Any) -> JSONResponse:
+    if not config.radarr.url or not config.radarr.api_key:
+        return JSONResponse({"error": "Radarr not configured"}, status_code=503)
+
+    mapping = await db.fetch_one(
+        "SELECT radarr_id FROM anilist_radarr_mapping"
+        " WHERE anilist_id=? AND in_radarr=1",
+        (anilist_id,),
+    )
+    if not mapping:
+        return JSONResponse(
+            {
+                "error": "Not in Radarr yet. Add it via the Download Manager first.",
+                "needs_add": True,
+                "service": "radarr",
+            },
+            status_code=404,
+        )
+
+    radarr_id: int = mapping["radarr_id"]
+    client = RadarrClient(url=config.radarr.url, api_key=config.radarr.api_key)
+    try:
+        raw = await client.search_releases(radarr_id)
+    except Exception as exc:
+        logger.error("Radarr release search failed: %s", exc)
+        await client.close()
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    finally:
+        await client.close()
+
+    return JSONResponse(
+        {"ok": True, "service": "radarr", "results": _normalise_releases(raw)}
+    )
+
+
+def _normalise_releases(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Normalise Sonarr/Radarr release objects into a consistent shape."""
+    out = []
+    for r in raw:
+        quality_obj = r.get("quality", {})
+        quality_name = (
+            quality_obj.get("quality", {}).get("name", "")
+            if isinstance(quality_obj, dict)
+            else ""
+        )
+        size_bytes: int = r.get("size", 0) or 0
+        out.append(
+            {
+                "guid": r.get("guid", ""),
+                "indexer_id": r.get("indexerId", 0),
+                "title": r.get("title", ""),
+                "size_mb": round(size_bytes / (1024 * 1024), 1) if size_bytes else 0,
+                "quality": quality_name,
+                "protocol": r.get("protocol", ""),
+                "indexer": r.get("indexer", ""),
+                "seeders": r.get("seeders"),
+                "leechers": r.get("leechers"),
+                "publish_date": r.get("publishDate", ""),
+                "approved": r.get("approved", False),
+                "rejections": r.get("rejections", []),
+                "release_group": r.get("releaseGroup", ""),
+            }
+        )
+    return out
 
 
 @router.post("/api/grab/download")
 async def grab_download(request: Request) -> JSONResponse:
-    """Send a release to qBittorrent.
+    """Tell Sonarr or Radarr to grab a specific release.
 
-    Body JSON:
-      anilist_id, download_url_or_magnet, title,
-      save_path (optional), category (optional)
+    Body JSON: { guid, indexer_id, service ("sonarr"|"radarr") }
     """
-    db = request.app.state.db
     config = request.app.state.config
-
-    if not config.qbittorrent.url:
-        return JSONResponse({"error": "qBittorrent not configured"}, status_code=503)
 
     body: dict[str, Any] = {}
     try:
@@ -171,82 +211,30 @@ async def grab_download(request: Request) -> JSONResponse:
     except Exception:
         return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
 
-    url_or_magnet: str = body.get("download_url_or_magnet") or body.get(
-        "magnet_url", ""
-    )
-    if not url_or_magnet:
-        return JSONResponse(
-            {"error": "download_url_or_magnet is required"}, status_code=400
+    guid: str = body.get("guid", "")
+    indexer_id: int = int(body.get("indexer_id", 0))
+    service: str = body.get("service", "sonarr")
+
+    if not guid:
+        return JSONResponse({"error": "guid is required"}, status_code=400)
+
+    if service == "radarr":
+        if not config.radarr.url or not config.radarr.api_key:
+            return JSONResponse({"error": "Radarr not configured"}, status_code=503)
+        client: SonarrClient | RadarrClient = RadarrClient(
+            url=config.radarr.url, api_key=config.radarr.api_key
         )
+    else:
+        if not config.sonarr.url or not config.sonarr.api_key:
+            return JSONResponse({"error": "Sonarr not configured"}, status_code=503)
+        client = SonarrClient(url=config.sonarr.url, api_key=config.sonarr.api_key)
 
-    # Determine save_path
-    save_path: str = body.get("save_path", "")
-    if not save_path:
-        save_path = (
-            await db.get_setting("restructure.local_path_prefix") or _DEFAULT_SAVE_PATH
-        )
-
-    category: str = body.get("category", "anilist-link")
-
-    qbit = QBittorrentClient(
-        url=config.qbittorrent.url,
-        username=config.qbittorrent.username,
-        password=config.qbittorrent.password,
-    )
     try:
-        ok = await qbit.add_torrent(
-            url_or_magnet=url_or_magnet,
-            save_path=save_path,
-            category=category,
-            name=body.get("title"),
-        )
-        if ok:
-            logger.info(
-                "Sent torrent to qBittorrent: anilist_id=%s, url=%s…",
-                body.get("anilist_id", "?"),
-                url_or_magnet[:60],
-            )
-            return JSONResponse({"ok": True})
-        else:
-            return JSONResponse(
-                {"error": "qBittorrent rejected the request"}, status_code=500
-            )
+        result = await client.grab_release(guid=guid, indexer_id=indexer_id)
+        logger.info("Grabbed release via %s: guid=%s", service, guid[:40])
+        return JSONResponse({"ok": True, "title": result.get("title", "")})
     except Exception as exc:
-        logger.error("qBittorrent add failed: %s", exc)
+        logger.error("%s grab failed: %s", service, exc)
         return JSONResponse({"error": str(exc)}, status_code=500)
     finally:
-        await qbit.close()
-
-
-@router.get("/api/grab/qbit/status")
-async def qbit_status(request: Request) -> JSONResponse:
-    """Return active torrents from qBittorrent."""
-    config = request.app.state.config
-
-    if not config.qbittorrent.url:
-        return JSONResponse({"error": "qBittorrent not configured"}, status_code=503)
-
-    qbit = QBittorrentClient(
-        url=config.qbittorrent.url,
-        username=config.qbittorrent.username,
-        password=config.qbittorrent.password,
-    )
-    try:
-        torrents_raw = await qbit.get_torrents(category="anilist-link")
-        torrents = [
-            {
-                "name": t.get("name", ""),
-                "state": t.get("state", ""),
-                "progress": round(t.get("progress", 0) * 100, 1),
-                "size": t.get("size", 0),
-                "speed": t.get("dlspeed", 0),
-                "hash": t.get("hash", ""),
-            }
-            for t in torrents_raw
-        ]
-        return JSONResponse({"ok": True, "torrents": torrents})
-    except Exception as exc:
-        logger.error("qBittorrent status check failed: %s", exc)
-        return JSONResponse({"error": str(exc)}, status_code=500)
-    finally:
-        await qbit.close()
+        await client.close()

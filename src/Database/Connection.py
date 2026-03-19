@@ -182,6 +182,43 @@ class DatabaseManager:
     async def delete_user(self, user_id: str) -> None:
         await self.execute("DELETE FROM users WHERE user_id=?", (user_id,))
 
+    async def get_recent_activity(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Return recent activity across all log tables, ordered by timestamp."""
+        parts: list[str] = []
+        # Guard for each table — only include if it exists
+        try:
+            await self.fetch_one("SELECT 1 FROM cr_sync_log LIMIT 1")
+            parts.append(
+                "SELECT 'cr_sync' AS type, show_title AS label, applied_at AS ts"
+                " FROM cr_sync_log WHERE undone_at IS NULL"
+            )
+        except Exception:
+            pass
+        try:
+            await self.fetch_one("SELECT 1 FROM restructure_log LIMIT 1")
+            parts.append(
+                "SELECT 'restructure' AS type, group_title AS label, executed_at AS ts"
+                " FROM restructure_log"
+            )
+        except Exception:
+            pass
+        try:
+            await self.fetch_one("SELECT 1 FROM download_requests LIMIT 1")
+            parts.append(
+                "SELECT 'download' AS type, anilist_title AS label, created_at AS ts"
+                " FROM download_requests"
+            )
+        except Exception:
+            pass
+        if not parts:
+            return []
+        sql = (
+            "SELECT type, label, ts FROM ("
+            + " UNION ALL ".join(parts)
+            + ") ORDER BY ts DESC LIMIT ?"
+        )
+        return await self.fetch_all(sql, (limit,))
+
     # ------------------------------------------------------------------
     # Sync State
     # ------------------------------------------------------------------
@@ -535,7 +572,8 @@ class DatabaseManager:
                 pm.thumb, pm.summary, pm.library_key, pm.library_title,
                 pm.folder_name,
                 mm.anilist_id, mm.match_confidence, mm.match_method,
-                ac.title_romaji, ac.title_english, ac.cover_image
+                ac.title_romaji, ac.title_english, ac.cover_image,
+                ac.episodes, ac.status AS anilist_status, ac.year AS anilist_year
             FROM plex_media pm
             LEFT JOIN media_mappings mm
                 ON mm.source = 'plex' AND mm.source_id = pm.rating_key
@@ -599,6 +637,248 @@ class DatabaseManager:
             (limit,),
         )
 
+    # ------------------------------------------------------------------
+    # Libraries
+    # ------------------------------------------------------------------
+
+    async def create_library(self, name: str, paths: str) -> int:
+        """Create a new library. *paths* is a JSON array string. Returns id."""
+        cursor = await self.execute(
+            "INSERT INTO libraries (name, paths) VALUES (?, ?)",
+            (name, paths),
+        )
+        return cursor.lastrowid or 0
+
+    async def update_library(self, library_id: int, name: str, paths: str) -> None:
+        """Update a library's name and paths."""
+        await self.execute(
+            "UPDATE libraries SET name=?, paths=?,"
+            " updated_at=datetime('now') WHERE id=?",
+            (name, paths, library_id),
+        )
+
+    async def delete_library(self, library_id: int) -> None:
+        """Delete a library and cascade-delete its items."""
+        await self.execute("DELETE FROM libraries WHERE id=?", (library_id,))
+
+    async def get_library(self, library_id: int) -> dict[str, Any] | None:
+        return await self.fetch_one("SELECT * FROM libraries WHERE id=?", (library_id,))
+
+    async def get_all_libraries(self) -> list[dict[str, Any]]:
+        return await self.fetch_all(
+            "SELECT * FROM libraries ORDER BY name COLLATE NOCASE"
+        )
+
+    # ------------------------------------------------------------------
+    # Library Items
+    # ------------------------------------------------------------------
+
+    async def upsert_library_item(
+        self,
+        library_id: int,
+        folder_path: str,
+        folder_name: str,
+        anilist_id: int | None = None,
+        anilist_title: str = "",
+        match_confidence: float = 0.0,
+        match_method: str = "",
+        anilist_format: str = "",
+        anilist_episodes: int | None = None,
+        year: int = 0,
+        cover_image: str = "",
+        series_group_id: int | None = None,
+    ) -> int:
+        """Insert or update a library item. Returns the row id."""
+        cursor = await self.execute(
+            """INSERT INTO library_items
+                   (library_id, folder_path, folder_name, anilist_id,
+                    anilist_title, match_confidence, match_method,
+                    anilist_format, anilist_episodes, year, cover_image,
+                    series_group_id, scanned_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(library_id, folder_path) DO UPDATE SET
+                   folder_name=excluded.folder_name,
+                   anilist_id=excluded.anilist_id,
+                   anilist_title=excluded.anilist_title,
+                   match_confidence=excluded.match_confidence,
+                   match_method=excluded.match_method,
+                   anilist_format=excluded.anilist_format,
+                   anilist_episodes=excluded.anilist_episodes,
+                   year=excluded.year,
+                   cover_image=excluded.cover_image,
+                   series_group_id=excluded.series_group_id,
+                   scanned_at=datetime('now')
+            """,
+            (
+                library_id,
+                folder_path,
+                folder_name,
+                anilist_id,
+                anilist_title,
+                match_confidence,
+                match_method,
+                anilist_format,
+                anilist_episodes,
+                year,
+                cover_image,
+                series_group_id,
+            ),
+        )
+        return cursor.lastrowid or 0
+
+    async def get_library_items_with_cache(
+        self, library_id: int
+    ) -> list[dict[str, Any]]:
+        """Return library items LEFT JOINed with anilist_cache for rich display."""
+        return await self.fetch_all(
+            """SELECT
+                   li.*,
+                   COALESCE(ac.cover_image, li.cover_image) AS display_cover,
+                   ac.title_romaji, ac.title_english, ac.title_native,
+                   ac.description, ac.genres, ac.status AS anilist_status,
+                   ac.episodes, ac.year AS anilist_year
+               FROM library_items li
+               LEFT JOIN anilist_cache ac
+                   ON ac.anilist_id = li.anilist_id
+                   AND ac.expires_at > datetime('now')
+               WHERE li.library_id = ?
+               ORDER BY li.folder_name COLLATE NOCASE
+            """,
+            (library_id,),
+        )
+
+    async def get_library_item_folder_paths(self, library_id: int) -> set[str]:
+        """Return all folder_path values for a library (for change detection)."""
+        rows = await self.fetch_all(
+            "SELECT folder_path FROM library_items WHERE library_id=?",
+            (library_id,),
+        )
+        return {r["folder_path"] for r in rows}
+
+    async def delete_library_items_not_in(
+        self, library_id: int, folder_paths: set[str]
+    ) -> int:
+        """Delete items whose folder_path is not in the given set. Returns count."""
+        if not folder_paths:
+            cursor = await self.execute(
+                "DELETE FROM library_items WHERE library_id=?",
+                (library_id,),
+            )
+            return cursor.rowcount
+        all_rows = await self.fetch_all(
+            "SELECT id, folder_path FROM library_items WHERE library_id=?",
+            (library_id,),
+        )
+        to_delete = [r["id"] for r in all_rows if r["folder_path"] not in folder_paths]
+        if not to_delete:
+            return 0
+        placeholders = ",".join("?" for _ in to_delete)
+        cursor = await self.execute(
+            f"DELETE FROM library_items WHERE id IN ({placeholders})",
+            tuple(to_delete),
+        )
+        return cursor.rowcount
+
+    async def update_library_item_match(
+        self,
+        item_id: int,
+        anilist_id: int,
+        anilist_title: str = "",
+        match_confidence: float = 1.0,
+        match_method: str = "manual",
+        cover_image: str = "",
+        anilist_format: str = "",
+        anilist_episodes: int | None = None,
+        year: int = 0,
+    ) -> None:
+        """Set or update the AniList match for a library item."""
+        await self.execute(
+            """UPDATE library_items SET
+                   anilist_id=?, anilist_title=?, match_confidence=?,
+                   match_method=?, cover_image=?, anilist_format=?,
+                   anilist_episodes=?, year=?, scanned_at=datetime('now')
+               WHERE id=?
+            """,
+            (
+                anilist_id,
+                anilist_title,
+                match_confidence,
+                match_method,
+                cover_image,
+                anilist_format,
+                anilist_episodes,
+                year,
+                item_id,
+            ),
+        )
+
+    async def clear_library_item_match(self, item_id: int) -> None:
+        """Remove the AniList match from a library item."""
+        await self.execute(
+            """UPDATE library_items SET
+                   anilist_id=NULL, anilist_title='', match_confidence=0.0,
+                   match_method='', cover_image='', anilist_format='',
+                   anilist_episodes=NULL, year=0, series_group_id=NULL
+               WHERE id=?
+            """,
+            (item_id,),
+        )
+
+    async def get_library_item_counts(self, library_id: int) -> dict[str, int]:
+        """Return total, matched, and unmatched counts for a library."""
+        row = await self.fetch_one(
+            """SELECT
+                   COUNT(*) AS total,
+                   SUM(CASE WHEN anilist_id IS NOT NULL THEN 1 ELSE 0 END) AS matched
+               FROM library_items WHERE library_id=?
+            """,
+            (library_id,),
+        )
+        if not row:
+            return {"total": 0, "matched": 0, "unmatched": 0}
+        total = row["total"] or 0
+        matched = row["matched"] or 0
+        return {"total": total, "matched": matched, "unmatched": total - matched}
+
+    async def get_library_item(self, item_id: int) -> dict[str, Any] | None:
+        """Return a single library item by id."""
+        return await self.fetch_one(
+            "SELECT * FROM library_items WHERE id=?", (item_id,)
+        )
+
+    # ------------------------------------------------------------------
+    # Plex Media (continued)
+    # ------------------------------------------------------------------
+
+    async def get_plex_matches_for_folder_names(
+        self, folder_names: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        """Return Plex media info keyed by folder_name.
+
+        Queries plex_media LEFT JOIN media_mappings. Each value dict
+        contains rating_key, plex_title, and existing mapping data.
+        """
+        if not folder_names:
+            return {}
+        placeholders = ",".join("?" for _ in folder_names)
+        rows = await self.fetch_all(
+            f"""SELECT
+                    pm.folder_name, pm.rating_key, pm.title AS plex_title,
+                    mm.anilist_id AS mapping_anilist_id,
+                    mm.match_confidence AS mapping_confidence,
+                    mm.match_method AS mapping_method
+                FROM plex_media pm
+                LEFT JOIN media_mappings mm
+                    ON mm.source = 'plex' AND mm.source_id = pm.rating_key
+                WHERE pm.folder_name IN ({placeholders})
+            """,
+            tuple(folder_names),
+        )
+        result: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            result[r["folder_name"]] = dict(r)
+        return result
+
     async def delete_plex_media_by_rating_key(self, rating_key: str) -> None:
         """Delete a single plex_media row and its media_mappings."""
         await self.db.execute(
@@ -611,6 +891,115 @@ class DatabaseManager:
             (rating_key,),
         )
         await self.db.commit()
+
+    # ------------------------------------------------------------------
+    # Jellyfin Media
+    # ------------------------------------------------------------------
+
+    async def upsert_jellyfin_media(
+        self,
+        item_id: str,
+        title: str,
+        year: int | None,
+        path: str,
+        library_id: str,
+        library_name: str,
+        folder_name: str,
+    ) -> None:
+        """Insert or update a Jellyfin media entry."""
+        await self.execute(
+            """INSERT INTO jellyfin_media
+                   (item_id, title, year, path, library_id, library_name, folder_name)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(item_id) DO UPDATE SET
+                   title=excluded.title,
+                   year=excluded.year,
+                   path=excluded.path,
+                   library_id=excluded.library_id,
+                   library_name=excluded.library_name,
+                   folder_name=excluded.folder_name,
+                   updated_at=datetime('now')
+            """,
+            (item_id, title, year, path, library_id, library_name, folder_name),
+        )
+
+    async def get_jellyfin_media_with_mappings(
+        self, library_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Return jellyfin_media LEFT JOINed with media_mappings and anilist_cache."""
+        sql = """
+            SELECT
+                jm.item_id, jm.title AS jellyfin_title, jm.year AS jellyfin_year,
+                jm.path, jm.library_id, jm.library_name, jm.folder_name,
+                mm.anilist_id, mm.match_confidence, mm.match_method,
+                ac.title_romaji, ac.title_english, ac.cover_image,
+                ac.episodes, ac.status AS anilist_status, ac.year AS anilist_year
+            FROM jellyfin_media jm
+            LEFT JOIN media_mappings mm
+                ON mm.source = 'jellyfin' AND mm.source_id = jm.item_id
+            LEFT JOIN anilist_cache ac
+                ON ac.anilist_id = mm.anilist_id
+                AND ac.expires_at > datetime('now')
+        """
+        params: tuple[Any, ...] = ()
+        if library_id:
+            sql += " WHERE jm.library_id = ?"
+            params = (library_id,)
+        sql += " ORDER BY jm.title COLLATE NOCASE"
+        return await self.fetch_all(sql, params)
+
+    async def get_jellyfin_media_count(self) -> int:
+        """Return the total number of jellyfin_media rows."""
+        row = await self.fetch_one("SELECT COUNT(*) as cnt FROM jellyfin_media")
+        return row["cnt"] if row else 0
+
+    async def get_jellyfin_matches_for_folder_names(
+        self, folder_names: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        """Return Jellyfin media info keyed by folder_name."""
+        if not folder_names:
+            return {}
+        placeholders = ",".join("?" for _ in folder_names)
+        rows = await self.fetch_all(
+            f"""SELECT
+                    jm.folder_name, jm.item_id, jm.title AS jellyfin_title,
+                    mm.anilist_id AS mapping_anilist_id,
+                    mm.match_confidence AS mapping_confidence,
+                    mm.match_method AS mapping_method
+                FROM jellyfin_media jm
+                LEFT JOIN media_mappings mm
+                    ON mm.source = 'jellyfin' AND mm.source_id = jm.item_id
+                WHERE jm.folder_name IN ({placeholders})
+            """,
+            tuple(folder_names),
+        )
+        result: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            result[r["folder_name"]] = dict(r)
+        return result
+
+    async def delete_jellyfin_library_data(self, library_id: str) -> int:
+        """Delete all jellyfin_media and associated media_mappings for a library."""
+        rows = await self.fetch_all(
+            "SELECT item_id FROM jellyfin_media WHERE library_id=?",
+            (library_id,),
+        )
+        item_ids = [r["item_id"] for r in rows]
+        if not item_ids:
+            return 0
+
+        for iid in item_ids:
+            await self.db.execute(
+                "DELETE FROM media_mappings WHERE source='jellyfin' AND source_id=?",
+                (iid,),
+            )
+
+        await self.db.execute(
+            "DELETE FROM jellyfin_media WHERE library_id=?",
+            (library_id,),
+        )
+        await self.db.commit()
+        return len(item_ids)
 
     # ------------------------------------------------------------------
     # User Watchlist
@@ -749,3 +1138,571 @@ class DatabaseManager:
 
         await self.db.commit()
         return len(rating_keys)
+
+    # ------------------------------------------------------------------
+    # Crunchyroll Preview
+    # ------------------------------------------------------------------
+
+    async def insert_cr_preview_rows(self, rows: list[dict[str, Any]]) -> None:
+        """Bulk insert cr_sync_preview rows."""
+        for row in rows:
+            await self.execute(
+                """INSERT INTO cr_sync_preview
+                       (user_id, run_id, cr_title, anilist_id, anilist_title,
+                        confidence, proposed_status, proposed_progress,
+                        current_status, current_progress, action, episodes_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["user_id"],
+                    row["run_id"],
+                    row["cr_title"],
+                    row["anilist_id"],
+                    row["anilist_title"],
+                    row["confidence"],
+                    row["proposed_status"],
+                    row["proposed_progress"],
+                    row["current_status"],
+                    row["current_progress"],
+                    row["action"],
+                    row.get("episodes_json", "[]"),
+                ),
+            )
+
+    async def get_cr_preview_run(self, run_id: str) -> list[dict[str, Any]]:
+        """Return all cr_sync_preview rows for a run_id."""
+        return await self.fetch_all(
+            "SELECT * FROM cr_sync_preview WHERE run_id=? ORDER BY cr_title",
+            (run_id,),
+        )
+
+    async def get_cr_preview_runs(self, user_id: str) -> list[dict[str, Any]]:
+        """Return distinct runs for a user, most recent first."""
+        return await self.fetch_all(
+            """SELECT run_id, MIN(created_at) AS created_at,
+                      COUNT(*) AS entry_count,
+                      SUM(approved) AS approved_count
+               FROM cr_sync_preview WHERE user_id=?
+               GROUP BY run_id ORDER BY created_at DESC""",
+            (user_id,),
+        )
+
+    async def get_latest_cr_preview_run_id(self, user_id: str) -> str | None:
+        """Return the most recent run_id for a user."""
+        row = await self.fetch_one(
+            """SELECT run_id FROM cr_sync_preview WHERE user_id=?
+               ORDER BY created_at DESC LIMIT 1""",
+            (user_id,),
+        )
+        return row["run_id"] if row else None
+
+    async def update_cr_preview_entry(
+        self,
+        entry_id: int,
+        anilist_id: int,
+        anilist_title: str,
+        confidence: float,
+        proposed_status: str,
+        proposed_progress: int,
+        action: str,
+    ) -> None:
+        """Update a preview entry after manual rematch."""
+        await self.execute(
+            """UPDATE cr_sync_preview
+               SET anilist_id=?, anilist_title=?, confidence=?,
+                   proposed_status=?, proposed_progress=?, action=?
+               WHERE id=?
+            """,
+            (
+                anilist_id,
+                anilist_title,
+                confidence,
+                proposed_status,
+                proposed_progress,
+                action,
+                entry_id,
+            ),
+        )
+
+    async def set_cr_preview_approved(
+        self, entry_ids: list[int], approved: bool
+    ) -> None:
+        """Bulk approve/unapprove preview entries."""
+        if not entry_ids:
+            return
+        placeholders = ",".join("?" for _ in entry_ids)
+        await self.execute(
+            f"UPDATE cr_sync_preview SET approved=? WHERE id IN ({placeholders})",
+            (int(approved), *entry_ids),
+        )
+
+    # ------------------------------------------------------------------
+    # Crunchyroll Sync Log
+    # ------------------------------------------------------------------
+
+    async def insert_cr_sync_log_entry(
+        self,
+        user_id: str,
+        anilist_id: int,
+        show_title: str,
+        before_status: str,
+        before_progress: int,
+        after_status: str,
+        after_progress: int,
+        sync_run_id: str,
+        cr_sync_preview_id: int | None = None,
+    ) -> int:
+        """Insert one cr_sync_log row. Returns the new row id."""
+        cursor = await self.execute(
+            """INSERT INTO cr_sync_log
+                   (user_id, anilist_id, show_title, before_status,
+                    before_progress, after_status, after_progress,
+                    sync_run_id, cr_sync_preview_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                anilist_id,
+                show_title,
+                before_status,
+                before_progress,
+                after_status,
+                after_progress,
+                sync_run_id,
+                cr_sync_preview_id,
+            ),
+        )
+        return cursor.lastrowid or 0
+
+    async def get_cr_sync_log(
+        self, user_id: str | None = None, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        """Return recent cr_sync_log entries, newest first."""
+        if user_id:
+            return await self.fetch_all(
+                "SELECT * FROM cr_sync_log WHERE user_id=?"
+                " ORDER BY applied_at DESC LIMIT ?",
+                (user_id, limit),
+            )
+        return await self.fetch_all(
+            "SELECT * FROM cr_sync_log ORDER BY applied_at DESC LIMIT ?",
+            (limit,),
+        )
+
+    async def get_cr_sync_log_entry(self, log_id: int) -> dict[str, Any] | None:
+        """Return a single cr_sync_log row."""
+        return await self.fetch_one("SELECT * FROM cr_sync_log WHERE id=?", (log_id,))
+
+    async def mark_cr_sync_log_undone(self, log_id: int) -> None:
+        """Set undone_at timestamp on a log entry."""
+        await self.execute(
+            "UPDATE cr_sync_log SET undone_at=datetime('now') WHERE id=?",
+            (log_id,),
+        )
+
+    # ------------------------------------------------------------------
+    # Download Requests (P4)
+    # ------------------------------------------------------------------
+
+    async def create_download_request(
+        self,
+        anilist_id: int,
+        anilist_title: str,
+        service: str,
+        external_id: int | None,
+        tvdb_id: int | None,
+        tmdb_id: int | None,
+        status: str,
+        error_message: str,
+        quality_profile_id: int | None,
+        root_folder: str,
+        requested_by: str,
+        executed_at: str | None,
+    ) -> int:
+        """Insert a download request record and return its row ID."""
+        cursor = await self.execute(
+            """
+            INSERT INTO download_requests
+                (anilist_id, anilist_title, service, external_id, tvdb_id, tmdb_id,
+                 status, error_message, quality_profile_id, root_folder,
+                 requested_by, executed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                anilist_id,
+                anilist_title,
+                service,
+                external_id,
+                tvdb_id,
+                tmdb_id,
+                status,
+                error_message,
+                quality_profile_id,
+                root_folder,
+                requested_by,
+                executed_at,
+            ),
+        )
+        return cursor.lastrowid or 0
+
+    async def get_download_requests(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return recent download requests, newest first."""
+        return await self.fetch_all(
+            "SELECT * FROM download_requests ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        )
+
+    async def get_download_request(self, req_id: int) -> dict[str, Any] | None:
+        """Return a single download request by ID."""
+        return await self.fetch_one(
+            "SELECT * FROM download_requests WHERE id=?", (req_id,)
+        )
+
+    # ------------------------------------------------------------------
+    # Sonarr / Radarr mapping methods
+    # ------------------------------------------------------------------
+
+    async def upsert_sonarr_mapping(
+        self,
+        anilist_id: int,
+        **kwargs: Any,
+    ) -> None:
+        """Insert or replace an anilist_sonarr_mapping row."""
+        fields = [
+            "series_group_id",
+            "tvdb_id",
+            "sonarr_id",
+            "sonarr_title",
+            "sonarr_season",
+            "episode_offset",
+            "is_absolute_numbering",
+            "in_sonarr",
+            "sonarr_monitored",
+            "sonarr_root_folder",
+            "confidence",
+            "confirmed",
+            "last_verified_at",
+        ]
+        now = (
+            kwargs.pop("updated_at", None)
+            or __import__("datetime")
+            .datetime.now(__import__("datetime").timezone.utc)
+            .isoformat()
+        )
+        set_clause = ", ".join(f"{f} = ?" for f in fields if f in kwargs)
+        set_clause += ", updated_at = ?"
+        values = [kwargs[f] for f in fields if f in kwargs] + [now]
+
+        existing = await self.fetch_one(
+            "SELECT id FROM anilist_sonarr_mapping WHERE anilist_id = ?", (anilist_id,)
+        )
+        if existing:
+            await self.execute(
+                f"UPDATE anilist_sonarr_mapping SET {set_clause} WHERE anilist_id = ?",
+                (*values, anilist_id),
+            )
+        else:
+            col_names = ", ".join(f for f in fields if f in kwargs)
+            placeholders = ", ".join("?" for f in fields if f in kwargs)
+            await self.execute(
+                f"INSERT INTO anilist_sonarr_mapping"
+                f" (anilist_id, {col_names}, created_at, updated_at)"
+                f" VALUES (?, {placeholders}, ?, ?)",
+                (anilist_id, *[kwargs[f] for f in fields if f in kwargs], now, now),
+            )
+        await self.db.commit()
+
+    async def get_sonarr_mapping(self, anilist_id: int) -> dict[str, Any] | None:
+        """Return the sonarr mapping for an AniList entry, or None."""
+        return await self.fetch_one(
+            "SELECT * FROM anilist_sonarr_mapping WHERE anilist_id = ?",
+            (anilist_id,),
+        )
+
+    async def get_all_sonarr_mappings(
+        self, confirmed_only: bool = False
+    ) -> list[dict[str, Any]]:
+        """Return all sonarr mappings, optionally only confirmed ones."""
+        if confirmed_only:
+            return await self.fetch_all(
+                "SELECT * FROM anilist_sonarr_mapping WHERE confirmed = 1"
+                " ORDER BY anilist_id"
+            )
+        return await self.fetch_all(
+            "SELECT * FROM anilist_sonarr_mapping ORDER BY anilist_id"
+        )
+
+    async def get_unconfirmed_sonarr_mappings(self) -> list[dict[str, Any]]:
+        """Return mappings that need user confirmation."""
+        return await self.fetch_all(
+            "SELECT * FROM anilist_sonarr_mapping"
+            " WHERE confirmed = 0 AND in_sonarr = 1"
+            " ORDER BY confidence DESC, anilist_id"
+        )
+
+    async def confirm_sonarr_mapping(self, anilist_id: int) -> None:
+        """Mark a sonarr mapping as confirmed."""
+        await self.execute(
+            "UPDATE anilist_sonarr_mapping SET confirmed = 1,"
+            " updated_at = datetime('now') WHERE anilist_id = ?",
+            (anilist_id,),
+        )
+        await self.db.commit()
+
+    async def upsert_radarr_mapping(
+        self,
+        anilist_id: int,
+        **kwargs: Any,
+    ) -> None:
+        """Insert or replace an anilist_radarr_mapping row."""
+        fields = [
+            "tmdb_id",
+            "radarr_id",
+            "radarr_title",
+            "in_radarr",
+            "radarr_monitored",
+            "radarr_root_folder",
+            "confidence",
+            "confirmed",
+            "last_verified_at",
+        ]
+        now = (
+            __import__("datetime")
+            .datetime.now(__import__("datetime").timezone.utc)
+            .isoformat()
+        )
+        set_clause = ", ".join(f"{f} = ?" for f in fields if f in kwargs)
+        set_clause += ", updated_at = ?"
+        values = [kwargs[f] for f in fields if f in kwargs] + [now]
+
+        existing = await self.fetch_one(
+            "SELECT id FROM anilist_radarr_mapping WHERE anilist_id = ?", (anilist_id,)
+        )
+        if existing:
+            await self.execute(
+                f"UPDATE anilist_radarr_mapping SET {set_clause} WHERE anilist_id = ?",
+                (*values, anilist_id),
+            )
+        else:
+            col_names = ", ".join(f for f in fields if f in kwargs)
+            placeholders = ", ".join("?" for f in fields if f in kwargs)
+            await self.execute(
+                f"INSERT INTO anilist_radarr_mapping"
+                f" (anilist_id, {col_names}, created_at, updated_at)"
+                f" VALUES (?, {placeholders}, ?, ?)",
+                (anilist_id, *[kwargs[f] for f in fields if f in kwargs], now, now),
+            )
+        await self.db.commit()
+
+    async def get_radarr_mapping(self, anilist_id: int) -> dict[str, Any] | None:
+        """Return the radarr mapping for an AniList entry, or None."""
+        return await self.fetch_one(
+            "SELECT * FROM anilist_radarr_mapping WHERE anilist_id = ?",
+            (anilist_id,),
+        )
+
+    # ------------------------------------------------------------------
+    # Sonarr / Radarr cache methods
+    # ------------------------------------------------------------------
+
+    async def upsert_sonarr_cache_entry(
+        self,
+        tvdb_id: int,
+        sonarr_id: int,
+        title: str,
+        sort_title: str = "",
+        status: str = "",
+        monitored: bool = False,
+        root_folder: str = "",
+        quality_profile_id: int | None = None,
+        alternate_titles: str = "[]",
+        seasons_json: str = "[]",
+    ) -> None:
+        """Insert or replace a sonarr_series_cache entry."""
+        await self.execute(
+            """
+            INSERT INTO sonarr_series_cache
+                (tvdb_id, sonarr_id, title, sort_title, status, monitored,
+                 root_folder, quality_profile_id, alternate_titles,
+                 seasons_json, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(tvdb_id) DO UPDATE SET
+                sonarr_id = excluded.sonarr_id,
+                title = excluded.title,
+                sort_title = excluded.sort_title,
+                status = excluded.status,
+                monitored = excluded.monitored,
+                root_folder = excluded.root_folder,
+                quality_profile_id = excluded.quality_profile_id,
+                alternate_titles = excluded.alternate_titles,
+                seasons_json = excluded.seasons_json,
+                last_updated = datetime('now')
+            """,
+            (
+                tvdb_id,
+                sonarr_id,
+                title,
+                sort_title,
+                status,
+                int(monitored),
+                root_folder,
+                quality_profile_id,
+                alternate_titles,
+                seasons_json,
+            ),
+        )
+        await self.db.commit()
+
+    async def bulk_upsert_sonarr_cache(self, series_list: list[dict[str, Any]]) -> int:
+        """Bulk-upsert sonarr_series_cache from a Sonarr /api/v3/series response.
+
+        Returns the number of entries upserted.
+        """
+        import json
+
+        count = 0
+        for item in series_list:
+            tvdb_id = item.get("tvdbId")
+            sonarr_id = item.get("id")
+            if not tvdb_id or not sonarr_id:
+                continue
+            alt_titles = json.dumps(
+                [
+                    t.get("title", "")
+                    for t in item.get("alternateTitles", [])
+                    if t.get("title")
+                ]
+            )
+            seasons = json.dumps(
+                [
+                    {
+                        "seasonNumber": s.get("seasonNumber", 0),
+                        "monitored": s.get("monitored", False),
+                        "episodeCount": (s.get("statistics") or {}).get(
+                            "episodeCount", 0
+                        ),
+                        "totalEpisodeCount": (s.get("statistics") or {}).get(
+                            "totalEpisodeCount", 0
+                        ),
+                    }
+                    for s in item.get("seasons", [])
+                ]
+            )
+            await self.upsert_sonarr_cache_entry(
+                tvdb_id=tvdb_id,
+                sonarr_id=sonarr_id,
+                title=item.get("title", ""),
+                sort_title=item.get("sortTitle", ""),
+                status=item.get("status", ""),
+                monitored=item.get("monitored", False),
+                root_folder=item.get("rootFolderPath", ""),
+                quality_profile_id=item.get("qualityProfileId"),
+                alternate_titles=alt_titles,
+                seasons_json=seasons,
+            )
+            count += 1
+        return count
+
+    async def get_sonarr_cache_entry(self, tvdb_id: int) -> dict[str, Any] | None:
+        """Return a sonarr_series_cache entry by TVDB ID."""
+        return await self.fetch_one(
+            "SELECT * FROM sonarr_series_cache WHERE tvdb_id = ?", (tvdb_id,)
+        )
+
+    async def get_sonarr_cache_by_sonarr_id(
+        self, sonarr_id: int
+    ) -> dict[str, Any] | None:
+        """Return a sonarr_series_cache entry by Sonarr ID."""
+        return await self.fetch_one(
+            "SELECT * FROM sonarr_series_cache WHERE sonarr_id = ?", (sonarr_id,)
+        )
+
+    async def get_all_sonarr_cache(self) -> list[dict[str, Any]]:
+        """Return all cached Sonarr series."""
+        return await self.fetch_all("SELECT * FROM sonarr_series_cache ORDER BY title")
+
+    async def clear_sonarr_cache(self) -> None:
+        """Remove all sonarr_series_cache entries."""
+        await self.execute("DELETE FROM sonarr_series_cache")
+        await self.db.commit()
+
+    async def upsert_radarr_cache_entry(
+        self,
+        tmdb_id: int,
+        radarr_id: int,
+        title: str,
+        sort_title: str = "",
+        year: int = 0,
+        status: str = "",
+        monitored: bool = False,
+        root_folder: str = "",
+        quality_profile_id: int | None = None,
+    ) -> None:
+        """Insert or replace a radarr_movie_cache entry."""
+        await self.execute(
+            """
+            INSERT INTO radarr_movie_cache
+                (tmdb_id, radarr_id, title, sort_title, year, status,
+                 monitored, root_folder, quality_profile_id, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(tmdb_id) DO UPDATE SET
+                radarr_id = excluded.radarr_id,
+                title = excluded.title,
+                sort_title = excluded.sort_title,
+                year = excluded.year,
+                status = excluded.status,
+                monitored = excluded.monitored,
+                root_folder = excluded.root_folder,
+                quality_profile_id = excluded.quality_profile_id,
+                last_updated = datetime('now')
+            """,
+            (
+                tmdb_id,
+                radarr_id,
+                title,
+                sort_title,
+                year,
+                status,
+                int(monitored),
+                root_folder,
+                quality_profile_id,
+            ),
+        )
+        await self.db.commit()
+
+    async def bulk_upsert_radarr_cache(self, movies_list: list[dict[str, Any]]) -> int:
+        """Bulk-upsert radarr_movie_cache from a Radarr /api/v3/movie response."""
+        count = 0
+        for item in movies_list:
+            tmdb_id = item.get("tmdbId")
+            radarr_id = item.get("id")
+            if not tmdb_id or not radarr_id:
+                continue
+            await self.upsert_radarr_cache_entry(
+                tmdb_id=tmdb_id,
+                radarr_id=radarr_id,
+                title=item.get("title", ""),
+                sort_title=item.get("sortTitle", ""),
+                year=item.get("year", 0),
+                status=item.get("status", ""),
+                monitored=item.get("monitored", False),
+                root_folder=item.get("rootFolderPath", ""),
+                quality_profile_id=item.get("qualityProfileId"),
+            )
+            count += 1
+        return count
+
+    async def get_radarr_cache_entry(self, tmdb_id: int) -> dict[str, Any] | None:
+        """Return a radarr_movie_cache entry by TMDB ID."""
+        return await self.fetch_one(
+            "SELECT * FROM radarr_movie_cache WHERE tmdb_id = ?", (tmdb_id,)
+        )
+
+    async def get_all_radarr_cache(self) -> list[dict[str, Any]]:
+        """Return all cached Radarr movies."""
+        return await self.fetch_all("SELECT * FROM radarr_movie_cache ORDER BY title")
+
+    async def clear_radarr_cache(self) -> None:
+        """Remove all radarr_movie_cache entries."""
+        await self.execute("DELETE FROM radarr_movie_cache")
+        await self.db.commit()

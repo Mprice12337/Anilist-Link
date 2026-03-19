@@ -102,6 +102,19 @@ class PlexMedia:
 
 
 @dataclass
+class JellyfinMedia:
+    item_id: str = ""
+    title: str = ""
+    year: int | None = None
+    path: str = ""
+    library_id: str = ""
+    library_name: str = ""
+    folder_name: str = ""
+    added_at: str = ""
+    updated_at: str = ""
+
+
+@dataclass
 class RestructureLogEntry:
     id: int = 0
     group_title: str = ""
@@ -114,25 +127,67 @@ class RestructureLogEntry:
 
 
 @dataclass
-class ManualOverride:
+class Library:
     id: int = 0
-    source: str = ""
-    source_id: str = ""
-    source_title: str = ""
-    anilist_id: int = 0
-    created_by: str = ""
+    name: str = ""
+    paths: str = "[]"  # JSON array of directory paths
     created_at: str = ""
+    updated_at: str = ""
+
+
+@dataclass
+class LibraryItem:
+    id: int = 0
+    library_id: int = 0
+    folder_path: str = ""
+    folder_name: str = ""
+    anilist_id: int | None = None
+    anilist_title: str = ""
+    match_confidence: float = 0.0
+    match_method: str = ""
+    anilist_format: str = ""
+    anilist_episodes: int | None = None
+    year: int = 0
+    cover_image: str = ""
+    series_group_id: int | None = None
+    scanned_at: str = ""
+
+
+@dataclass
+class DownloadRequest:
+    id: int = 0
+    anilist_id: int = 0
+    anilist_title: str = ""
+    service: str = ""  # "sonarr" or "radarr"
+    external_id: int | None = None  # Sonarr/Radarr series/movie ID after add
+    tvdb_id: int | None = None
+    tmdb_id: int | None = None
+    status: str = "pending"  # "pending", "added", "exists", "error"
+    error_message: str = ""
+    quality_profile_id: int | None = None
+    root_folder: str = ""
+    requested_by: str = ""
+    created_at: str = ""
+    executed_at: str | None = None
 
 
 @dataclass
 class AnilistSonarrMapping:
     id: int = 0
     anilist_id: int = 0
-    tvdb_id: int = 0
-    sonarr_id: int = 0
-    title: str = ""
-    in_sonarr: bool = False
-    sonarr_monitored: bool = False
+    series_group_id: int | None = None
+    tvdb_id: int | None = None
+    sonarr_id: int | None = None
+    sonarr_title: str = ""
+    sonarr_season: int | None = None
+    episode_offset: int = 0
+    is_absolute_numbering: int = 0
+    in_sonarr: int = 0
+    sonarr_monitored: int = 0
+    sonarr_root_folder: str = ""
+    confidence: str = "low"  # "high", "medium", "low"
+    confirmed: int = 0
+    last_verified_at: str | None = None
     created_at: str = ""
     updated_at: str = ""
 
@@ -141,41 +196,57 @@ class AnilistSonarrMapping:
 class AnilistRadarrMapping:
     id: int = 0
     anilist_id: int = 0
-    tmdb_id: int = 0
-    radarr_id: int = 0
-    title: str = ""
-    in_radarr: bool = False
-    radarr_monitored: bool = False
+    tmdb_id: int | None = None
+    radarr_id: int | None = None
+    radarr_title: str = ""
+    in_radarr: int = 0
+    radarr_monitored: int = 0
+    radarr_root_folder: str = ""
+    confidence: str = "low"
+    confirmed: int = 0
+    last_verified_at: str | None = None
     created_at: str = ""
     updated_at: str = ""
 
 
 @dataclass
 class SonarrSeriesCache:
-    id: int = 0
     tvdb_id: int = 0
     sonarr_id: int = 0
     title: str = ""
-    status: str = ""
-    monitored: bool = False
-    path: str = ""
-    quality_profile_id: int = 0
+    sort_title: str = ""
+    status: str = ""  # "continuing", "ended"
+    monitored: int = 0
     root_folder: str = ""
-    cached_at: str = ""
+    quality_profile_id: int | None = None
+    alternate_titles: str = "[]"  # JSON array
+    seasons_json: str = "[]"  # JSON [{seasonNumber, monitored, episodeCount}]
+    last_updated: str = ""
 
 
 @dataclass
 class RadarrMovieCache:
-    id: int = 0
     tmdb_id: int = 0
     radarr_id: int = 0
     title: str = ""
+    sort_title: str = ""
+    year: int = 0
     status: str = ""
-    monitored: bool = False
-    path: str = ""
-    quality_profile_id: int = 0
+    monitored: int = 0
     root_folder: str = ""
-    cached_at: str = ""
+    quality_profile_id: int | None = None
+    last_updated: str = ""
+
+
+@dataclass
+class ManualOverride:
+    id: int = 0
+    source: str = ""
+    source_id: str = ""
+    source_title: str = ""
+    anilist_id: int = 0
+    created_by: str = ""
+    created_at: str = ""
 
 
 @dataclass
@@ -307,6 +378,19 @@ TABLES: dict[str, str] = {
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
     """,
+    "jellyfin_media": """
+        CREATE TABLE IF NOT EXISTS jellyfin_media (
+            item_id TEXT NOT NULL UNIQUE,
+            title TEXT NOT NULL DEFAULT '',
+            year INTEGER,
+            path TEXT NOT NULL DEFAULT '',
+            library_id TEXT NOT NULL DEFAULT '',
+            library_name TEXT NOT NULL DEFAULT '',
+            folder_name TEXT NOT NULL DEFAULT '',
+            added_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """,
     "series_groups": """
         CREATE TABLE IF NOT EXISTS series_groups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -329,6 +413,35 @@ TABLES: dict[str, str] = {
             executed_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
     """,
+    "libraries": """
+        CREATE TABLE IF NOT EXISTS libraries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL DEFAULT '',
+            paths TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """,
+    "library_items": """
+        CREATE TABLE IF NOT EXISTS library_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            library_id INTEGER NOT NULL,
+            folder_path TEXT NOT NULL DEFAULT '',
+            folder_name TEXT NOT NULL DEFAULT '',
+            anilist_id INTEGER,
+            anilist_title TEXT NOT NULL DEFAULT '',
+            match_confidence REAL NOT NULL DEFAULT 0.0,
+            match_method TEXT NOT NULL DEFAULT '',
+            anilist_format TEXT NOT NULL DEFAULT '',
+            anilist_episodes INTEGER,
+            year INTEGER NOT NULL DEFAULT 0,
+            cover_image TEXT NOT NULL DEFAULT '',
+            series_group_id INTEGER,
+            scanned_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (library_id) REFERENCES libraries(id) ON DELETE CASCADE,
+            UNIQUE(library_id, folder_path)
+        )
+    """,
     "series_group_entries": """
         CREATE TABLE IF NOT EXISTS series_group_entries (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -344,58 +457,149 @@ TABLES: dict[str, str] = {
             UNIQUE(group_id, anilist_id)
         )
     """,
+    "plex_users": """
+        CREATE TABLE IF NOT EXISTS plex_users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            anilist_user_id TEXT NOT NULL DEFAULT '',
+            plex_username TEXT NOT NULL DEFAULT '',
+            plex_uuid TEXT NOT NULL DEFAULT '',
+            plex_token TEXT NOT NULL DEFAULT '',
+            is_admin INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """,
+    "jellyfin_users": """
+        CREATE TABLE IF NOT EXISTS jellyfin_users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            anilist_user_id TEXT NOT NULL DEFAULT '',
+            jf_username TEXT NOT NULL DEFAULT '',
+            jf_user_id TEXT NOT NULL DEFAULT '',
+            jf_token TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """,
+    "cr_sync_preview": """
+        CREATE TABLE IF NOT EXISTS cr_sync_preview (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL DEFAULT '',
+            run_id TEXT NOT NULL DEFAULT '',
+            cr_title TEXT NOT NULL DEFAULT '',
+            anilist_id INTEGER NOT NULL DEFAULT 0,
+            anilist_title TEXT NOT NULL DEFAULT '',
+            confidence REAL NOT NULL DEFAULT 0.0,
+            proposed_status TEXT NOT NULL DEFAULT '',
+            proposed_progress INTEGER NOT NULL DEFAULT 0,
+            current_status TEXT NOT NULL DEFAULT '',
+            current_progress INTEGER NOT NULL DEFAULT 0,
+            action TEXT NOT NULL DEFAULT '',
+            approved INTEGER NOT NULL DEFAULT 0,
+            episodes_json TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """,
+    "cr_sync_log": """
+        CREATE TABLE IF NOT EXISTS cr_sync_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL DEFAULT '',
+            anilist_id INTEGER NOT NULL DEFAULT 0,
+            show_title TEXT NOT NULL DEFAULT '',
+            before_status TEXT NOT NULL DEFAULT '',
+            before_progress INTEGER NOT NULL DEFAULT 0,
+            after_status TEXT NOT NULL DEFAULT '',
+            after_progress INTEGER NOT NULL DEFAULT 0,
+            applied_at TEXT NOT NULL DEFAULT (datetime('now')),
+            sync_run_id TEXT NOT NULL DEFAULT '',
+            undone_at TEXT,
+            cr_sync_preview_id INTEGER
+        )
+    """,
+    "download_requests": """
+        CREATE TABLE IF NOT EXISTS download_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            anilist_id INTEGER NOT NULL DEFAULT 0,
+            anilist_title TEXT NOT NULL DEFAULT '',
+            service TEXT NOT NULL DEFAULT '',
+            external_id INTEGER,
+            tvdb_id INTEGER,
+            tmdb_id INTEGER,
+            status TEXT NOT NULL DEFAULT 'pending',
+            error_message TEXT NOT NULL DEFAULT '',
+            quality_profile_id INTEGER,
+            root_folder TEXT NOT NULL DEFAULT '',
+            requested_by TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            executed_at TEXT
+        )
+    """,
     "anilist_sonarr_mapping": """
         CREATE TABLE IF NOT EXISTS anilist_sonarr_mapping (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            anilist_id INTEGER NOT NULL UNIQUE,
-            tvdb_id INTEGER NOT NULL DEFAULT 0,
-            sonarr_id INTEGER NOT NULL DEFAULT 0,
-            title TEXT NOT NULL DEFAULT '',
+            anilist_id INTEGER NOT NULL,
+            series_group_id INTEGER,
+            tvdb_id INTEGER,
+            sonarr_id INTEGER,
+            sonarr_title TEXT NOT NULL DEFAULT '',
+            sonarr_season INTEGER,
+            episode_offset INTEGER NOT NULL DEFAULT 0,
+            is_absolute_numbering INTEGER NOT NULL DEFAULT 0,
             in_sonarr INTEGER NOT NULL DEFAULT 0,
             sonarr_monitored INTEGER NOT NULL DEFAULT 0,
+            monitor_type TEXT NOT NULL DEFAULT 'future',
+            sonarr_root_folder TEXT NOT NULL DEFAULT '',
+            confidence TEXT NOT NULL DEFAULT 'low',
+            confirmed INTEGER NOT NULL DEFAULT 0,
+            last_verified_at TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(anilist_id)
         )
     """,
     "anilist_radarr_mapping": """
         CREATE TABLE IF NOT EXISTS anilist_radarr_mapping (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            anilist_id INTEGER NOT NULL UNIQUE,
-            tmdb_id INTEGER NOT NULL DEFAULT 0,
-            radarr_id INTEGER NOT NULL DEFAULT 0,
-            title TEXT NOT NULL DEFAULT '',
+            anilist_id INTEGER NOT NULL,
+            tmdb_id INTEGER,
+            radarr_id INTEGER,
+            radarr_title TEXT NOT NULL DEFAULT '',
             in_radarr INTEGER NOT NULL DEFAULT 0,
             radarr_monitored INTEGER NOT NULL DEFAULT 0,
+            monitor_type TEXT NOT NULL DEFAULT 'future',
+            radarr_root_folder TEXT NOT NULL DEFAULT '',
+            confidence TEXT NOT NULL DEFAULT 'low',
+            confirmed INTEGER NOT NULL DEFAULT 0,
+            last_verified_at TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(anilist_id)
         )
     """,
     "sonarr_series_cache": """
         CREATE TABLE IF NOT EXISTS sonarr_series_cache (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tvdb_id INTEGER NOT NULL UNIQUE,
-            sonarr_id INTEGER NOT NULL DEFAULT 0,
+            tvdb_id INTEGER PRIMARY KEY,
+            sonarr_id INTEGER NOT NULL,
             title TEXT NOT NULL DEFAULT '',
+            sort_title TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT '',
             monitored INTEGER NOT NULL DEFAULT 0,
-            path TEXT NOT NULL DEFAULT '',
-            quality_profile_id INTEGER NOT NULL DEFAULT 0,
             root_folder TEXT NOT NULL DEFAULT '',
-            cached_at TEXT NOT NULL DEFAULT (datetime('now'))
+            quality_profile_id INTEGER,
+            alternate_titles TEXT NOT NULL DEFAULT '[]',
+            seasons_json TEXT NOT NULL DEFAULT '[]',
+            last_updated TEXT NOT NULL DEFAULT (datetime('now'))
         )
     """,
     "radarr_movie_cache": """
         CREATE TABLE IF NOT EXISTS radarr_movie_cache (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tmdb_id INTEGER NOT NULL UNIQUE,
-            radarr_id INTEGER NOT NULL DEFAULT 0,
+            tmdb_id INTEGER PRIMARY KEY,
+            radarr_id INTEGER NOT NULL,
             title TEXT NOT NULL DEFAULT '',
+            sort_title TEXT NOT NULL DEFAULT '',
+            year INTEGER NOT NULL DEFAULT 0,
             status TEXT NOT NULL DEFAULT '',
             monitored INTEGER NOT NULL DEFAULT 0,
-            path TEXT NOT NULL DEFAULT '',
-            quality_profile_id INTEGER NOT NULL DEFAULT 0,
             root_folder TEXT NOT NULL DEFAULT '',
-            cached_at TEXT NOT NULL DEFAULT (datetime('now'))
+            quality_profile_id INTEGER,
+            last_updated TEXT NOT NULL DEFAULT (datetime('now'))
         )
     """,
     "user_watchlist": """
@@ -427,4 +631,6 @@ INDEXES: list[str] = [
     " ON media_mappings(anilist_id)",
     "CREATE INDEX IF NOT EXISTS idx_users_service ON users(service)",
     "CREATE INDEX IF NOT EXISTS idx_plex_media_library" " ON plex_media(library_key)",
+    "CREATE INDEX IF NOT EXISTS idx_jellyfin_media_library"
+    " ON jellyfin_media(library_id)",
 ]

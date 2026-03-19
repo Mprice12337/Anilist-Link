@@ -1,0 +1,2489 @@
+{% extends "base.html" %}
+{% block title %}Setup — Anilist-Link{% endblock %}
+
+{% block content %}
+<style>
+/* ── Onboarding-specific styles ── */
+
+.onboarding-wrap {
+    max-width: 820px;
+    margin: 0 auto;
+}
+
+/* Wizard progress bar */
+.wizard-progress {
+    display: flex;
+    align-items: center;
+    margin-bottom: 2rem;
+    gap: 0;
+}
+
+.wizard-step-marker {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex: 1;
+    position: relative;
+}
+
+.wizard-step-marker:not(:last-child)::after {
+    content: '';
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: calc(100% - 2.2rem - 0.6rem);
+    height: 2px;
+    background: var(--border);
+    left: calc(2.2rem + 0.6rem);
+}
+
+.wizard-step-marker.done::after {
+    background: var(--accent);
+}
+
+.step-circle {
+    width: 2.2rem;
+    height: 2.2rem;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    font-weight: 700;
+    flex-shrink: 0;
+    background: var(--bg-card);
+    border: 2px solid var(--border);
+    color: var(--text-muted);
+    transition: border-color 0.2s, background 0.2s, color 0.2s;
+    position: relative;
+    z-index: 1;
+}
+
+.wizard-step-marker.active .step-circle {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.wizard-step-marker.done .step-circle {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: #fff;
+}
+
+.step-label {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    position: relative;
+    z-index: 2;
+    background: var(--bg);
+    padding-right: 0.4rem;
+}
+
+.wizard-step-marker.active .step-label {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.wizard-step-marker.done .step-label {
+    color: var(--text);
+}
+
+/* Step panels */
+.step-panel {
+    display: none;
+}
+
+.step-panel.active {
+    display: block;
+}
+
+/* Option cards (radio-style) */
+.option-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin: 1.25rem 0;
+}
+
+.option-card {
+    background: var(--bg-card);
+    border: 2px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.25rem;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    position: relative;
+}
+
+.option-card:hover {
+    border-color: var(--accent);
+}
+
+.option-card.selected {
+    border-color: var(--accent);
+    background: rgba(61, 180, 242, 0.06);
+}
+
+.option-card input[type="radio"] {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.option-card-title {
+    font-weight: 700;
+    font-size: 1rem;
+    margin-bottom: 0.35rem;
+    color: var(--text);
+}
+
+.option-card-desc {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    line-height: 1.5;
+}
+
+/* File browser */
+.file-browser {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+
+.file-browser-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-card);
+}
+
+.file-browser-path {
+    flex: 1;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    font-family: monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.file-browser-list {
+    max-height: 250px;
+    overflow-y: auto;
+    padding: 0.25rem 0;
+}
+
+.file-browser-item {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.4rem 0.75rem;
+    cursor: pointer;
+    transition: background 0.15s;
+    font-size: 0.87rem;
+}
+
+.file-browser-item:hover {
+    background: rgba(61, 180, 242, 0.07);
+}
+
+.file-browser-item.selected {
+    background: rgba(61, 180, 242, 0.13);
+}
+
+.file-browser-item.selected .dir-name {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.file-browser-item input[type="radio"] {
+    width: 1rem;
+    height: 1rem;
+    accent-color: var(--accent);
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
+.file-browser-item .dir-icon {
+    color: var(--accent);
+    font-size: 0.9rem;
+}
+
+.file-browser-item .dir-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.file-browser-item .dir-hint {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.file-browser-empty {
+    padding: 1rem 0.75rem;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    text-align: center;
+}
+
+/* Tag list */
+.tag-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    min-height: 1.8rem;
+    margin-top: 0.5rem;
+}
+
+.tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.2rem 0.5rem;
+    font-size: 0.8rem;
+    color: var(--text);
+    font-family: monospace;
+}
+
+.tag-remove {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0;
+    font-size: 0.9rem;
+    line-height: 1;
+    transition: color 0.15s;
+}
+
+.tag-remove:hover {
+    color: var(--danger);
+}
+
+/* Service tabs */
+.tab-bar {
+    display: flex;
+    border-bottom: 2px solid var(--border);
+    gap: 0.25rem;
+    margin-bottom: 1.5rem;
+    flex-wrap: wrap;
+}
+
+.tab-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    font-weight: 600;
+    padding: 0.6rem 1.1rem;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    transition: color 0.2s, border-color 0.2s;
+}
+
+.tab-btn:hover {
+    color: var(--text);
+}
+
+.tab-btn.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+
+.tab-panel {
+    display: none;
+}
+
+.tab-panel.active {
+    display: block;
+}
+
+.tab-skip {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    text-decoration: none;
+    display: inline-block;
+    margin-bottom: 1rem;
+    transition: color 0.2s;
+    cursor: pointer;
+    background: none;
+    border: none;
+}
+
+.tab-skip:hover {
+    color: var(--accent);
+}
+
+/* Service help callout */
+.service-help {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 1.25rem;
+    overflow: hidden;
+}
+.service-help summary {
+    cursor: pointer;
+    padding: 0.55rem 0.85rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    user-select: none;
+}
+.service-help summary::-webkit-details-marker { display: none; }
+.service-help summary::before {
+    content: '▶';
+    font-size: 0.65rem;
+    transition: transform 0.15s;
+    display: inline-block;
+}
+.service-help[open] summary::before { transform: rotate(90deg); }
+.service-help summary:hover { color: var(--text); }
+.service-help-body {
+    padding: 0.75rem 0.85rem 0.85rem;
+    border-top: 1px solid var(--border);
+    background: var(--bg);
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    line-height: 1.6;
+}
+.service-help-body ol {
+    margin: 0.35rem 0 0 1.1rem;
+    padding: 0;
+}
+.service-help-body li { margin-bottom: 0.2rem; }
+.service-help-body a { color: var(--accent); }
+.service-help-body code {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0.05rem 0.3rem;
+    font-size: 0.8rem;
+}
+
+/* Service test badge */
+.test-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.25rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    vertical-align: middle;
+    margin-left: 0.5rem;
+}
+
+.test-badge.success {
+    background: rgba(76, 175, 80, 0.15);
+    color: #4caf50;
+}
+
+.test-badge.fail {
+    background: rgba(232, 93, 117, 0.15);
+    color: var(--danger);
+}
+
+/* Spinner (inline) */
+.spinner-inline {
+    display: inline-block;
+    width: 0.9rem;
+    height: 0.9rem;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    vertical-align: middle;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Conflict table */
+.conflict-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    margin: 1rem 0;
+}
+
+.conflict-table th,
+.conflict-table td {
+    padding: 0.5rem 0.6rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+}
+
+.conflict-table th {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.conflict-table tbody tr:nth-child(even) {
+    background: rgba(61, 180, 242, 0.03);
+}
+
+.conflict-table select {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.25rem 0.5rem;
+    font-size: 0.82rem;
+    cursor: pointer;
+}
+
+/* Review cards */
+.review-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 1rem;
+    margin: 1.25rem 0;
+}
+
+.review-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem;
+    text-align: center;
+}
+
+.review-card-icon {
+    font-size: 1.5rem;
+    margin-bottom: 0.4rem;
+}
+
+.review-card-name {
+    font-weight: 700;
+    font-size: 0.9rem;
+    margin-bottom: 0.25rem;
+}
+
+.review-card-status {
+    font-size: 0.8rem;
+}
+
+.review-card-status.ok { color: #4caf50; }
+.review-card-status.skip { color: var(--text-muted); }
+.review-card-status.fail { color: var(--danger); }
+
+/* Step navigation */
+.step-nav {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+}
+
+.step-nav .spacer {
+    flex: 1;
+}
+
+/* Collapsible advanced */
+details.advanced-section {
+    margin-top: 1.25rem;
+}
+
+details.advanced-section > summary {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    font-weight: 600;
+    user-select: none;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+details.advanced-section > summary::before {
+    content: '▶';
+    font-size: 0.65rem;
+    transition: transform 0.15s;
+}
+
+details.advanced-section[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+details.advanced-section > summary::-webkit-details-marker { display: none; }
+
+.advanced-body {
+    margin-top: 1rem;
+}
+
+/* Webhooks URL display */
+.webhook-url-box {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.45rem 0.75rem;
+    font-family: monospace;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    word-break: break-all;
+}
+
+/* Output path display */
+.selected-path-display {
+    margin-top: 0.5rem;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    font-family: monospace;
+}
+
+.selected-path-display span {
+    color: var(--accent);
+}
+
+/* Library checkbox list from service test */
+.library-check-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-top: 0.5rem;
+}
+
+/* Section divider */
+.section-label {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.5rem;
+}
+
+/* Hidden utility */
+.hidden { display: none !important; }
+</style>
+
+<div class="onboarding-wrap">
+    <div style="margin-bottom: 1.5rem">
+        <h1 style="font-size: 1.5rem; margin-bottom: 0.25rem">Welcome to Anilist-Link</h1>
+        <p class="text-muted" style="font-size: 0.9rem">Let's get you set up. You can skip any step and come back later from Settings.</p>
+    </div>
+
+    <!-- Wizard progress bar -->
+    <div class="wizard-progress" id="wizard-progress">
+        <div class="wizard-step-marker" id="prog-1">
+            <div class="step-circle">1</div>
+            <span class="step-label">File Organization</span>
+        </div>
+        <div class="wizard-step-marker" id="prog-2">
+            <div class="step-circle">2</div>
+            <span class="step-label">Configure</span>
+        </div>
+        <div class="wizard-step-marker" id="prog-3">
+            <div class="step-circle">3</div>
+            <span class="step-label">Services</span>
+        </div>
+        <div class="wizard-step-marker" id="prog-4">
+            <div class="step-circle">4</div>
+            <span class="step-label">Done</span>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         STEP 1 — Restructure Mode
+    ═══════════════════════════════════════════════════════════ -->
+    <div class="step-panel" id="step-1">
+        <div class="card">
+            <h2>Set up file organization</h2>
+            <p class="text-muted hint">Choose how Anilist-Link should organize your anime files. You can change this later.</p>
+
+            <div class="option-cards" id="mode-cards">
+                <label class="option-card" id="card-quick" for="mode-quick">
+                    <input type="radio" name="restructure_mode" id="mode-quick" value="quick">
+                    <div class="option-card-title">Quick Rename</div>
+                    <div class="option-card-desc">Renames folders and files to match AniList titles. No files are moved — everything stays where it is.</div>
+                </label>
+                <label class="option-card" id="card-full" for="mode-full">
+                    <input type="radio" name="restructure_mode" id="mode-full" value="full">
+                    <div class="option-card-title">Full Restructure</div>
+                    <div class="option-card-desc">Reorganizes your library into a clean multi-season folder structure, renaming along the way.</div>
+                </label>
+                <label class="option-card" id="card-skip" for="mode-skip">
+                    <input type="radio" name="restructure_mode" id="mode-skip" value="skip">
+                    <div class="option-card-title">Skip</div>
+                    <div class="option-card-desc">Skip file organization for now. You can run it anytime from the Restructure page.</div>
+                </label>
+            </div>
+
+            <div class="step-nav">
+                <div class="spacer"></div>
+                <button class="btn btn-primary" id="step1-next" onclick="goStep1Next()">Next →</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         STEP 2 — Restructure Config (hidden if skip chosen)
+    ═══════════════════════════════════════════════════════════ -->
+    <div class="step-panel" id="step-2">
+        <div class="card">
+            <h2>Configure file organization</h2>
+            <p class="text-muted hint">Select source directories containing your anime and choose where to put the organized output.</p>
+
+            <!-- Source directories -->
+            <div style="margin-bottom: 1.5rem">
+                <div class="section-label">Source Directories</div>
+                <div class="file-browser" id="src-browser">
+                    <div class="file-browser-toolbar">
+                        <button class="btn btn-secondary btn-sm" onclick="srcBrowseParent()">↑ Parent</button>
+                        <div class="file-browser-path" id="src-current-path">/data</div>
+                    </div>
+                    <div class="file-browser-list" id="src-browser-list">
+                        <div class="file-browser-empty">Loading…</div>
+                    </div>
+                </div>
+                <div class="tag-list" id="source-tags">
+                    <span class="text-muted" style="font-size:0.82rem">No sources added yet.</span>
+                </div>
+                <div style="margin-top: 0.35rem; font-size: 0.78rem; color: var(--text-muted)">
+                    Click a folder to select it as a source. Double-click to navigate into it.
+                </div>
+            </div>
+
+            <!-- Output directory -->
+            <div style="margin-bottom: 1.5rem">
+                <div class="section-label">Output Directory</div>
+                <div class="file-browser" id="out-browser">
+                    <div class="file-browser-toolbar">
+                        <button class="btn btn-secondary btn-sm" onclick="outBrowseParent()">↑ Parent</button>
+                        <div class="file-browser-path" id="out-current-path">/data</div>
+                        <button class="btn btn-secondary btn-sm" onclick="outShowNewFolder()" id="out-new-folder-btn" title="Create new folder">+ New Folder</button>
+                    </div>
+                    <div id="out-new-folder-row" class="hidden" style="display:flex;align-items:center;gap:0.5rem;padding:0.4rem 0.75rem;border-bottom:1px solid var(--border);background:var(--bg-card)">
+                        <span style="font-size:0.85rem">📁</span>
+                        <input type="text" id="out-new-folder-input" placeholder="New folder name…"
+                               style="flex:1;background:var(--bg);color:var(--text);border:1px solid var(--accent);border-radius:var(--radius);padding:0.3rem 0.5rem;font-size:0.85rem"
+                               onkeydown="outNewFolderKey(event)">
+                        <button class="btn btn-primary btn-sm" onclick="outCreateFolder()">Create</button>
+                        <button class="btn btn-secondary btn-sm" onclick="outHideNewFolder()">Cancel</button>
+                    </div>
+                    <div class="file-browser-list" id="out-browser-list">
+                        <div class="file-browser-empty">Loading…</div>
+                    </div>
+                </div>
+                <div class="selected-path-display" id="out-selected-display">
+                    Selected: <span id="out-selected-path">none</span>
+                </div>
+                <div style="margin-top: 0.25rem; font-size: 0.78rem; color: var(--text-muted)">
+                    Click a folder to select it as the output. Double-click to navigate into it.
+                </div>
+            </div>
+
+            <!-- Advanced: Credentials.md templates -->
+            <details class="advanced-section">
+                <summary>Advanced — Naming Templates</summary>
+                <div class="advanced-body">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="tpl-episode">Episode template</label>
+                            <input type="text" id="tpl-episode" name="tpl_episode"
+                                   class="tpl-input"
+                                   placeholder="{title} - S{season:02d}E{episode:02d} - {episode_title}">
+                        </div>
+                        <div class="form-group">
+                            <label for="tpl-folder">Folder template</label>
+                            <input type="text" id="tpl-folder" name="tpl_folder"
+                                   class="tpl-input"
+                                   placeholder="{title} ({year})">
+                        </div>
+                        <div class="form-group">
+                            <label for="tpl-season">Season folder template</label>
+                            <input type="text" id="tpl-season" name="tpl_season"
+                                   class="tpl-input"
+                                   placeholder="Season {season:02d}">
+                        </div>
+                        <div class="form-group">
+                            <label for="tpl-movie">Movie file template</label>
+                            <input type="text" id="tpl-movie" name="tpl_movie"
+                                   class="tpl-input"
+                                   placeholder="{title} ({year})">
+                        </div>
+                        <div class="form-group">
+                            <label for="tpl-illegal">Illegal character replacement</label>
+                            <select id="tpl-illegal" name="tpl_illegal"
+                                    style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:0.45rem 0.65rem;font-size:0.9rem">
+                                <option value="">Remove — Re:Zero → ReZero</option>
+                                <option value="-">Hyphen — Re:Zero → Re-Zero</option>
+                                <option value=" ">Space — Re:Zero → Re Zero</option>
+                                <option value="_">Underscore — Re:Zero → Re_Zero</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Live preview -->
+                    <div style="margin-top:1rem;padding:0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius)">
+                        <div class="text-muted" style="font-size:0.8rem;margin-bottom:0.5rem">Preview</div>
+                        <div style="font-size:0.85rem">
+                            <div><span class="text-muted">Folder:</span> <code id="tpl-preview-folder"></code></div>
+                            <div><span class="text-muted">Season:</span> <code id="tpl-preview-season"></code></div>
+                            <div><span class="text-muted">Episode:</span> <code id="tpl-preview-file"></code></div>
+                            <div><span class="text-muted">Movie:</span> <code id="tpl-preview-movie"></code></div>
+                        </div>
+                    </div>
+
+                    <!-- Available tokens -->
+                    <details style="margin-top:0.75rem">
+                        <summary class="text-muted" style="font-size:0.85rem;cursor:pointer">Available tokens</summary>
+                        <div style="margin-top:0.5rem;font-size:0.8rem;columns:2;column-gap:2rem">
+                            <div><code>{title}</code> — Display title</div>
+                            <div><code>{title.romaji}</code> — Romaji title</div>
+                            <div><code>{title.english}</code> — English title</div>
+                            <div><code>{year}</code> — Year (e.g. 2013)</div>
+                            <div><code>{season}</code> — Season number (zero-padded)</div>
+                            <div><code>{episode}</code> — Episode number (zero-padded)</div>
+                            <div><code>{episode.title}</code> — Episode title (future)</div>
+                            <div><code>{quality}</code> — Full quality (e.g. 1080p BluRay x265)</div>
+                            <div><code>{quality.resolution}</code> — Resolution only</div>
+                            <div><code>{quality.source}</code> — Source only</div>
+                            <div><code>{season.name}</code> — Season AniList title</div>
+                            <div><code>{format}</code> — AniList format (e.g. MOVIE)</div>
+                            <div><code>{format.short}</code> — Short format (e.g. Movie)</div>
+                        </div>
+                    </details>
+                </div>
+            </details>
+
+            <!-- Analyze / Execute section -->
+            <div style="margin-top: 1.5rem">
+                <button class="btn btn-primary" id="analyze-btn" onclick="runAnalyze()">
+                    Analyze &amp; Execute
+                </button>
+                <div id="analyze-status" style="margin-top: 0.75rem; font-size: 0.9rem; color: var(--text-muted)"></div>
+
+                <!-- No-conflict "ready" block -->
+                <div id="analyze-ready" class="hidden" style="margin-top: 1rem">
+                    <div class="alert alert-success" id="analyze-ready-msg"></div>
+                    <button class="btn btn-primary" id="execute-btn" onclick="runExecute()">Execute</button>
+                </div>
+
+                <!-- Conflict table -->
+                <div id="conflict-section" class="hidden" style="margin-top: 1rem">
+                    <div style="font-weight: 600; margin-bottom: 0.5rem">Conflicts detected — choose how to resolve each</div>
+                    <div style="overflow-x: auto">
+                        <table class="conflict-table" id="conflict-table">
+                            <thead>
+                                <tr>
+                                    <th>Show</th>
+                                    <th>Source</th>
+                                    <th>Target</th>
+                                    <th>Conflict</th>
+                                    <th>Resolution</th>
+                                </tr>
+                            </thead>
+                            <tbody id="conflict-tbody"></tbody>
+                        </table>
+                    </div>
+                    <button class="btn btn-primary" id="conflict-execute-btn" disabled onclick="runExecuteWithResolutions()">
+                        Execute with resolutions
+                    </button>
+                </div>
+            </div>
+
+            <div class="step-nav">
+                <button class="btn btn-secondary" onclick="goToStep(1)">← Back</button>
+                <div class="spacer"></div>
+                <button class="btn btn-secondary" id="step2-skip" onclick="skipRestructure()">Skip file organization</button>
+                <button class="btn btn-primary" id="step2-next" onclick="runAnalyze()">Analyze &amp; Continue →</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         STEP 3 — Service Setup (tabbed)
+    ═══════════════════════════════════════════════════════════ -->
+    <div class="step-panel" id="step-3">
+        <div class="card">
+            <h2>Connect your services</h2>
+            <p class="text-muted hint">Configure the platforms you want to use. All services are optional.</p>
+
+            <!-- Tab bar -->
+            <div class="tab-bar" id="service-tabs">
+                <button class="tab-btn active" onclick="switchTab('anilist', this)"><img src="/static/img/anilist.png" alt="" class="tab-service-logo">AniList</button>
+                <button class="tab-btn" onclick="switchTab('plex', this)"><img src="/static/img/plex.png" alt="" class="tab-service-logo">Plex</button>
+                <button class="tab-btn" onclick="switchTab('jellyfin', this)"><img src="/static/img/jellyfin.png" alt="" class="tab-service-logo">Jellyfin</button>
+                <button class="tab-btn" onclick="switchTab('crunchyroll', this)"><img src="/static/img/crunchyroll.png" alt="" class="tab-service-logo">Crunchyroll</button>
+                <button class="tab-btn" onclick="switchTab('sonarr', this)"><img src="/static/img/sonarr.webp" alt="" class="tab-service-logo">Sonarr</button>
+                <button class="tab-btn" onclick="switchTab('radarr', this)"><img src="/static/img/radarr.png" alt="" class="tab-service-logo">Radarr</button>
+            </div>
+
+            <!-- AniList tab -->
+            <div class="tab-panel active" id="tab-anilist">
+                <button class="tab-skip" onclick="skipService('anilist')">Skip this service →</button>
+                <details class="service-help">
+                    <summary>How to get your AniList credentials</summary>
+                    <div class="service-help-body">
+                        <ol>
+                            <li>Go to <a href="https://anilist.co/settings/developer" target="_blank" rel="noopener">anilist.co/settings/developer</a> and sign in.</li>
+                            <li>Click <strong>Create New Client</strong>.</li>
+                            <li>Set the <strong>Redirect URI</strong> to <code id="al-callback-url">http://THIS_SERVER/auth/anilist/callback</code>.</li>
+                            <li>Copy the <strong>Client ID</strong> and <strong>Client Secret</strong> into the fields below.</li>
+                            <li>Click <strong>Save &amp; Test</strong>, then <strong>Authorize AniList</strong> to link your account.</li>
+                        </ol>
+                    </div>
+                </details>
+                <div class="form-grid" style="margin-bottom: 1rem">
+                    <div class="form-group">
+                        <label for="al-client-id">Client ID</label>
+                        <input type="text" id="al-client-id" name="al_client_id" placeholder="12345" value="{{ settings.anilist_client_id }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="al-client-secret">Client Secret</label>
+                        <input type="password" id="al-client-secret" name="al_client_secret" placeholder="(your client secret)" value="{{ settings.anilist_client_secret }}">
+                    </div>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap">
+                    <button class="btn btn-primary" id="al-test-btn" onclick="testService('anilist')">Save &amp; Test</button>
+                    <span class="test-badge hidden" id="al-badge"></span>
+                    <button class="btn btn-secondary hidden" id="al-authorize-btn" onclick="anilistAuthorize()">Authorize AniList →</button>
+                    <span id="al-linked-badge" class="badge badge-success hidden"></span>
+                </div>
+                <div id="al-service-status" style="display:none; margin-top:0.75rem; font-size:0.85rem; color:var(--text-muted)">
+                    Skipped
+                </div>
+            </div>
+
+            <!-- Plex tab -->
+            <div class="tab-panel" id="tab-plex">
+                <button class="tab-skip" onclick="skipService('plex')">Skip this service →</button>
+                <details class="service-help">
+                    <summary>How to find your Plex server URL &amp; token</summary>
+                    <div class="service-help-body">
+                        <strong>Server URL</strong> — your Plex server's local address, e.g. <code>http://192.168.1.100:32400</code>.
+                        Find it in Plex Web → Settings → Remote Access, or check your router's DHCP list for the host running Plex.
+                        <br><br>
+                        <strong>Admin Token</strong> — a unique key that identifies your Plex account to the server.
+                        <ol>
+                            <li>Open <a href="https://app.plex.tv" target="_blank" rel="noopener">app.plex.tv</a> in your browser and sign in.</li>
+                            <li>Open browser DevTools (F12) → <strong>Network</strong> tab.</li>
+                            <li>Play or click any media item. Look for a request URL containing <code>X-Plex-Token=</code> — that value is your token.</li>
+                            <li><strong>Tip:</strong> that same request URL contains your server address. You can paste the full URL into the Server URL field above and it will automatically be trimmed to just the base (e.g. <code>https://192-168-x-x…plex.direct:32400</code>).</li>
+                        </ol>
+                        Alternatively, see the <a href="https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/" target="_blank" rel="noopener">Plex support article</a> for other methods.
+                    </div>
+                </details>
+                <div class="form-grid" style="margin-bottom: 1rem">
+                    <div class="form-group">
+                        <label for="plex-url">Server URL</label>
+                        <input type="url" id="plex-url" name="plex_url" placeholder="http://192.168.1.100:32400" onpaste="plexUrlPaste(event)" value="{{ settings.plex_url }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="plex-token">Admin Token</label>
+                        <input type="password" id="plex-token" name="plex_token" placeholder="(your Plex token)" value="{{ settings.plex_token }}">
+                    </div>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap; margin-bottom:0.75rem">
+                    <button class="btn btn-plex" id="plex-test-btn" onclick="testService('plex')">Test Connection</button>
+                    <span class="test-badge hidden" id="plex-badge"></span>
+                    <span class="badge badge-success hidden" id="plex-plexpass-badge">PlexPass ✓</span>
+                    <span class="badge badge-muted hidden" id="plex-noplexpass-badge">No PlexPass</span>
+                </div>
+
+                <!-- Revealed on success -->
+                <div class="hidden" id="plex-success-section">
+                    <div id="plex-webhook-row" class="hidden" style="margin-bottom: 1rem">
+                        <div class="section-label">Webhook URL</div>
+                        <div class="webhook-url-box" id="plex-webhook-url"></div>
+                        <div style="margin-top:0.35rem; font-size:0.78rem; color:var(--text-muted)">
+                            Add this URL in Plex → Settings → Webhooks.
+                        </div>
+                    </div>
+                    <div style="margin-bottom: 1rem">
+                        <div class="section-label">Polling Interval</div>
+                        <div style="display:flex; align-items:center; gap:0.5rem">
+                            <input type="number" id="plex-poll-interval" value="{{ settings.plex_poll_interval }}" min="1" style="width:80px">
+                            <span class="text-muted" style="font-size:0.87rem">minutes</span>
+                        </div>
+                    </div>
+                    <div style="margin-bottom:1rem">
+                        <div class="section-label">Libraries to sync</div>
+                        <div class="library-check-list" id="plex-library-list">
+                            <div class="text-muted" style="font-size:0.85rem">No libraries found.</div>
+                        </div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:0.75rem">
+                        <button class="btn btn-primary btn-sm" onclick="savePlexSettings()">Save Plex Settings</button>
+                        <span id="plex-save-badge" class="test-badge hidden"></span>
+                    </div>
+                </div>
+                <div id="plex-service-status" style="display:none; margin-top:0.75rem; font-size:0.85rem; color:var(--text-muted)">
+                    Skipped
+                </div>
+            </div>
+
+            <!-- Jellyfin tab -->
+            <div class="tab-panel" id="tab-jellyfin">
+                <button class="tab-skip" onclick="skipService('jellyfin')">Skip this service →</button>
+                <details class="service-help">
+                    <summary>How to find your Jellyfin server URL &amp; API key</summary>
+                    <div class="service-help-body">
+                        <strong>Server URL</strong> — your Jellyfin server's local address, e.g. <code>http://192.168.1.100:8096</code>.
+                        You can find or confirm this in Jellyfin → Dashboard → Networking.
+                        <br><br>
+                        <strong>API Key</strong> — generated in the Jellyfin admin panel.
+                        <ol>
+                            <li>Open your Jellyfin server and sign in as an administrator.</li>
+                            <li>Go to <strong>Dashboard</strong> (top-right menu) → <strong>Advanced</strong> → <strong>API Keys</strong>.</li>
+                            <li>Click the <strong>+</strong> button, give it a name (e.g. <em>Anilist-Link</em>), and click OK.</li>
+                            <li>Copy the generated key into the field below.</li>
+                        </ol>
+                    </div>
+                </details>
+                <div class="form-grid" style="margin-bottom: 1rem">
+                    <div class="form-group">
+                        <label for="jf-url">Server URL</label>
+                        <input type="url" id="jf-url" name="jf_url" placeholder="http://192.168.1.100:8096" value="{{ settings.jellyfin_url }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="jf-api-key">API Key</label>
+                        <input type="password" id="jf-api-key" name="jf_api_key" placeholder="(your Jellyfin API key)" value="{{ settings.jellyfin_api_key }}">
+                    </div>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap; margin-bottom:0.75rem">
+                    <button class="btn btn-primary" id="jf-test-btn" onclick="testService('jellyfin')">Test Connection</button>
+                    <span class="test-badge hidden" id="jf-badge"></span>
+                </div>
+
+                <!-- Revealed on success -->
+                <div class="hidden" id="jf-success-section">
+                    <div style="margin-bottom: 1rem">
+                        <div class="section-label">Webhook URL</div>
+                        <div class="webhook-url-box" id="jf-webhook-url"></div>
+                        <div style="margin-top:0.5rem; font-size:0.78rem; color:var(--text-muted); line-height:1.6">
+                            <strong style="color:var(--text)">How to add this in Jellyfin:</strong><br>
+                            Go to <strong>Dashboard → Plugins → Catalogue</strong>, install the <strong>Webhooks</strong> plugin if not already installed, then restart Jellyfin.<br>
+                            After restarting, go to <strong>Dashboard → Plugins → Webhooks</strong> and click <strong>Add Generic Destination</strong>. Configure it as follows:<br><br>
+                            &bull; <strong>Webhook Name</strong> — anything (e.g. <em>Anilist-Link</em>)<br>
+                            &bull; <strong>Webhook URL</strong> — paste the URL above<br>
+                            &bull; <strong>Notification Types</strong> — enable <em>Playback Stop</em> and <em>User Data Saved</em>. Playback Stop fires when an episode ends (includes whether it played to completion); User Data Saved catches manual mark-as-watched actions. Playback Progress fires every ~10 seconds and is not needed.<br>
+                            &bull; <strong>User Filter</strong> — leave empty to sync all users, or select specific users whose watch history you want to track<br>
+                            &bull; <strong>Item Types</strong> — enable <em>Episodes</em> and <em>Movies</em> (at least one must be checked or no events will fire)<br>
+                            &bull; <strong>Send All Properties</strong> — check this box so the full playback data (episode number, completion status, position, etc.) is included in the payload<br>
+                            &bull; <strong>Headers</strong> — add <code>Content-Type: application/json</code><br>
+                            &bull; <strong>Server URL</strong> — optionally set to your Jellyfin address (<code id="jf-webhook-server-hint"></code>); only affects media image URLs in the payload, not webhook delivery
+                        </div>
+                    </div>
+                    <div>
+                        <div class="section-label">Libraries to sync</div>
+                        <div class="library-check-list" id="jf-library-list">
+                            <div class="text-muted" style="font-size:0.85rem">No libraries found.</div>
+                        </div>
+                    </div>
+                    <div style="margin-top:1rem">
+                        <button class="btn btn-primary btn-sm" onclick="saveJellyfinSettings()">Save Jellyfin Settings</button>
+                        <span id="jf-save-badge" class="test-badge hidden"></span>
+                    </div>
+                </div>
+                <div id="jf-service-status" style="display:none; margin-top:0.75rem; font-size:0.85rem; color:var(--text-muted)">
+                    Skipped
+                </div>
+            </div>
+
+            <!-- Crunchyroll tab -->
+            <div class="tab-panel" id="tab-crunchyroll">
+                <button class="tab-skip" onclick="skipService('crunchyroll')">Skip this service →</button>
+                <details class="service-help">
+                    <summary>About Crunchyroll setup</summary>
+                    <div class="service-help-body">
+                        Enter your Crunchyroll <strong>email and password</strong> — the same credentials you use to log in on crunchyroll.com.
+                        <br><br>
+                        <strong>FlareSolverr URL</strong> (optional) — Crunchyroll uses Cloudflare protection that can block automated requests.
+                        FlareSolverr is a small proxy service that bypasses this. If you don't have it running, leave this field blank and Anilist-Link will attempt a direct connection.
+                        To run FlareSolverr with Docker:
+                        <ol>
+                            <li>Add <code>flaresolverr/flaresolverr</code> as a container (port <code>8191</code>).</li>
+                            <li>Enter <code>http://YOUR-HOST:8191</code> in the field below.</li>
+                        </ol>
+                        <strong>Headless mode</strong> — runs the browser invisibly in the background. Leave this on unless you need to debug the login process.
+                    </div>
+                </details>
+                <div class="form-grid" style="margin-bottom: 1rem">
+                    <div class="form-group">
+                        <label for="cr-email">Crunchyroll Email</label>
+                        <input type="email" id="cr-email" name="cr_email" placeholder="you@example.com" value="{{ settings.cr_email }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="cr-password">Password</label>
+                        <input type="password" id="cr-password" name="cr_password" placeholder="(your password)">
+                    </div>
+                    <div class="form-group">
+                        <label for="cr-flaresolverr">FlareSolverr URL</label>
+                        <input type="url" id="cr-flaresolverr" name="cr_flaresolverr" placeholder="http://localhost:8191" value="{{ settings.cr_flaresolverr_url }}">
+                    </div>
+                    <div class="form-group">
+                        <label class="toggle">
+                            <input type="checkbox" id="cr-headless" name="cr_headless" checked>
+                            <span class="toggle-label">Headless mode</span>
+                        </label>
+                    </div>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap; margin-bottom:1rem">
+                    <button class="btn btn-primary" id="cr-test-btn" onclick="testService('crunchyroll')">Test</button>
+                    <span class="test-badge hidden" id="cr-badge"></span>
+                </div>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="cr-max-pages">Max pages to sync</label>
+                        <input type="number" id="cr-max-pages" name="cr_max_pages" value="50" min="1" style="width:100px">
+                    </div>
+                    <div class="form-group">
+                        <label>History range</label>
+                        <label class="toggle" style="margin-bottom:0.35rem">
+                            <input type="checkbox" id="cr-all-history" checked onchange="toggleCrDateRange(this)">
+                            <span class="toggle-label">All history</span>
+                        </label>
+                        <div id="cr-date-range" class="hidden" style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap">
+                            <div class="form-group" style="flex:1">
+                                <label for="cr-date-from" style="font-size:0.78rem">From</label>
+                                <input type="text" id="cr-date-from" placeholder="YYYY-MM-DD">
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label for="cr-date-to" style="font-size:0.78rem">To</label>
+                                <input type="text" id="cr-date-to" placeholder="YYYY-MM-DD">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div id="cr-service-status" style="display:none; margin-top:0.75rem; font-size:0.85rem; color:var(--text-muted)">
+                    Skipped
+                </div>
+            </div>
+
+            <!-- Sonarr tab -->
+            <div class="tab-panel" id="tab-sonarr">
+                <button class="tab-skip" onclick="skipService('sonarr')">Skip this service →</button>
+                <details class="service-help">
+                    <summary>How to find your Sonarr URL &amp; API key</summary>
+                    <div class="service-help-body">
+                        <strong>Server URL</strong> — your Sonarr server's local address, e.g. <code>http://192.168.1.100:8989</code>.
+                        <br><br>
+                        <strong>API Key</strong> — found in the Sonarr admin panel.
+                        <ol>
+                            <li>Open your Sonarr server and go to <strong>Settings → General</strong>.</li>
+                            <li>Under the <strong>Security</strong> section, copy the <strong>API Key</strong>.</li>
+                        </ol>
+                        Sonarr is used by Anilist-Link to add anime series to your download queue using AniList alternative titles for accurate matching.
+                    </div>
+                </details>
+                <div class="form-grid" style="margin-bottom: 1rem">
+                    <div class="form-group">
+                        <label for="sonarr-url">Server URL</label>
+                        <input type="url" id="sonarr-url" name="sonarr_url" placeholder="http://192.168.1.100:8989" value="{{ settings.sonarr_url }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="sonarr-api-key">API Key</label>
+                        <input type="password" id="sonarr-api-key" name="sonarr_api_key" placeholder="(your Sonarr API key)" value="{{ settings.sonarr_api_key }}">
+                    </div>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap">
+                    <button class="btn btn-primary" id="sonarr-test-btn" onclick="testService('sonarr')">Test Connection</button>
+                    <span class="test-badge hidden" id="sonarr-badge"></span>
+                </div>
+                <div id="sonarr-service-status" style="display:none; margin-top:0.75rem; font-size:0.85rem; color:var(--text-muted)">
+                    Skipped
+                </div>
+            </div>
+
+            <!-- Radarr tab -->
+            <div class="tab-panel" id="tab-radarr">
+                <button class="tab-skip" onclick="skipService('radarr')">Skip this service →</button>
+                <details class="service-help">
+                    <summary>How to find your Radarr URL &amp; API key</summary>
+                    <div class="service-help-body">
+                        <strong>Server URL</strong> — your Radarr server's local address, e.g. <code>http://192.168.1.100:7878</code>.
+                        <br><br>
+                        <strong>API Key</strong> — found in the Radarr admin panel.
+                        <ol>
+                            <li>Open your Radarr server and go to <strong>Settings → General</strong>.</li>
+                            <li>Under the <strong>Security</strong> section, copy the <strong>API Key</strong>.</li>
+                        </ol>
+                        Radarr is used by Anilist-Link to add anime movies to your download queue using AniList alternative titles for accurate matching.
+                    </div>
+                </details>
+                <div class="form-grid" style="margin-bottom: 1rem">
+                    <div class="form-group">
+                        <label for="radarr-url">Server URL</label>
+                        <input type="url" id="radarr-url" name="radarr_url" placeholder="http://192.168.1.100:7878" value="{{ settings.radarr_url }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="radarr-api-key">API Key</label>
+                        <input type="password" id="radarr-api-key" name="radarr_api_key" placeholder="(your Radarr API key)" value="{{ settings.radarr_api_key }}">
+                    </div>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap">
+                    <button class="btn btn-primary" id="radarr-test-btn" onclick="testService('radarr')">Test Connection</button>
+                    <span class="test-badge hidden" id="radarr-badge"></span>
+                </div>
+                <div id="radarr-service-status" style="display:none; margin-top:0.75rem; font-size:0.85rem; color:var(--text-muted)">
+                    Skipped
+                </div>
+            </div>
+
+            <div class="step-nav">
+                <button class="btn btn-secondary" id="step3-back-btn" onclick="step3Back()">← Back</button>
+                <div class="spacer"></div>
+                <button class="btn btn-primary" id="step3-next-btn" onclick="step3Next()">Next →</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         STEP 4 — Review & Done
+    ═══════════════════════════════════════════════════════════ -->
+    <div class="step-panel" id="step-4">
+        <div class="card">
+            <h2>Review &amp; finish</h2>
+            <p class="text-muted hint">Here's a summary of what you've configured. You can go back to make changes or finish setup.</p>
+
+            <div class="review-grid" id="review-grid">
+                <!-- Populated by JS -->
+            </div>
+
+            <!-- Restructure report (shown only when restructure was run) -->
+            <div id="restructure-report-section" class="hidden" style="margin-top:1.5rem;padding-top:1.25rem;border-top:1px solid var(--border)">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.6rem;flex-wrap:wrap;gap:0.5rem">
+                    <h3 style="margin:0;font-size:1rem">File Organization Report</h3>
+                    <span id="report-summary" style="font-size:0.85rem;color:var(--text-muted)"></span>
+                </div>
+                <div id="report-filter-bar" style="display:flex;gap:0.4rem;margin-bottom:0.6rem">
+                    <button class="btn btn-secondary report-filter-btn active" style="font-size:0.8rem;padding:0.25rem 0.75rem" onclick="filterReport('all',this)">All</button>
+                    <button class="btn btn-secondary report-filter-btn" style="font-size:0.8rem;padding:0.25rem 0.75rem" onclick="filterReport('success',this)">Moved</button>
+                    <button class="btn btn-secondary report-filter-btn" style="font-size:0.8rem;padding:0.25rem 0.75rem" onclick="filterReport('error',this)">Errors</button>
+                </div>
+                <div id="report-loading" style="text-align:center;padding:1rem;color:var(--text-muted);font-size:0.85rem">Loading report…</div>
+                <div style="margin-top:0.5rem;text-align:right">
+                    <button class="btn btn-secondary" style="font-size:0.78rem;padding:0.2rem 0.6rem" onclick="_reportLoaded=false;loadRestructureReport()">↻ Refresh</button>
+                </div>
+                <div style="overflow-x:auto;max-height:320px;overflow-y:auto;display:none" id="report-table-wrap">
+                    <table style="width:100%;font-size:0.8rem;border-collapse:collapse">
+                        <thead>
+                            <tr style="text-align:left;position:sticky;top:0;background:var(--bg-card)">
+                                <th style="padding:0.4rem 0.5rem;border-bottom:1px solid var(--border)">Show</th>
+                                <th style="padding:0.4rem 0.5rem;border-bottom:1px solid var(--border)">Source file</th>
+                                <th style="padding:0.4rem 0.5rem;border-bottom:1px solid var(--border)">Destination file</th>
+                                <th style="padding:0.4rem 0.5rem;border-bottom:1px solid var(--border)">Result</th>
+                            </tr>
+                        </thead>
+                        <tbody id="report-tbody"></tbody>
+                    </table>
+                </div>
+                <div id="report-library-link" class="hidden" style="margin-top:0.75rem">
+                    <a id="report-library-href" href="/library" class="btn btn-secondary" style="font-size:0.85rem">View Library →</a>
+                </div>
+            </div>
+
+            <div style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border)">
+                <p class="text-muted" style="font-size:0.85rem; margin-bottom:1rem">
+                    You can always revisit these settings from the <a href="/settings" style="color:var(--accent)">Settings</a> page.
+                </p>
+            </div>
+
+            <div class="step-nav">
+                <button class="btn btn-secondary" onclick="goToStep(3)">← Back</button>
+                <div class="spacer"></div>
+                <a href="/" class="btn btn-secondary">Return to Dashboard</a>
+                <button class="btn btn-primary" id="done-btn" onclick="finishOnboarding()">Done</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Global completion toast (shown outside step panels) -->
+<div id="global-toast" class="hidden" style="
+    position: fixed; bottom: 1.75rem; right: 1.75rem; z-index: 9999;
+    max-width: 360px; padding: 0.85rem 1.1rem;
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: var(--radius); box-shadow: 0 4px 20px rgba(0,0,0,0.35);
+    display: flex; align-items: flex-start; gap: 0.75rem; font-size: 0.88rem;
+    transition: opacity 0.3s;">
+    <span id="global-toast-icon" style="flex-shrink:0;font-size:1.1rem">✓</span>
+    <div style="flex:1">
+        <div id="global-toast-title" style="font-weight:600;margin-bottom:0.15rem"></div>
+        <div id="global-toast-body" style="color:var(--text-muted);font-size:0.82rem"></div>
+    </div>
+    <button onclick="document.getElementById('global-toast').classList.add('hidden')"
+            style="background:none;border:none;cursor:pointer;color:var(--text-muted);
+                   font-size:1.1rem;line-height:1;flex-shrink:0;padding:0" title="Dismiss">×</button>
+</div>
+
+<script>
+// ── Credentials.md template live preview ──
+(function () {
+    var sampleTokens = {
+        'title': 'Attack on Titan', 'title.romaji': 'Shingeki no Kyojin',
+        'title.english': 'Attack on Titan', 'year': '2013', 'season': '01',
+        'episode': '05', 'episode.title': '', 'quality': '1080p BluRay x265',
+        'quality.resolution': '1080p', 'quality.source': 'BluRay',
+        'season.name': 'Shingeki no Kyojin Season 2', 'format': 'TV', 'format.short': 'TV'
+    };
+    var movieTokens = {
+        'title': 'Sen to Chihiro no Kamikakushi', 'title.romaji': 'Sen to Chihiro no Kamikakushi',
+        'title.english': 'Spirited Away', 'year': '2001', 'season': '01',
+        'episode': '', 'episode.title': '', 'quality': '1080p BluRay x265',
+        'quality.resolution': '1080p', 'quality.source': 'BluRay',
+        'season.name': '', 'format': 'MOVIE', 'format.short': 'Movie'
+    };
+    function renderTpl(tpl, tokens) {
+        var r = tpl.replace(/\{([a-z]+(?:\.[a-z]+)?)\}/g, function (m, k) { return tokens[k] || ''; });
+        r = r.replace(/\[\s*\]/g, '').replace(/\(\s*\)/g, '');
+        r = r.replace(/(\s*-\s*){2,}/g, ' - ').replace(/\.{2,}/g, '.').replace(/ {2,}/g, ' ');
+        return r.replace(/[\s.\-]+$/, '').replace(/^[\s.\-]+/, '').trim();
+    }
+    function updateTplPreview() {
+        var ep = document.getElementById('tpl-episode');
+        var fo = document.getElementById('tpl-folder');
+        var se = document.getElementById('tpl-season');
+        var mo = document.getElementById('tpl-movie');
+        var pFile   = document.getElementById('tpl-preview-file');
+        var pFolder = document.getElementById('tpl-preview-folder');
+        var pSeason = document.getElementById('tpl-preview-season');
+        var pMovie  = document.getElementById('tpl-preview-movie');
+        if (pFile   && ep) pFile.textContent   = (renderTpl(ep.value, sampleTokens) || ep.placeholder) + '.mkv';
+        if (pFolder && fo) pFolder.textContent = renderTpl(fo.value, sampleTokens) || fo.placeholder;
+        if (pSeason && se) pSeason.textContent = renderTpl(se.value, sampleTokens) || se.placeholder;
+        if (pMovie  && mo) pMovie.textContent  = (renderTpl(mo.value, movieTokens) || mo.placeholder) + '.mkv';
+    }
+    document.addEventListener('DOMContentLoaded', function () {
+        document.querySelectorAll('.tpl-input').forEach(function (el) {
+            el.addEventListener('input', updateTplPreview);
+        });
+        updateTplPreview();
+    });
+}());
+
+(function () {
+    'use strict';
+
+    /* ── State ─────────────────────────────────────────────── */
+    var state = {
+        currentStep: {{ current_step | default(1) }},
+        restructureMode: null,       // 'quick' | 'full' | 'skip'
+        sourceDirs: [],
+        outputDir: null,
+        srcBrowsePath: '/data',
+        outBrowsePath: '/data',
+        services: {
+            anilist: 'pending',      // 'ok' | 'skip' | 'fail' | 'pending'
+            plex: 'pending',
+            jellyfin: 'pending',
+            crunchyroll: 'pending',
+            sonarr: 'pending',
+            radarr: 'pending',
+        },
+        restructureStatus: 'pending', // 'running' | 'complete' | 'skip'
+        conflictResolutions: {},     // rowIndex -> 'overwrite' | 'merge' | 'skip_show'
+        conflictCount: 0,
+    };
+
+    /* ── Helpers ───────────────────────────────────────────── */
+    function esc(str) {
+        return String(str)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function showEl(id) { document.getElementById(id).classList.remove('hidden'); }
+    function hideEl(id) { document.getElementById(id).classList.add('hidden'); }
+
+    var _toastTimer = null;
+    function showToast(title, body, type, durationMs) {
+        var toast = el('global-toast');
+        var iconEl = el('global-toast-icon');
+        var titleEl = el('global-toast-title');
+        var bodyEl = el('global-toast-body');
+        if (!toast) return;
+        titleEl.textContent = title;
+        bodyEl.textContent = body || '';
+        if (type === 'error') {
+            toast.style.borderColor = 'var(--danger,#ef4444)';
+            iconEl.textContent = '✗';
+        } else if (type === 'warn') {
+            toast.style.borderColor = 'var(--warning,#f59e0b)';
+            iconEl.textContent = '⚠';
+        } else {
+            toast.style.borderColor = 'var(--success,#22c55e)';
+            iconEl.textContent = '✓';
+        }
+        toast.classList.remove('hidden');
+        toast.style.opacity = '1';
+        if (_toastTimer) clearTimeout(_toastTimer);
+        _toastTimer = setTimeout(function () {
+            toast.style.opacity = '0';
+            setTimeout(function () { toast.classList.add('hidden'); toast.style.opacity = '1'; }, 350);
+        }, durationMs || 8000);
+    }
+    function el(id) { return document.getElementById(id); }
+
+    function setSpinner(btnId, spinning) {
+        var btn = el(btnId);
+        if (!btn) return;
+        if (spinning) {
+            btn.disabled = true;
+            btn._origText = btn.innerHTML;
+            btn.innerHTML = '<span class="spinner-inline"></span> Working…';
+        } else {
+            btn.disabled = false;
+            btn.innerHTML = btn._origText || btn.innerHTML;
+        }
+    }
+
+    function showBadge(badgeId, ok, message) {
+        var badge = el(badgeId);
+        if (!badge) return;
+        badge.classList.remove('hidden', 'success', 'fail');
+        badge.classList.add(ok ? 'success' : 'fail');
+        badge.textContent = ok ? ('✓ ' + message) : ('✗ ' + message);
+    }
+
+    /* ── Step navigation ───────────────────────────────────── */
+    function goToStep(n) {
+        // Hide all steps
+        document.querySelectorAll('.step-panel').forEach(function (p) {
+            p.classList.remove('active');
+        });
+        el('step-' + n).classList.add('active');
+        state.currentStep = n;
+        updateProgressBar(n);
+        saveProgress(n);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+
+        if (n === 4) { buildReview(); loadRestructureReport(); }
+    }
+
+    function updateProgressBar(step) {
+        for (var i = 1; i <= 4; i++) {
+            var marker = el('prog-' + i);
+            marker.classList.remove('active', 'done');
+            if (i < step) marker.classList.add('done');
+            else if (i === step) marker.classList.add('active');
+        }
+    }
+
+    async function saveProgress(step) {
+        try {
+            await fetch('/onboarding/status', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ step: step, status: 'in_progress' }),
+            });
+        } catch (e) { /* ignore */ }
+    }
+
+    /* ── Step 1: mode selection ─────────────────────────────── */
+    document.querySelectorAll('.option-card').forEach(function (card) {
+        card.addEventListener('click', function () {
+            var radio = card.querySelector('input[type="radio"]');
+            if (radio) radio.checked = true;
+            document.querySelectorAll('.option-card').forEach(function (c) {
+                c.classList.remove('selected');
+            });
+            card.classList.add('selected');
+            state.restructureMode = radio ? radio.value : null;
+        });
+    });
+
+    window.goStep1Next = function () {
+        if (!state.restructureMode) {
+            alert('Please choose an option before continuing.');
+            return;
+        }
+        if (state.restructureMode === 'skip') {
+            state.restructureStatus = 'skip';
+            goToStep(3);
+        } else {
+            goToStep(2);
+            initFileBrowsers();
+        }
+    };
+
+    /* ── File browsers ──────────────────────────────────────── */
+    var srcClickTimers = {}; // path → timer id
+
+    async function browsePath(path, listId, pathId, mode) {
+        // mode: 'multi' (click-to-select) or 'single' (radio/click)
+        var listEl = el(listId);
+        listEl.innerHTML = '<div class="file-browser-empty">Loading…</div>';
+        try {
+            var resp = await fetch('/api/fs/browse?path=' + encodeURIComponent(path));
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            var data = await resp.json();
+            el(pathId).textContent = data.current || path;
+
+            var dirs = (data.dirs || []);
+            if (dirs.length === 0) {
+                listEl.innerHTML = '<div class="file-browser-empty">No subdirectories here.</div>';
+                return;
+            }
+
+            listEl.innerHTML = dirs.map(function (d) {
+                var fullPath = d.path || (path.replace(/\/$/, '') + '/' + d.name);
+                if (mode === 'multi') {
+                    var isSel = state.sourceDirs.includes(fullPath);
+                    return '<div class="file-browser-item' + (isSel ? ' selected' : '') + '" data-path="' + esc(fullPath) + '" style="cursor:pointer">' +
+                        '<span class="dir-icon">' + (isSel ? '✓' : '📁') + '</span>' +
+                        '<span class="dir-name">' + esc(d.name) + '</span>' +
+                        '<span class="dir-hint">double-click to open</span>' +
+                        '</div>';
+                } else {
+                    var isSelOut = state.outputDir === fullPath;
+                    return '<div class="file-browser-item' + (isSelOut ? ' selected' : '') + '" data-path="' + esc(fullPath) + '" style="cursor:pointer">' +
+                        '<span class="dir-icon">' + (isSelOut ? '✓' : '📁') + '</span>' +
+                        '<span class="dir-name">' + esc(d.name) + '</span>' +
+                        '<span class="dir-hint">double-click to open</span>' +
+                        '</div>';
+                }
+            }).join('');
+
+            // Attach click / dblclick after render
+            if (mode === 'single') {
+                listEl.querySelectorAll('.file-browser-item').forEach(function (row) {
+                    var rowPath = row.dataset.path;
+                    row.addEventListener('click', function () {
+                        if (outClickTimers[rowPath]) return;
+                        outClickTimers[rowPath] = setTimeout(function () {
+                            delete outClickTimers[rowPath];
+                            state.outputDir = rowPath;
+                            el('out-selected-path').textContent = rowPath;
+                            browsePath(state.outBrowsePath, 'out-browser-list', 'out-current-path', 'single');
+                        }, 220);
+                    });
+                    row.addEventListener('dblclick', function () {
+                        if (outClickTimers[rowPath]) {
+                            clearTimeout(outClickTimers[rowPath]);
+                            delete outClickTimers[rowPath];
+                        }
+                        if (state.outputDir === rowPath) {
+                            state.outputDir = null;
+                            el('out-selected-path').textContent = 'none';
+                        }
+                        outNavInto(rowPath);
+                    });
+                });
+            }
+            if (mode === 'multi') {
+                listEl.querySelectorAll('.file-browser-item').forEach(function (row) {
+                    var rowPath = row.dataset.path;
+                    row.addEventListener('click', function () {
+                        if (srcClickTimers[rowPath]) return; // dblclick already pending
+                        srcClickTimers[rowPath] = setTimeout(function () {
+                            delete srcClickTimers[rowPath];
+                            srcToggleSelect(rowPath);
+                        }, 220);
+                    });
+                    row.addEventListener('dblclick', function () {
+                        if (srcClickTimers[rowPath]) {
+                            clearTimeout(srcClickTimers[rowPath]);
+                            delete srcClickTimers[rowPath];
+                        }
+                        // Deselect the folder being navigated into
+                        var idx = state.sourceDirs.indexOf(rowPath);
+                        if (idx !== -1) {
+                            state.sourceDirs.splice(idx, 1);
+                            renderSourceTags();
+                        }
+                        srcNavInto(rowPath);
+                    });
+                });
+            }
+        } catch (e) {
+            listEl.innerHTML = '<div class="file-browser-empty" style="color:var(--danger)">Error: ' + esc(e.message) + '</div>';
+        }
+    }
+
+    function srcToggleSelect(path) {
+        var idx = state.sourceDirs.indexOf(path);
+        if (idx === -1) {
+            state.sourceDirs.push(path);
+        } else {
+            state.sourceDirs.splice(idx, 1);
+        }
+        renderSourceTags();
+        browsePath(state.srcBrowsePath, 'src-browser-list', 'src-current-path', 'multi');
+    }
+
+    function initFileBrowsers() {
+        browsePath(state.srcBrowsePath, 'src-browser-list', 'src-current-path', 'multi');
+        browsePath(state.outBrowsePath, 'out-browser-list', 'out-current-path', 'single');
+        renderSourceTags();
+    }
+
+    // Source browser
+    function srcNavInto(path) {
+        state.srcBrowsePath = path;
+        browsePath(path, 'src-browser-list', 'src-current-path', 'multi');
+    }
+    window.srcBrowseParent = function () {
+        var parent = state.srcBrowsePath.split('/').slice(0, -1).join('/') || '/';
+        state.srcBrowsePath = parent;
+        browsePath(parent, 'src-browser-list', 'src-current-path', 'multi');
+    };
+
+    function renderSourceTags() {
+        var container = el('source-tags');
+        if (state.sourceDirs.length === 0) {
+            container.innerHTML = '<span class="text-muted" style="font-size:0.82rem">No sources added yet.</span>';
+            return;
+        }
+        container.innerHTML = state.sourceDirs.map(function (p, i) {
+            return '<span class="tag">' + esc(p) +
+                '<button class="tag-remove" onclick="removeSource(' + i + ')" title="Remove">×</button>' +
+                '</span>';
+        }).join('');
+    }
+
+    window.removeSource = function (i) {
+        state.sourceDirs.splice(i, 1);
+        renderSourceTags();
+    };
+
+    // Output browser
+    var outClickTimers = {};
+
+    window.outShowNewFolder = function () {
+        var row = el('out-new-folder-row');
+        row.classList.remove('hidden');
+        row.style.display = 'flex';
+        var input = el('out-new-folder-input');
+        input.value = '';
+        input.focus();
+    };
+    window.outHideNewFolder = function () {
+        el('out-new-folder-row').classList.add('hidden');
+        el('out-new-folder-input').value = '';
+    };
+    window.outNewFolderKey = function (e) {
+        if (e.key === 'Enter') { window.outCreateFolder(); }
+        if (e.key === 'Escape') { window.outHideNewFolder(); }
+    };
+    window.outCreateFolder = async function () {
+        var name = el('out-new-folder-input').value.trim();
+        if (!name) return;
+        var parent = state.outBrowsePath;
+        try {
+            var resp = await fetch('/api/fs/mkdir', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ parent: parent, name: name }),
+            });
+            var data = await resp.json();
+            if (!resp.ok || data.error) {
+                alert('Could not create folder: ' + (data.error || resp.status));
+                return;
+            }
+            outHideNewFolder();
+            // Navigate into the new folder and select it automatically
+            var newPath = data.path;
+            state.outputDir = newPath;
+            el('out-selected-path').textContent = newPath;
+            outNavInto(newPath);
+        } catch (e) {
+            alert('Request failed: ' + e.message);
+        }
+    };
+
+    function outNavInto(path) {
+        state.outBrowsePath = path;
+        browsePath(path, 'out-browser-list', 'out-current-path', 'single');
+    }
+    window.outBrowseParent = function () {
+        var parent = state.outBrowsePath.split('/').slice(0, -1).join('/') || '/';
+        state.outBrowsePath = parent;
+        browsePath(parent, 'out-browser-list', 'out-current-path', 'single');
+    };
+
+    /* ── Step 2: Analyze & Execute ──────────────────────────── */
+
+    // Progress for analyze/execute is now shown in the floating corner widget
+    // (see base.html /api/progress polling). This is kept as a no-op stub so
+    // existing call sites don't break; only errors are surfaced inline.
+    function showRestructureBanner(status, msg) {
+        if (status === 'error') {
+            console.warn('[Restructure] error:', msg);
+            // Surface error inline in step 2's status area if it exists
+            var errEl = el('restructure-step-error');
+            if (errEl) {
+                errEl.textContent = 'Restructure error: ' + (msg || 'unknown error');
+                errEl.classList.remove('hidden');
+            }
+        }
+    }
+
+    window.runAnalyze = function () {
+        // If already running or done, just navigate forward
+        if (state.restructureStatus === 'analyzing' || state.restructureStatus === 'running') {
+            goToStep(3);
+            return;
+        }
+        if (state.restructureStatus === 'done') {
+            goToStep(3);
+            return;
+        }
+
+        if (state.sourceDirs.length === 0) {
+            alert('Please add at least one source directory.');
+            return;
+        }
+        if (!state.outputDir) {
+            alert('Please select an output directory.');
+            return;
+        }
+
+        // Capture template values before navigating away from step 2
+        var payload = {
+            source_dirs: state.sourceDirs,
+            output_dir: state.outputDir,
+            level: state.restructureMode,
+            templates: {
+                episode: el('tpl-episode').value || null,
+                folder: el('tpl-folder').value || null,
+                season: el('tpl-season').value || null,
+                movie: el('tpl-movie').value || null,
+                illegal_char_replacement: el('tpl-illegal').value,
+            },
+        };
+
+        // Immediately advance — processing continues in the background
+        state.restructureStatus = 'analyzing';
+        goToStep(3);
+        showRestructureBanner('analyzing');
+
+        fetch('/onboarding/restructure/analyze', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data.error) {
+                state.restructureStatus = 'error';
+                showRestructureBanner('error', data.error);
+                return;
+            }
+
+            var conflicts = data.conflicts || [];
+            if (conflicts.length > 0) {
+                // Surface conflict info but proceed automatically with no resolutions (skip)
+                showRestructureBanner('conflicts', conflicts.length + ' conflict' + (conflicts.length !== 1 ? 's' : '') + ' detected');
+                // Store conflicts in state so step 2 can show them if user goes back
+                state.pendingConflicts = conflicts;
+                buildConflictTable(conflicts);
+                showEl('conflict-section');
+            }
+
+            // Chain into execute automatically
+            state.restructureStatus = 'running';
+            showRestructureBanner('running');
+            return fetch('/onboarding/restructure/execute', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ resolutions: [] }),
+            });
+        })
+        .then(function (r) {
+            if (!r) return; // error case already handled above
+            return r.json();
+        })
+        .then(function (data) {
+            if (!data) return;
+            if (data.error) {
+                state.restructureStatus = 'error';
+                showRestructureBanner('error', data.error);
+                return;
+            }
+            // Execute started as background task — poll for real completion
+            startExecPoll();
+        })
+        .catch(function (e) {
+            state.restructureStatus = 'error';
+            showRestructureBanner('error', e.message);
+        });
+    };
+
+    function buildConflictTable(conflicts) {
+        state.conflictResolutions = {};
+        state.conflictCount = conflicts.length;
+        updateConflictExecuteBtn();
+
+        var tbody = el('conflict-tbody');
+        tbody.innerHTML = conflicts.map(function (c, i) {
+            return '<tr>' +
+                '<td>' + esc(c.show || '') + '</td>' +
+                '<td style="font-family:monospace;font-size:0.78rem">' + esc(c.source || '') + '</td>' +
+                '<td style="font-family:monospace;font-size:0.78rem">' + esc(c.target || '') + '</td>' +
+                '<td>' + esc(c.conflict_type || 'exists') + '</td>' +
+                '<td><select onchange="setConflictRes(' + i + ', this.value)">' +
+                '<option value="">-- choose --</option>' +
+                '<option value="overwrite">Overwrite</option>' +
+                '<option value="merge">Merge (skip existing)</option>' +
+                '<option value="skip_show">Skip this show</option>' +
+                '</select></td>' +
+                '</tr>';
+        }).join('');
+    }
+
+    window.setConflictRes = function (i, val) {
+        if (val) {
+            state.conflictResolutions[i] = val;
+        } else {
+            delete state.conflictResolutions[i];
+        }
+        updateConflictExecuteBtn();
+    };
+
+    function updateConflictExecuteBtn() {
+        var resolved = Object.keys(state.conflictResolutions).length;
+        el('conflict-execute-btn').disabled = resolved < state.conflictCount;
+    }
+
+    window.runExecute = function () {
+        doExecute([]);
+    };
+
+    window.runExecuteWithResolutions = function () {
+        var resolutions = Object.keys(state.conflictResolutions).map(function (i) {
+            return { index: parseInt(i), resolution: state.conflictResolutions[i] };
+        });
+        doExecute(resolutions);
+    };
+
+    function doExecute(resolutions) {
+        // Immediately advance — execute is a background task
+        state.restructureStatus = 'running';
+        goToStep(3);
+        showRestructureBanner('running');
+
+        fetch('/onboarding/restructure/execute', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ resolutions: resolutions }),
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data.error) {
+                state.restructureStatus = 'error';
+                showRestructureBanner('error', data.error);
+                return;
+            }
+            // Execute started as background task — poll for real completion
+            startExecPoll();
+        })
+        .catch(function (e) {
+            state.restructureStatus = 'error';
+            showRestructureBanner('error', e.message);
+        });
+    }
+
+    var _execPollTimer = null;
+    function startExecPoll() {
+        if (_execPollTimer) return; // already polling
+        _execPollTimer = setInterval(async function () {
+            try {
+                var resp = await fetch('/api/onboarding/exec-status');
+                var data = await resp.json();
+                var status = data.status;
+
+                if (status === 'complete') {
+                    var moved = data.files_moved || 0;
+                    var errors = data.errors || 0;
+                    state.restructureStats = data;
+
+                    // Check if library scan is still running — keep polling
+                    var libScanStatus = data.library_scan_status || '';
+                    if (data.library_id && libScanStatus && libScanStatus !== 'complete' && libScanStatus !== 'error') {
+                        showRestructureBanner('library', 'Building library index…');
+                    } else {
+                        clearInterval(_execPollTimer);
+                        _execPollTimer = null;
+                        state.restructureStatus = 'done';
+                        var msg = moved + ' file' + (moved !== 1 ? 's' : '') + ' organized';
+                        if (errors > 0) msg += ', ' + errors + ' error' + (errors !== 1 ? 's' : '');
+                        if (data.library_id) msg += ' · Library indexed';
+                        showRestructureBanner('done', msg);
+
+                        // Show global toast (visible on any step)
+                        var toastBody = '';
+                        if (errors > 0) toastBody = errors + ' file' + (errors !== 1 ? 's' : '') + ' had errors — see the report below';
+                        showToast('File organization complete', msg + (toastBody ? '\n' + toastBody : ''), errors > 0 ? 'warn' : 'ok', 12000);
+
+                        // If user is already on step 4, reload the report and review
+                        if (state.currentStep === 4) {
+                            _reportLoaded = false;
+                            loadRestructureReport();
+                            buildReview();
+                        }
+                    }
+                } else if (status === 'error') {
+                    clearInterval(_execPollTimer);
+                    _execPollTimer = null;
+                    state.restructureStatus = 'error';
+                    showRestructureBanner('error', data.phase || 'Execute failed');
+                    showToast('File organization failed', data.phase || 'See logs for details', 'error', 12000);
+                }
+            } catch (e) { /* keep polling on network errors */ }
+        }, 2500);
+    }
+
+    window.skipRestructure = function () {
+        state.restructureStatus = 'skip';
+        goToStep(3);
+    };
+
+    /* ── Step 3: Service tabs ───────────────────────────────── */
+
+    // Smart-strip paste for Plex URL: if user pastes a full Plex media URL,
+    // extract just the scheme+host+port (e.g. https://192-168-x-x....plex.direct:32400)
+    window.plexUrlPaste = function (e) {
+        var pasted = (e.clipboardData || window.clipboardData).getData('text');
+        if (!pasted) return;
+        try {
+            var u = new URL(pasted.trim());
+            // Only strip if there's a non-trivial path (i.e. it's a media URL, not just the base)
+            if (u.pathname && u.pathname !== '/') {
+                e.preventDefault();
+                var base = u.origin; // scheme + host + port
+                var input = el('plex-url');
+                input.value = base;
+                input.dispatchEvent(new Event('input'));
+            }
+        } catch (_) { /* not a valid URL, let default paste happen */ }
+    };
+
+    var TAB_ORDER = ['anilist', 'plex', 'jellyfin', 'crunchyroll'];
+    state.activeTab = 'anilist';
+
+    window.switchTab = function (name, btn) {
+        document.querySelectorAll('.tab-btn').forEach(function (b) { b.classList.remove('active'); });
+        document.querySelectorAll('.tab-panel').forEach(function (p) { p.classList.remove('active'); });
+        if (btn) {
+            btn.classList.add('active');
+        } else {
+            // Find and activate the tab button by name
+            document.querySelectorAll('.tab-btn').forEach(function (b) {
+                if (b.textContent.trim().toLowerCase() === name.toLowerCase() ||
+                    b.getAttribute('onclick') && b.getAttribute('onclick').indexOf("'" + name + "'") !== -1) {
+                    b.classList.add('active');
+                }
+            });
+        }
+        el('tab-' + name).classList.add('active');
+        state.activeTab = name;
+        // Update Next button label on last tab
+        var nextBtn = el('step3-next-btn');
+        if (nextBtn) {
+            var idx = TAB_ORDER.indexOf(name);
+            nextBtn.textContent = (idx === TAB_ORDER.length - 1) ? 'Review →' : 'Next →';
+        }
+    };
+
+    window.step3Next = function () {
+        var idx = TAB_ORDER.indexOf(state.activeTab);
+        if (idx < TAB_ORDER.length - 1) {
+            var nextTab = TAB_ORDER[idx + 1];
+            // Find and click the tab button for the next tab
+            var found = false;
+            document.querySelectorAll('.tab-btn').forEach(function (b) {
+                var onclick = b.getAttribute('onclick') || '';
+                if (!found && onclick.indexOf("'" + nextTab + "'") !== -1) {
+                    switchTab(nextTab, b);
+                    found = true;
+                }
+            });
+        } else {
+            goToStep(4);
+        }
+    };
+
+    window.skipService = function (name) {
+        state.services[name] = 'skip';
+        el(name + '-service-status').style.display = 'block';
+        el(name + '-service-status').textContent = 'Skipped';
+    };
+
+    window.step3Back = function () {
+        if (state.restructureMode === 'skip' || !state.restructureMode) {
+            goToStep(1);
+        } else {
+            goToStep(2);
+        }
+    };
+
+    // AniList callback URL hint
+    (function () {
+        var origin = window.location.origin;
+        var cbEl = el('al-callback-url');
+        if (cbEl) cbEl.textContent = origin + '/auth/anilist/callback';
+    })();
+
+    // Open AniList OAuth in a popup so the onboarding page isn't navigated away
+    window.anilistAuthorize = function () {
+        var popup = window.open(
+            '/auth/anilist',
+            'anilist_oauth',
+            'width=620,height=720,left=' + Math.round((screen.width - 620) / 2) +
+            ',top=' + Math.round((screen.height - 720) / 2)
+        );
+        if (!popup) {
+            alert('Popup blocked — please allow popups for this page and try again.');
+        }
+    };
+
+    // Listen for the done message posted by /auth/anilist/done
+    window.addEventListener('message', function (e) {
+        if (e.origin !== window.location.origin) return;
+        if (!e.data) return;
+        if (e.data.type === 'anilist_auth_done') {
+            var username = e.data.username || 'your account';
+            var badge = el('al-linked-badge');
+            badge.textContent = '✓ Linked as ' + username;
+            badge.classList.remove('hidden');
+            el('al-authorize-btn').classList.add('hidden');
+            state.services['anilist'] = 'ok';
+        } else if (e.data.type === 'anilist_auth_error') {
+            var errBadge = el('al-badge');
+            if (errBadge) {
+                errBadge.textContent = '✗ Auth failed';
+                errBadge.style.color = 'var(--danger,#ef4444)';
+                errBadge.classList.remove('hidden');
+            }
+            var errMsg = e.data.error || 'Authorization failed. Try again.';
+            alert('AniList authorization failed:\n\n' + errMsg);
+        }
+    });
+
+    // Webhook URL hints
+    (function () {
+        var origin = window.location.origin;
+        var pHook = el('plex-webhook-url');
+        if (pHook) pHook.textContent = origin + '/plex/webhook';
+        var jHook = el('jf-webhook-url');
+        if (jHook) jHook.textContent = origin + '/jellyfin/webhook';
+        var jHint = el('jf-webhook-server-hint');
+        if (jHint) {
+            var jfUrl = el('jf-url');
+            jHint.textContent = (jfUrl && jfUrl.value) ? jfUrl.value : 'http://YOUR-JELLYFIN-IP:8096';
+        }
+    })();
+
+    // Restore connection status from server on page load
+    (function () {
+        var connected = {{ connected | tojson }};
+        var hasPlexpass = {{ has_plexpass | tojson }};
+        var anilistUsername = {{ anilist_username | tojson }};
+        // Inline prefix map — SERVICE_PREFIX isn't initialized yet at this point
+        var _pfx = { anilist: 'al', jellyfin: 'jf', crunchyroll: 'cr', plex: 'plex' };
+
+        function restoreConnected(name, label) {
+            var pfx = _pfx[name] || name;
+            var badge = el(pfx + '-badge');
+            if (badge) {
+                showEl(pfx + '-badge');
+                showBadge(pfx + '-badge', true, '✓ ' + label);
+            }
+            state.services[name] = 'ok';
+        }
+
+        if (connected.plex) {
+            restoreConnected('plex', 'Connected');
+            showEl('plex-success-section');
+            if (hasPlexpass) {
+                showEl('plex-plexpass-badge');
+                showEl('plex-webhook-row');
+            } else {
+                showEl('plex-noplexpass-badge');
+            }
+            // Restore library list from saved JSON
+            try {
+                var savedLibs = JSON.parse('{{ settings.plex_libraries_json | safe }}');
+                var savedKeys = '{{ settings.plex_sync_libraries }}'.split(',').filter(Boolean);
+                if (savedLibs && savedLibs.length) {
+                    renderPlexLibraries(savedLibs, savedKeys);
+                }
+            } catch (e) { /* malformed JSON, skip */ }
+        }
+        if (connected.jellyfin) {
+            restoreConnected('jellyfin', 'Connected');
+        }
+        if (connected.anilist) {
+            restoreConnected('anilist', 'API reachable');
+            showEl('al-authorize-btn');
+            el('al-authorize-btn').textContent = 'Authorize AniList →  (opens popup)';
+        }
+        if (anilistUsername) {
+            var linked = el('al-linked-badge');
+            if (linked) {
+                linked.textContent = '✓ Linked as ' + anilistUsername;
+                showEl('al-linked-badge');
+                var authBtn = el('al-authorize-btn');
+                if (authBtn) authBtn.classList.add('hidden');
+            }
+            state.services['anilist'] = 'ok';
+        }
+        if (connected.crunchyroll) {
+            restoreConnected('crunchyroll', 'Credentials saved');
+        }
+        if (connected.sonarr) {
+            restoreConnected('sonarr', 'Connected');
+        }
+        if (connected.radarr) {
+            restoreConnected('radarr', 'Connected');
+        }
+    })();
+
+    /* ── Generic service test ───────────────────────────────── */
+
+    // Element ID prefix per service (HTML uses short prefixes, not full service names)
+    var SERVICE_PREFIX = { anilist: 'al', jellyfin: 'jf', crunchyroll: 'cr', plex: 'plex', sonarr: 'sonarr', radarr: 'radarr' };
+
+    window.testService = function (name) {
+        var pfx = SERVICE_PREFIX[name] || name;
+        var btnId = pfx + '-test-btn';
+        var badgeId = pfx + '-badge';
+        setSpinner(btnId, true);
+        showEl(badgeId);
+        el(badgeId).classList.remove('success', 'fail');
+        el(badgeId).textContent = '…';
+
+        // Save credentials to DB before testing so they persist across page reloads
+        var preSave = saveServiceSettings(name);
+
+        var payload = buildTestPayload(name);
+        var url = '/api/test/' + name;
+
+        preSave.then(function () {
+            return fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            setSpinner(btnId, false);
+            var ok = data.ok === true || data.success === true;
+            state.services[name] = ok ? 'ok' : 'fail';
+            showBadge(badgeId, ok, ok ? 'Connected' : ('Failed: ' + (data.error || data.message || 'unknown error')));
+            if (ok) onServiceSuccess(name, data);
+        })
+        .catch(function (e) {
+            setSpinner(btnId, false);
+            state.services[name] = 'fail';
+            showBadge(badgeId, false, 'Failed: ' + e.message);
+        });
+    };
+
+    function saveServiceSettings(name) {
+        var settings = {};
+        switch (name) {
+            case 'anilist':
+                settings['anilist.client_id'] = el('al-client-id').value.trim();
+                settings['anilist.client_secret'] = el('al-client-secret').value.trim();
+                break;
+            case 'plex':
+                settings['plex.url'] = el('plex-url').value.trim();
+                settings['plex.token'] = el('plex-token').value.trim();
+                break;
+            case 'jellyfin':
+                settings['jellyfin.url'] = el('jf-url').value.trim();
+                settings['jellyfin.api_key'] = el('jf-api-key').value.trim();
+                break;
+            case 'crunchyroll':
+                settings['crunchyroll.email'] = el('cr-email').value.trim();
+                settings['crunchyroll.password'] = el('cr-password').value;
+                settings['crunchyroll.flaresolverr_url'] = el('cr-flaresolverr').value.trim();
+                break;
+            case 'sonarr':
+                settings['sonarr.url'] = el('sonarr-url').value.trim();
+                settings['sonarr.api_key'] = el('sonarr-api-key').value.trim();
+                break;
+            case 'radarr':
+                settings['radarr.url'] = el('radarr-url').value.trim();
+                settings['radarr.api_key'] = el('radarr-api-key').value.trim();
+                break;
+        }
+        if (!Object.keys(settings).length) return Promise.resolve();
+        return fetch('/api/settings/bulk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ settings: settings }),
+        }).catch(function () { /* non-fatal — test can still proceed */ });
+    }
+
+    function buildTestPayload(name) {
+        switch (name) {
+            case 'anilist':
+                return { client_id: el('al-client-id').value, client_secret: el('al-client-secret').value };
+            case 'plex':
+                return { url: el('plex-url').value, token: el('plex-token').value };
+            case 'jellyfin':
+                return { url: el('jf-url').value, api_key: el('jf-api-key').value };
+            case 'crunchyroll':
+                return { email: el('cr-email').value, password: el('cr-password').value, flaresolverr_url: el('cr-flaresolverr').value };
+            case 'sonarr':
+                return { url: el('sonarr-url').value, api_key: el('sonarr-api-key').value };
+            case 'radarr':
+                return { url: el('radarr-url').value, api_key: el('radarr-api-key').value };
+            default:
+                return {};
+        }
+    }
+
+    function onServiceSuccess(name, data) {
+        switch (name) {
+            case 'anilist':
+                // Show authorize button — user clicks it to open the OAuth popup
+                showEl('al-authorize-btn');
+                el('al-authorize-btn').textContent = 'Authorize AniList →  (opens popup)';
+                break;
+            case 'plex':
+                showEl('plex-success-section');
+                if (data.has_plexpass) {
+                    showEl('plex-plexpass-badge');
+                    showEl('plex-webhook-row');
+                } else {
+                    showEl('plex-noplexpass-badge');
+                }
+                if (data.libraries && data.libraries.length) {
+                    var savedKeys = '{{ settings.plex_sync_libraries }}'.split(',').filter(Boolean);
+                    renderPlexLibraries(data.libraries, savedKeys);
+                    // Auto-save the full library list so it can be restored on reload
+                    savePlexSettings(data.libraries);
+                }
+                break;
+            case 'jellyfin':
+                showEl('jf-success-section');
+                if (data.libraries && data.libraries.length) {
+                    el('jf-library-list').innerHTML = data.libraries.map(function (lib) {
+                        return '<label class="toggle">' +
+                            '<input type="checkbox" name="jf_library" value="' + esc(lib.id || lib.Id) + '" checked>' +
+                            '<span class="toggle-label">' + esc(lib.name || lib.title || lib.Name) + '</span>' +
+                            '</label>';
+                    }).join('');
+                    // Auto-save library list so it can be restored on reload
+                    saveJellyfinSettings(data.libraries);
+                }
+                break;
+        }
+    }
+
+    /* ── Plex library helpers ────────────────────────────────── */
+
+    function renderPlexLibraries(libraries, selectedKeys) {
+        var list = el('plex-library-list');
+        if (!list) return;
+        // If no saved selection yet, default all checked
+        var useAll = !selectedKeys || selectedKeys.length === 0;
+        list.innerHTML = libraries.map(function (lib) {
+            var key = esc(lib.key || lib.id || '');
+            var checked = useAll || selectedKeys.indexOf(key) !== -1 ? ' checked' : '';
+            return '<label class="toggle">' +
+                '<input type="checkbox" name="plex_library" value="' + key + '"' + checked + '>' +
+                '<span class="toggle-label">' + esc(lib.title || lib.name) + '</span>' +
+                '</label>';
+        }).join('');
+    }
+
+    window.savePlexSettings = function (librariesOverride) {
+        var interval = (el('plex-poll-interval') || {}).value || '5';
+        var checked = Array.from(
+            document.querySelectorAll('#plex-library-list input[type=checkbox]:checked')
+        ).map(function (cb) { return cb.value; });
+
+        var libraries = librariesOverride || null;
+        var settings = {
+            'plex.poll_interval': interval,
+            'plex.sync_libraries': checked.join(','),
+        };
+        if (libraries) {
+            settings['plex.libraries_json'] = JSON.stringify(libraries);
+        }
+
+        fetch('/api/settings/bulk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ settings: settings }),
+        }).then(function (r) { return r.json(); }).then(function (data) {
+            var badge = el('plex-save-badge');
+            if (!badge) return;
+            showEl('plex-save-badge');
+            if (data.ok) {
+                showBadge('plex-save-badge', true, 'Saved');
+                setTimeout(function () { badge.classList.add('hidden'); }, 2000);
+            } else {
+                showBadge('plex-save-badge', false, 'Save failed');
+            }
+        }).catch(function () {
+            showBadge('plex-save-badge', false, 'Save failed');
+        });
+    };
+
+    window.saveJellyfinSettings = function (librariesOverride) {
+        var checked = Array.from(
+            document.querySelectorAll('#jf-library-list input[type=checkbox]:checked')
+        ).map(function (cb) { return cb.value; });
+
+        var settings = { 'jellyfin.sync_libraries': checked.join(',') };
+        if (librariesOverride) {
+            settings['jellyfin.libraries_json'] = JSON.stringify(librariesOverride);
+        }
+
+        fetch('/api/settings/bulk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ settings: settings }),
+        }).then(function (r) { return r.json(); }).then(function (data) {
+            var badge = el('jf-save-badge');
+            if (!badge) return;
+            showEl('jf-save-badge');
+            if (data.ok) {
+                showBadge('jf-save-badge', true, 'Saved');
+                setTimeout(function () { badge.classList.add('hidden'); }, 2000);
+            } else {
+                showBadge('jf-save-badge', false, 'Save failed');
+            }
+        }).catch(function () {
+            showBadge('jf-save-badge', false, 'Save failed');
+        });
+    };
+
+    /* ── Crunchyroll date range toggle ──────────────────────── */
+    window.toggleCrDateRange = function (checkbox) {
+        var rangeEl = el('cr-date-range');
+        if (checkbox.checked) {
+            rangeEl.classList.add('hidden');
+        } else {
+            rangeEl.classList.remove('hidden');
+            rangeEl.style.display = 'flex';
+        }
+    };
+
+    /* ── Step 4: Review ─────────────────────────────────────── */
+    function buildReview() {
+        // Server-side connected flags (templated, always accurate after refresh)
+        var serverConnected = {{ connected | tojson }};
+        var anilistLinked = !!'{{ anilist_username }}';
+
+        var services = [
+            { key: 'anilist', label: 'AniList', icon: '<img src="/static/img/anilist.png" alt="AniList" class="review-service-logo">' },
+            { key: 'plex', label: 'Plex', icon: '<img src="/static/img/plex.png" alt="Plex" class="review-service-logo">' },
+            { key: 'jellyfin', label: 'Jellyfin', icon: '<img src="/static/img/jellyfin.png" alt="Jellyfin" class="review-service-logo">' },
+            { key: 'crunchyroll', label: 'Crunchyroll', icon: '<img src="/static/img/crunchyroll.png" alt="Crunchyroll" class="review-service-logo">' },
+            { key: 'sonarr', label: 'Sonarr', icon: '<img src="/static/img/sonarr.webp" alt="Sonarr" class="review-service-logo">' },
+            { key: 'radarr', label: 'Radarr', icon: '<img src="/static/img/radarr.png" alt="Radarr" class="review-service-logo">' },
+        ];
+
+        var cards = services.map(function (s) {
+            // Prefer in-session state; fall back to server flags for page-reload case
+            var svc = state.services[s.key];
+            var isConnected = svc === 'ok' ||
+                (svc == null && (
+                    (s.key === 'anilist' && (serverConnected.anilist || anilistLinked)) ||
+                    (s.key !== 'anilist' && serverConnected[s.key])
+                ));
+            var statusClass = isConnected ? 'ok' : (svc === 'fail' ? 'fail' : 'skip');
+            var statusText = isConnected ? '✓ Configured'
+                : (svc === 'fail' ? '✗ Failed' : '⏭ Not configured');
+            return '<div class="review-card">' +
+                '<div class="review-card-icon">' + s.icon + '</div>' +
+                '<div class="review-card-name">' + esc(s.label) + '</div>' +
+                '<div class="review-card-status ' + statusClass + '">' + statusText + '</div>' +
+                '</div>';
+        }).join('');
+
+        // Restructure card — derive from exec-status on refresh if state is gone
+        var rsStatus = state.restructureStatus;
+        var rsClass, rsText;
+        if (rsStatus === 'done') {
+            rsClass = 'ok'; rsText = '✓ Complete';
+        } else if (rsStatus === 'running' || rsStatus === 'analyzing') {
+            rsClass = 'ok'; rsText = '⏳ Running in background';
+        } else if (rsStatus === 'error') {
+            rsClass = 'fail'; rsText = '✗ Error';
+        } else {
+            // On page refresh, check if restructure log has entries as proxy
+            rsClass = 'skip'; rsText = '⏭ Skipped / not run';
+        }
+        cards += '<div class="review-card">' +
+            '<div class="review-card-icon">📂</div>' +
+            '<div class="review-card-name">File Organization</div>' +
+            '<div class="review-card-status ' + rsClass + '">' + rsText + '</div>' +
+            '</div>';
+
+        el('review-grid').innerHTML = cards;
+    }
+
+    /* ── Restructure report ─────────────────────────────────── */
+
+    var _reportEntries = [];
+    var _reportFilter = 'all';
+    var _reportLoaded = false;
+
+    window.filterReport = function (filter, btn) {
+        _reportFilter = filter;
+        document.querySelectorAll('.report-filter-btn').forEach(function (b) {
+            b.classList.remove('active');
+        });
+        if (btn) btn.classList.add('active');
+        renderReportTable();
+    };
+
+    function renderReportTable() {
+        var filtered = _reportEntries.filter(function (e) {
+            if (_reportFilter === 'all') return true;
+            return e.status === _reportFilter;
+        });
+        var tbody = el('report-tbody');
+        if (!tbody) return;
+        if (!filtered.length) {
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:1rem;color:var(--text-muted)">No entries</td></tr>';
+            return;
+        }
+        tbody.innerHTML = filtered.map(function (e) {
+            var ok = e.status === 'success';
+            var color = ok ? 'var(--success,#22c55e)' : 'var(--danger,#ef4444)';
+            var srcFile = (e.source_path || '').split('/').pop();
+            var dstFile = (e.destination_path || '').split('/').pop();
+            var resultText = ok ? '✓ moved' : ('✗ ' + esc(e.error_message || 'error'));
+            return '<tr style="border-bottom:1px solid var(--border)">' +
+                '<td style="padding:0.35rem 0.5rem">' + esc(e.group_title || '') + '</td>' +
+                '<td style="padding:0.35rem 0.5rem;font-family:monospace;font-size:0.75rem;word-break:break-all" title="' + esc(e.source_path || '') + '">' + esc(srcFile) + '</td>' +
+                '<td style="padding:0.35rem 0.5rem;font-family:monospace;font-size:0.75rem;word-break:break-all" title="' + esc(e.destination_path || '') + '">' + esc(dstFile) + '</td>' +
+                '<td style="padding:0.35rem 0.5rem;color:' + color + ';white-space:nowrap">' + resultText + '</td>' +
+                '</tr>';
+        }).join('');
+    }
+
+    async function loadRestructureReport() {
+        // Skip if user explicitly skipped restructure this session
+        if (state.restructureStatus === 'skip') return;
+        var section = el('restructure-report-section');
+        if (!section) return;
+
+        if (_reportLoaded) return; // already fetched
+
+        try {
+            var resp = await fetch('/api/restructure/report?limit=1000');
+            var data = await resp.json();
+            _reportEntries = data.entries || [];
+            _reportLoaded = true;
+
+            section.classList.remove('hidden');
+
+            // If no entries yet, show appropriate message based on state
+            if (!_reportEntries.length) {
+                var loadingEl0 = el('report-loading');
+                if (loadingEl0) {
+                    var isRunning = (state.restructureStatus === 'analyzing' || state.restructureStatus === 'running');
+                    loadingEl0.textContent = isRunning
+                        ? '⏳ Waiting for restructure to complete…'
+                        : (state.restructureStatus == null ? 'No restructure operations found.' : 'No files were processed.');
+                }
+                return;
+            }
+
+            var loadingEl = el('report-loading');
+            var tableWrap = el('report-table-wrap');
+            if (loadingEl) loadingEl.style.display = 'none';
+            if (tableWrap) tableWrap.style.display = '';
+
+            var summaryEl = el('report-summary');
+            if (summaryEl) {
+                var parts = [];
+                if (data.moved) parts.push(data.moved + ' moved');
+                if (data.errors) parts.push(data.errors + ' error' + (data.errors !== 1 ? 's' : ''));
+                summaryEl.textContent = parts.join(', ') || 'No operations logged';
+            }
+
+            renderReportTable();
+
+            // Library link
+            var libId = (state.restructureStats || {}).library_id
+                || (typeof state !== 'undefined' && state.restructureStats && state.restructureStats.library_id)
+                || null;
+            if (!libId) {
+                // Try from exec-status
+                try {
+                    var sr = await fetch('/api/onboarding/exec-status');
+                    var sd = await sr.json();
+                    libId = sd.library_id || null;
+                } catch (e2) {}
+            }
+            if (libId) {
+                var linkEl = el('report-library-link');
+                var hrefEl = el('report-library-href');
+                if (linkEl && hrefEl) {
+                    hrefEl.href = '/library/' + libId;
+                    linkEl.classList.remove('hidden');
+                }
+            }
+        } catch (e) {
+            var loadingEl2 = el('report-loading');
+            if (loadingEl2) loadingEl2.textContent = 'Could not load report.';
+        }
+    }
+
+    /* ── Finish onboarding ──────────────────────────────────── */
+    window.finishOnboarding = function () {
+        setSpinner('done-btn', true);
+        fetch('/onboarding/status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'completed' }),
+        })
+        .then(function () {
+            window.location.href = '/';
+        })
+        .catch(function () {
+            window.location.href = '/';
+        });
+    };
+
+    /* ── Init ───────────────────────────────────────────────── */
+    (function init() {
+        var startStep = {{ current_step | default(1) }};
+        // Clamp to valid range
+        if (startStep < 1 || startStep > 4) startStep = 1;
+        updateProgressBar(startStep);
+        el('step-' + startStep).classList.add('active');
+        state.currentStep = startStep;
+
+        // Restore restructure mode guess from onboarding_status
+        // (if returning to step 2, we don't know the previous mode; default to skip guard)
+        if (startStep === 2) {
+            state.restructureMode = 'quick'; // safe default so back-nav doesn't break
+            initFileBrowsers();
+        }
+
+        renderSourceTags();
+    })();
+
+    // Expose goToStep globally for inline onclick
+    window.goToStep = goToStep;
+})();
+</script>
+{% endblock %}

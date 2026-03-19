@@ -1,0 +1,479 @@
+{% extends "base.html" %}
+{% block title %}Crunchyroll Sync Preview — Anilist-Link{% endblock %}
+
+{% block content %}
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;flex-wrap:wrap;gap:1rem">
+    <h1 style="margin:0">Crunchyroll Sync Preview</h1>
+    <div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap">
+        {% if runs %}
+        <select id="run-selector" class="form-input" style="max-width:260px"
+                onchange="window.location='/crunchyroll/preview?run_id='+this.value">
+            {% for run in runs %}
+            <option value="{{ run.run_id }}" {% if run.run_id == run_id %}selected{% endif %}>
+                {{ run.created_at[:16] if run.created_at else run.run_id[:8] }}
+                — {{ run.entry_count }} entries
+            </option>
+            {% endfor %}
+        </select>
+        {% endif %}
+        <button id="new-scan-btn" class="btn btn-primary" onclick="startNewScan()">
+            New Scan
+        </button>
+        {% if run_id and rows %}
+        <a href="/crunchyroll/history" class="btn btn-secondary">View History</a>
+        {% endif %}
+    </div>
+</div>
+
+{% if not user %}
+<section class="card">
+    <p class="text-muted">No AniList account linked. <a href="/auth/anilist" class="btn btn-primary btn-sm" style="margin-left:0.5rem">Link AniList</a></p>
+</section>
+{% elif not runs and not rows %}
+<section class="card" style="text-align:center;padding:3rem 1.5rem">
+    <p class="text-muted" style="margin-bottom:1.5rem">No preview runs yet. Start a scan to see what would be synced from Crunchyroll to AniList.</p>
+    <button class="btn btn-primary" onclick="startNewScan()">Start Preview Scan</button>
+</section>
+{% else %}
+
+{% if rows %}
+{% set action_counts = namespace(add=0, update=0, skip=0) %}
+{% for r in rows %}
+    {% if r.action == 'add' %}{% set action_counts.add = action_counts.add + 1 %}{% endif %}
+    {% if r.action == 'update' %}{% set action_counts.update = action_counts.update + 1 %}{% endif %}
+    {% if r.action == 'skip' %}{% set action_counts.skip = action_counts.skip + 1 %}{% endif %}
+{% endfor %}
+
+<section class="card">
+    <h2>Summary</h2>
+    <div class="stats-grid">
+        <div class="stat">
+            <span class="stat-value" style="color:var(--accent)">{{ rows | length }}</span>
+            <span class="stat-label">Total</span>
+        </div>
+        <div class="stat">
+            <span class="stat-value" style="color:#4caf50">{{ action_counts.add }}</span>
+            <span class="stat-label">New Adds</span>
+        </div>
+        <div class="stat">
+            <span class="stat-value" style="color:#ff9800">{{ action_counts.update }}</span>
+            <span class="stat-label">Updates</span>
+        </div>
+        <div class="stat">
+            <span class="stat-value" style="color:var(--text-muted)">{{ action_counts.skip }}</span>
+            <span class="stat-label">No Change</span>
+        </div>
+    </div>
+</section>
+
+<section class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:0.75rem">
+        <h2 style="margin:0">Entries</h2>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+            <button class="btn btn-secondary btn-sm" onclick="bulkApprove(true, true)">Approve High Conf (&gt;85%)</button>
+            <button class="btn btn-secondary btn-sm" onclick="bulkApprove(true, false)">Approve All</button>
+            <button class="btn btn-secondary btn-sm" onclick="bulkApprove(false, false)">Unapprove All</button>
+            <button class="btn btn-primary btn-sm" id="apply-btn" onclick="applyApproved()">Apply Approved</button>
+        </div>
+    </div>
+
+    <div id="apply-result" style="display:none;margin-bottom:1rem"></div>
+
+    <div style="overflow-x:auto">
+    <table class="table" id="preview-table">
+        <thead>
+            <tr>
+                <th style="width:40px">
+                    <input type="checkbox" id="select-all-check" title="Toggle all non-skip rows"
+                           onchange="toggleAllChecks(this.checked)">
+                </th>
+                <th>CR Title</th>
+                <th>AniList Match</th>
+                <th>Confidence</th>
+                <th>Current State</th>
+                <th>Proposed</th>
+                <th>Action</th>
+                <th>Approve</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in rows %}
+            <tr id="row-{{ row.id }}" class="preview-row action-{{ row.action }}" data-id="{{ row.id }}"
+                data-action="{{ row.action }}" data-approved="{{ row.approved }}"
+                data-confidence="{{ row.confidence }}">
+                <td>
+                    {% if row.action != 'skip' %}
+                    <input type="checkbox" class="row-check" data-id="{{ row.id }}"
+                           {% if row.approved %}checked{% endif %}
+                           onchange="handleRowCheck({{ row.id }}, this.checked)">
+                    {% endif %}
+                </td>
+                <td>
+                    <span class="folder-name">{{ row.cr_title }}</span>
+                </td>
+                <td>
+                    <span id="title-{{ row.id }}">
+                        {% if row.anilist_id %}
+                        <a href="https://anilist.co/anime/{{ row.anilist_id }}" target="_blank"
+                           rel="noopener" class="title-romaji">
+                            {{ row.anilist_title or ("AniList #" ~ row.anilist_id) }}
+                        </a>
+                        {% else %}
+                        <span class="text-muted">—</span>
+                        {% endif %}
+                    </span>
+                    <button type="button" class="btn btn-secondary btn-sm"
+                            style="margin-left:0.5rem;padding:0.15rem 0.4rem;font-size:0.75rem"
+                            onclick="openRematch({{ row.id }}, '{{ row.cr_title | e }}')">
+                        Fix
+                    </button>
+                </td>
+                <td>
+                    {% set pct = (row.confidence * 100) | round | int %}
+                    {% if pct >= 90 %}
+                    <span class="badge badge-success">{{ pct }}%</span>
+                    {% elif pct >= 75 %}
+                    <span class="badge badge-warning">{{ pct }}%</span>
+                    {% else %}
+                    <span class="badge badge-danger">{{ pct }}%</span>
+                    {% endif %}
+                </td>
+                <td style="font-size:0.85rem">
+                    {% if row.current_status %}
+                    <span class="badge {% if row.current_status == 'COMPLETED' %}badge-success{% elif row.current_status == 'CURRENT' %}badge-info{% else %}badge-muted{% endif %}">
+                        {{ row.current_status }}
+                    </span>
+                    <br><span class="text-muted">ep {{ row.current_progress }}</span>
+                    {% else %}
+                    <span class="text-muted">Not on list</span>
+                    {% endif %}
+                </td>
+                <td style="font-size:0.85rem" id="proposed-{{ row.id }}">
+                    <span class="badge {% if row.proposed_status == 'COMPLETED' %}badge-success{% elif row.proposed_status == 'CURRENT' %}badge-info{% else %}badge-muted{% endif %}">
+                        {{ row.proposed_status }}
+                    </span>
+                    <br><span class="text-muted">ep {{ row.proposed_progress }}</span>
+                </td>
+                <td id="action-{{ row.id }}">
+                    {% if row.action == 'add' %}
+                    <span class="badge" style="background:#1e4620;color:#4caf50;border:1px solid #4caf50">add</span>
+                    {% elif row.action == 'update' %}
+                    <span class="badge" style="background:#3d2a00;color:#ff9800;border:1px solid #ff9800">update</span>
+                    {% else %}
+                    <span class="badge badge-muted">skip</span>
+                    {% endif %}
+                </td>
+                <td id="approved-cell-{{ row.id }}">
+                    {% if row.action != 'skip' %}
+                    <span id="approved-indicator-{{ row.id }}" class="badge {% if row.approved %}badge-success{% else %}badge-muted{% endif %}">
+                        {% if row.approved %}Yes{% else %}No{% endif %}
+                    </span>
+                    {% else %}
+                    <span class="text-muted">—</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+
+    <div class="form-actions" style="margin-top:1.5rem">
+        <button class="btn btn-primary" id="apply-btn-bottom" onclick="applyApproved()">Apply Approved to AniList</button>
+        <a href="/crunchyroll/history" class="btn btn-secondary">View Sync History</a>
+    </div>
+</section>
+{% endif %}
+
+{% endif %}
+
+<!-- Rematch Modal -->
+<div id="rematch-modal" class="modal" style="display:none">
+    <div class="modal-backdrop" onclick="closeRematch()"></div>
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Fix Match: <span id="rematch-source-title"></span></h3>
+            <button class="modal-close" onclick="closeRematch()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="search-bar">
+                <input type="text" id="rematch-search-input" placeholder="Search AniList...">
+                <button class="btn btn-primary btn-sm" onclick="searchRematch()">Search</button>
+            </div>
+            <div id="rematch-loading" class="text-muted" style="display:none;padding:1rem 0">Searching...</div>
+            <div id="rematch-results"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Scan progress overlay -->
+<div id="scan-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;
+     align-items:center;justify-content:center;flex-direction:column;gap:1rem">
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);
+                padding:2rem 3rem;text-align:center;max-width:400px">
+        <div class="progress-spinner" style="width:2rem;height:2rem;margin:0 auto 1rem"></div>
+        <p style="font-size:1.1rem;margin-bottom:0.5rem">Scanning Crunchyroll history...</p>
+        <p class="text-muted" style="font-size:0.85rem">This may take a minute. Pages are fetched one at a time.</p>
+    </div>
+</div>
+
+<script>
+(function () {
+    'use strict';
+
+    var RUN_ID = {{ run_id | tojson }};
+
+    // ----------------------------------------------------------------
+    // New scan
+    // ----------------------------------------------------------------
+    window.startNewScan = function () {
+        var overlay = document.getElementById('scan-overlay');
+        overlay.style.display = 'flex';
+        var btn = document.getElementById('new-scan-btn');
+        if (btn) btn.disabled = true;
+
+        fetch('/api/crunchyroll/preview-scan', { method: 'POST' })
+            .then(function (resp) { return resp.json(); })
+            .then(function (data) {
+                overlay.style.display = 'none';
+                if (data.ok) {
+                    window.location = '/crunchyroll/preview?run_id=' + data.run_id;
+                } else {
+                    alert('Scan failed: ' + (data.error || 'Unknown error'));
+                    if (btn) btn.disabled = false;
+                }
+            })
+            .catch(function (err) {
+                overlay.style.display = 'none';
+                alert('Scan failed: ' + err);
+                if (btn) btn.disabled = false;
+            });
+    };
+
+    // ----------------------------------------------------------------
+    // Bulk approve
+    // ----------------------------------------------------------------
+    window.bulkApprove = function (approved, highConfOnly) {
+        if (!RUN_ID) return;
+
+        var body;
+        if (!approved && !highConfOnly) {
+            // unapprove all
+            body = { approve_all: true, approved: false };
+        } else if (!highConfOnly) {
+            body = { approve_all: true, approved: true };
+        } else {
+            // high confidence only (>85%)
+            var ids = [];
+            document.querySelectorAll('.preview-row').forEach(function (row) {
+                var conf = parseFloat(row.dataset.confidence || '0');
+                if (conf >= 0.85 && row.dataset.action !== 'skip') {
+                    ids.push(parseInt(row.dataset.id, 10));
+                }
+            });
+            if (!ids.length) { alert('No high-confidence entries to approve.'); return; }
+            body = { entry_ids: ids, approved: true };
+        }
+
+        fetch('/api/crunchyroll/preview/' + RUN_ID + '/approve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        })
+            .then(function (resp) { return resp.json(); })
+            .then(function (data) {
+                if (data.ok) { window.location.reload(); }
+                else { alert('Error: ' + (data.error || 'Unknown')); }
+            })
+            .catch(function (err) { alert('Error: ' + err); });
+    };
+
+    // ----------------------------------------------------------------
+    // Per-row checkbox
+    // ----------------------------------------------------------------
+    window.handleRowCheck = function (entryId, checked) {
+        if (!RUN_ID) return;
+        fetch('/api/crunchyroll/preview/' + RUN_ID + '/approve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ entry_ids: [entryId], approved: checked }),
+        })
+            .then(function (resp) { return resp.json(); })
+            .then(function (data) {
+                if (!data.ok) { alert('Error: ' + (data.error || 'Unknown')); return; }
+                var ind = document.getElementById('approved-indicator-' + entryId);
+                if (ind) {
+                    ind.textContent = checked ? 'Yes' : 'No';
+                    ind.className = 'badge ' + (checked ? 'badge-success' : 'badge-muted');
+                }
+            })
+            .catch(function (err) { alert('Error: ' + err); });
+    };
+
+    window.toggleAllChecks = function (checked) {
+        document.querySelectorAll('.row-check').forEach(function (cb) {
+            var entryId = parseInt(cb.dataset.id, 10);
+            if (cb.checked !== checked) {
+                cb.checked = checked;
+                handleRowCheck(entryId, checked);
+            }
+        });
+    };
+
+    // ----------------------------------------------------------------
+    // Apply approved
+    // ----------------------------------------------------------------
+    window.applyApproved = function () {
+        if (!RUN_ID) return;
+        if (!confirm('Apply all approved entries to AniList? This cannot be undone (but can be reversed via History > Undo).')) return;
+
+        var resultDiv = document.getElementById('apply-result');
+        resultDiv.style.display = 'none';
+
+        var btns = document.querySelectorAll('#apply-btn, #apply-btn-bottom');
+        btns.forEach(function (b) { b.disabled = true; b.textContent = 'Applying…'; });
+
+        fetch('/api/crunchyroll/preview/' + RUN_ID + '/apply', { method: 'POST' })
+            .then(function (resp) { return resp.json(); })
+            .then(function (data) {
+                btns.forEach(function (b) { b.disabled = false; b.textContent = 'Apply Approved'; });
+                if (data.ok) {
+                    resultDiv.style.display = 'block';
+                    resultDiv.className = 'alert alert-success';
+                    resultDiv.innerHTML = 'Applied <strong>' + data.applied + '</strong> entries to AniList.' +
+                        (data.errors ? ' <span style="color:var(--danger)">' + data.errors + ' errors.</span>' : '') +
+                        ' <a href="/crunchyroll/history" style="color:var(--accent);margin-left:0.5rem">View History</a>';
+                } else {
+                    resultDiv.style.display = 'block';
+                    resultDiv.className = 'alert alert-danger';
+                    resultDiv.textContent = 'Error: ' + (data.error || 'Unknown');
+                }
+            })
+            .catch(function (err) {
+                btns.forEach(function (b) { b.disabled = false; b.textContent = 'Apply Approved'; });
+                resultDiv.style.display = 'block';
+                resultDiv.className = 'alert alert-danger';
+                resultDiv.textContent = 'Error: ' + err;
+            });
+    };
+
+    // ----------------------------------------------------------------
+    // Rematch modal
+    // ----------------------------------------------------------------
+    var _rematchEntryId = null;
+    var _rematchCrTitle = '';
+
+    window.openRematch = function (entryId, crTitle) {
+        _rematchEntryId = entryId;
+        _rematchCrTitle = crTitle;
+        document.getElementById('rematch-source-title').textContent = crTitle;
+        var input = document.getElementById('rematch-search-input');
+        input.value = crTitle;
+        document.getElementById('rematch-results').innerHTML = '';
+        document.getElementById('rematch-modal').style.display = 'flex';
+        searchRematch();
+        setTimeout(function () { input.focus(); input.select(); }, 100);
+    };
+
+    window.closeRematch = function () {
+        document.getElementById('rematch-modal').style.display = 'none';
+        _rematchEntryId = null;
+    };
+
+    window.searchRematch = function () {
+        var q = document.getElementById('rematch-search-input').value.trim();
+        if (!q) return;
+        var resultsDiv = document.getElementById('rematch-results');
+        var loadingDiv = document.getElementById('rematch-loading');
+        resultsDiv.innerHTML = '';
+        loadingDiv.style.display = 'block';
+
+        fetch('/api/crunchyroll/search?q=' + encodeURIComponent(q))
+            .then(function (resp) { return resp.json(); })
+            .then(function (data) {
+                loadingDiv.style.display = 'none';
+                var results = data.results || [];
+                if (!results.length) {
+                    resultsDiv.innerHTML = '<p class="text-muted" style="padding:1rem 0">No results found.</p>';
+                    return;
+                }
+                var html = '';
+                results.forEach(function (r) {
+                    var meta = [r.format || '', r.episodes ? r.episodes + ' ep' : ''].filter(Boolean).join(' · ');
+                    html += '<div class="search-result">';
+                    if (r.cover_image) {
+                        html += '<img class="search-result-cover" src="' + esc(r.cover_image) + '" alt="">';
+                    } else {
+                        html += '<div class="search-result-cover search-result-cover-placeholder"></div>';
+                    }
+                    html += '<div class="search-result-info">';
+                    html += '<div class="title-romaji">' + esc(r.title) + '</div>';
+                    if (r.title_english && r.title_english !== r.title) {
+                        html += '<div class="title-english">' + esc(r.title_english) + '</div>';
+                    }
+                    if (meta) { html += '<div class="search-result-meta text-muted">' + esc(meta) + '</div>'; }
+                    html += '</div>';
+                    html += '<button type="button" class="btn btn-primary btn-sm" onclick="selectRematch(' + r.id + ', ' + JSON.stringify(r.title) + ')">Select</button>';
+                    html += '</div>';
+                });
+                resultsDiv.innerHTML = html;
+            })
+            .catch(function () {
+                loadingDiv.style.display = 'none';
+                resultsDiv.innerHTML = '<p class="text-muted" style="padding:1rem 0">Search failed.</p>';
+            });
+    };
+
+    window.selectRematch = function (anilistId, anilistTitle) {
+        if (!_rematchEntryId || !RUN_ID) return;
+        fetch('/api/crunchyroll/preview/' + RUN_ID + '/update-entry', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                entry_id: _rematchEntryId,
+                anilist_id: anilistId,
+                cr_title: _rematchCrTitle,
+            }),
+        })
+            .then(function (resp) { return resp.json(); })
+            .then(function (data) {
+                if (data.ok) {
+                    closeRematch();
+                    // Update the row in-place
+                    var titleEl = document.getElementById('title-' + _rematchEntryId);
+                    if (titleEl) {
+                        titleEl.innerHTML = '<a href="https://anilist.co/anime/' + data.anilist_id +
+                            '" target="_blank" rel="noopener" class="title-romaji">' +
+                            esc(data.anilist_title) + '</a>';
+                    }
+                    // Reload to refresh all computed cells cleanly
+                    window.location.reload();
+                } else {
+                    alert('Error: ' + (data.error || 'Unknown'));
+                }
+            })
+            .catch(function (err) { alert('Error: ' + err); });
+    };
+
+    function esc(str) {
+        if (!str) return '';
+        var d = document.createElement('div');
+        d.textContent = str;
+        return d.innerHTML;
+    }
+
+    // Keyboard close
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') closeRematch();
+    });
+
+    // Enter key in search
+    var searchInput = document.getElementById('rematch-search-input');
+    if (searchInput) {
+        searchInput.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') { e.preventDefault(); searchRematch(); }
+        });
+    }
+})();
+</script>
+{% endblock %}

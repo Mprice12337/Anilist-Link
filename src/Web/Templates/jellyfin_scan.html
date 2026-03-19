@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Jellyfin — Anilist-Link{% endblock %}
+
+{% block content %}
+<h1><img src="/static/img/jellyfin.png" alt="Jellyfin" class="page-service-logo">Jellyfin</h1>
+
+{% if message %}
+<div class="alert alert-success">{{ message | replace("+", " ") }}</div>
+{% endif %}
+{% if error %}
+<div class="alert alert-danger">{{ error | replace("+", " ") }}</div>
+{% endif %}
+
+{% if not jellyfin_configured %}
+<div class="card">
+    <p class="text-muted">Jellyfin is not configured. Add your server URL and API key in
+        <a href="/settings" style="color:var(--accent)">Settings</a>.</p>
+</div>
+
+{% else %}
+
+<div class="card">
+    <h2>Metadata Scan</h2>
+    <p class="text-muted" style="font-size:0.85rem;margin-bottom:1rem">
+        Scans your Jellyfin library, matches shows to AniList, and writes metadata
+        (title, summary, genres, rating, poster) back to Jellyfin.
+    </p>
+
+    {% if scan_running %}
+    <div class="alert alert-info" style="margin-bottom:1rem">
+        A scan is currently running.
+        <a href="/scan/jellyfin/progress" style="color:var(--accent)">View progress &rarr;</a>
+    </div>
+    {% endif %}
+
+    <form method="post" action="/scan/jellyfin/preview" id="previewForm">
+        {% if jellyfin_libraries %}
+        <div class="form-group" style="margin-bottom:1rem">
+            <label>Libraries <span class="text-muted">(leave unchecked to scan all)</span></label>
+            <div class="library-checkboxes" style="margin-top:0.5rem">
+                {% for lib in jellyfin_libraries %}
+                <label class="toggle">
+                    <input type="checkbox" name="library_id" value="{{ lib.id }}">
+                    <span class="toggle-label">
+                        {{ lib.name }}
+                        {% if lib.type %}<span class="text-muted" style="font-size:0.8rem"> — {{ lib.type }}</span>{% endif %}
+                    </span>
+                </label>
+                {% endfor %}
+            </div>
+        </div>
+        {% else %}
+        <p class="text-muted" style="margin-bottom:1rem">No libraries found on Jellyfin.</p>
+        {% endif %}
+
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary" {% if scan_running %}disabled{% endif %}>
+                Preview Scan
+            </button>
+            <button type="submit" form="liveForm" class="btn btn-secondary" {% if scan_running %}disabled{% endif %}>
+                Live Scan (write immediately)
+            </button>
+        </div>
+    </form>
+
+    {# Hidden live scan form that copies library selection #}
+    <form method="post" action="/scan/jellyfin/live" id="liveForm" style="display:none">
+        {% if jellyfin_libraries %}
+        {% for lib in jellyfin_libraries %}
+        <input type="checkbox" name="library_id" value="{{ lib.id }}" id="live-lib-{{ lib.id }}">
+        {% endfor %}
+        {% endif %}
+    </form>
+</div>
+
+{% if scan_running %}
+<div class="card">
+    <a href="/scan/jellyfin/progress" class="btn btn-primary">View Scan Progress</a>
+    <a href="/scan/jellyfin/results" class="btn btn-secondary" style="margin-left:0.5rem">Last Results</a>
+</div>
+{% endif %}
+
+{% endif %}
+
+<script>
+// Sync library checkboxes from preview form into the hidden live form
+document.getElementById('liveForm') && document.addEventListener('change', function(e) {
+    if (e.target && e.target.name === 'library_id') {
+        var liveInput = document.getElementById('live-lib-' + e.target.value);
+        if (liveInput) liveInput.checked = e.target.checked;
+    }
+});
+</script>
+{% endblock %}

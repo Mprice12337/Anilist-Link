@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{% block title %}Plex Scan Preview — Anilist-Link{% endblock %}
+{% block title %}{{ page_title | default("Plex Scan Preview") }} — Anilist-Link{% endblock %}
 
 {% block content %}
-<h1>Plex Scan Preview</h1>
+<h1>{% if (source_label | default('Plex')) == 'Jellyfin' %}<img src="/static/img/jellyfin.png" alt="Jellyfin" class="page-service-logo">{% else %}<img src="/static/img/plex.png" alt="Plex" class="page-service-logo">{% endif %}{{ page_title | default("Plex Scan Preview") }}</h1>
 
 <section class="card">
     <h2>Summary</h2>
@@ -26,7 +26,7 @@
 <section class="card">
     <h2>Matched Shows</h2>
     <p class="text-muted hint">These shows will have their metadata updated from AniList.</p>
-    <form method="post" action="/scan/plex/apply">
+    <form method="post" action="{{ apply_url | default('/scan/plex/apply') }}">
         <table class="table">
             <thead>
                 <tr>
@@ -48,7 +48,7 @@
                     <td>
                         <span class="folder-name">{{ item.folder_name or item.plex_title }}</span>
                         {% if item.folder_name and item.folder_name != item.plex_title %}
-                        <br><span class="text-muted" style="font-size:0.8rem">Plex: {{ item.plex_title }}</span>
+                        <br><span class="text-muted" style="font-size:0.8rem">{{ source_label | default("Plex") }}: {{ item.plex_title }}</span>
                         {% endif %}
                     </td>
                     <td>
@@ -121,7 +121,7 @@
                 <td>
                     <span class="folder-name">{{ item.folder_name or item.plex_title }}</span>
                     {% if item.folder_name and item.folder_name != item.plex_title %}
-                    <br><span class="text-muted" style="font-size:0.8rem">Plex: {{ item.plex_title }}</span>
+                    <br><span class="text-muted" style="font-size:0.8rem">{{ source_label | default("Plex") }}: {{ item.plex_title }}</span>
                     {% endif %}
                 </td>
                 <td class="text-muted">{{ item.reason }}</td>
@@ -154,7 +154,7 @@
                 <td>
                     <span class="folder-name">{{ item.folder_name or item.plex_title }}</span>
                     {% if item.folder_name and item.folder_name != item.plex_title %}
-                    <br><span class="text-muted" style="font-size:0.8rem">Plex: {{ item.plex_title }}</span>
+                    <br><span class="text-muted" style="font-size:0.8rem">{{ source_label | default("Plex") }}: {{ item.plex_title }}</span>
                     {% endif %}
                 </td>
                 <td>
@@ -210,51 +210,33 @@
 
 <script>
 (function() {
-    // Select-all checkbox
     var selectAll = document.getElementById('select-all');
     if (!selectAll) return;
-
     var checkboxes = document.querySelectorAll('input[name="apply_item"]');
-
     selectAll.addEventListener('change', function() {
-        for (var i = 0; i < checkboxes.length; i++) {
-            checkboxes[i].checked = selectAll.checked;
-        }
+        for (var i = 0; i < checkboxes.length; i++) { checkboxes[i].checked = selectAll.checked; }
     });
-
     for (var i = 0; i < checkboxes.length; i++) {
         checkboxes[i].addEventListener('change', function() {
             var allChecked = true;
-            for (var j = 0; j < checkboxes.length; j++) {
-                if (!checkboxes[j].checked) { allChecked = false; break; }
-            }
+            for (var j = 0; j < checkboxes.length; j++) { if (!checkboxes[j].checked) { allChecked = false; break; } }
             selectAll.checked = allChecked;
         });
     }
 })();
 
-// Fix Match modal state
 var _fixMatchState = {};
+var _searchUrl = {{ search_url | default("/api/scan/plex/search") | tojson }};
+var _rematchUrl = {{ rematch_url | default("/scan/plex/rematch") | tojson }};
 
-function openFixMatch(ratingKey, folderName, plexTitle, plexYear, libraryTitle) {
-    _fixMatchState = {
-        ratingKey: ratingKey,
-        folderName: folderName,
-        plexTitle: plexTitle,
-        plexYear: plexYear,
-        libraryTitle: libraryTitle
-    };
-
+function openFixMatch(ratingKey, folderName, sourceTitle, sourceYear, libraryTitle) {
+    _fixMatchState = { ratingKey: ratingKey, folderName: folderName, plexTitle: sourceTitle, plexYear: sourceYear, libraryTitle: libraryTitle };
     document.getElementById('modal-source-title').textContent = folderName;
     var input = document.getElementById('modal-search-input');
     input.value = folderName;
     document.getElementById('modal-results').innerHTML = '';
     document.getElementById('fix-match-modal').style.display = 'flex';
-
-    // Auto-search on open
     searchAniList();
-
-    // Focus input
     setTimeout(function() { input.focus(); input.select(); }, 100);
 }
 
@@ -263,109 +245,57 @@ function closeFixMatch() {
     _fixMatchState = {};
 }
 
-// Close on Escape
-document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') closeFixMatch();
-});
-
-// Search on Enter
+document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeFixMatch(); });
 document.addEventListener('DOMContentLoaded', function() {
     var input = document.getElementById('modal-search-input');
-    if (input) {
-        input.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter') { e.preventDefault(); searchAniList(); }
-        });
-    }
+    if (input) { input.addEventListener('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); searchAniList(); } }); }
 });
 
 function searchAniList() {
     var q = document.getElementById('modal-search-input').value.trim();
     if (!q) return;
-
     var resultsDiv = document.getElementById('modal-results');
     var loadingDiv = document.getElementById('modal-loading');
     resultsDiv.innerHTML = '';
     loadingDiv.style.display = 'block';
-
-    fetch('/api/scan/plex/search?q=' + encodeURIComponent(q))
+    fetch(_searchUrl + '?q=' + encodeURIComponent(q))
         .then(function(resp) { return resp.json(); })
         .then(function(data) {
             loadingDiv.style.display = 'none';
-            if (!data || data.length === 0) {
-                resultsDiv.innerHTML = '<p class="text-muted" style="padding:1rem 0">No results found.</p>';
-                return;
-            }
+            if (!data || data.length === 0) { resultsDiv.innerHTML = '<p class="text-muted" style="padding:1rem 0">No results found.</p>'; return; }
             var html = '';
             for (var i = 0; i < data.length; i++) {
                 var c = data[i];
-                var seasonStr = '';
-                if (c.season && c.year) {
-                    seasonStr = c.season.charAt(0) + c.season.slice(1).toLowerCase() + ' ' + c.year;
-                } else if (c.year) {
-                    seasonStr = '' + c.year;
-                }
-                var formatStr = c.format || '';
-                var epStr = c.episodes ? (c.episodes + ' ep') : '';
-                var meta = [seasonStr, formatStr, epStr].filter(Boolean).join(' · ');
-
+                var seasonStr = (c.season && c.year) ? (c.season.charAt(0) + c.season.slice(1).toLowerCase() + ' ' + c.year) : (c.year ? '' + c.year : '');
+                var meta = [seasonStr, c.format || '', c.episodes ? (c.episodes + ' ep') : ''].filter(Boolean).join(' · ');
                 html += '<div class="search-result">';
-                if (c.cover_image) {
-                    html += '<img class="search-result-cover" src="' + c.cover_image + '" alt="">';
-                } else {
-                    html += '<div class="search-result-cover search-result-cover-placeholder"></div>';
-                }
-                html += '<div class="search-result-info">';
-                html += '<div class="title-romaji">' + escapeHtml(c.title_romaji) + '</div>';
-                if (c.title_english && c.title_english !== c.title_romaji) {
-                    html += '<div class="title-english">' + escapeHtml(c.title_english) + '</div>';
-                }
-                if (meta) {
-                    html += '<div class="search-result-meta text-muted">' + escapeHtml(meta) + '</div>';
-                }
-                html += '</div>';
-                html += '<button type="button" class="btn btn-primary btn-sm" onclick="selectMatch(' + c.id + ')">Select</button>';
-                html += '</div>';
+                if (c.cover_image) { html += '<img class="search-result-cover" src="' + c.cover_image + '" alt="">'; }
+                else { html += '<div class="search-result-cover search-result-cover-placeholder"></div>'; }
+                html += '<div class="search-result-info"><div class="title-romaji">' + escapeHtml(c.title_romaji) + '</div>';
+                if (c.title_english && c.title_english !== c.title_romaji) { html += '<div class="title-english">' + escapeHtml(c.title_english) + '</div>'; }
+                if (meta) { html += '<div class="search-result-meta text-muted">' + escapeHtml(meta) + '</div>'; }
+                html += '</div><button type="button" class="btn btn-primary btn-sm" onclick="selectMatch(' + c.id + ')">Select</button></div>';
             }
             resultsDiv.innerHTML = html;
         })
-        .catch(function(err) {
-            loadingDiv.style.display = 'none';
-            resultsDiv.innerHTML = '<p class="text-muted" style="padding:1rem 0">Search failed.</p>';
-        });
+        .catch(function() { loadingDiv.style.display = 'none'; resultsDiv.innerHTML = '<p class="text-muted" style="padding:1rem 0">Search failed.</p>'; });
 }
 
 function selectMatch(anilistId) {
-    // Submit a hidden form to the rematch endpoint
     var form = document.createElement('form');
     form.method = 'POST';
-    form.action = '/scan/plex/rematch';
-
-    var fields = {
-        'rating_key': _fixMatchState.ratingKey,
-        'anilist_id': '' + anilistId,
-        'plex_title': _fixMatchState.plexTitle,
-        'plex_year': _fixMatchState.plexYear,
-        'library_title': _fixMatchState.libraryTitle,
-        'folder_name': _fixMatchState.folderName
-    };
-
+    form.action = _rematchUrl;
+    var fields = { 'rating_key': _fixMatchState.ratingKey, 'anilist_id': '' + anilistId,
+                   'plex_title': _fixMatchState.plexTitle, 'plex_year': _fixMatchState.plexYear,
+                   'library_title': _fixMatchState.libraryTitle, 'folder_name': _fixMatchState.folderName };
     for (var key in fields) {
-        var input = document.createElement('input');
-        input.type = 'hidden';
-        input.name = key;
-        input.value = fields[key];
-        form.appendChild(input);
+        var inp = document.createElement('input'); inp.type = 'hidden'; inp.name = key; inp.value = fields[key]; form.appendChild(inp);
     }
-
-    document.body.appendChild(form);
-    form.submit();
+    document.body.appendChild(form); form.submit();
 }
 
 function escapeHtml(str) {
-    if (!str) return '';
-    var div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+    if (!str) return ''; var div = document.createElement('div'); div.textContent = str; return div.innerHTML;
 }
 </script>
 {% endblock %}

@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block title %}Manual Overrides — Anilist-Link{% endblock %}
+
+{% block content %}
+<h1>Manual Overrides</h1>
+
+<p class="text-muted" style="margin-bottom:1.5rem">
+    Overrides force a specific AniList match for a given source item, bypassing fuzzy matching.
+    They are applied first during any metadata scan.
+</p>
+
+{% if message %}
+<div class="alert alert-success">{{ message | replace("+", " ") }}</div>
+{% endif %}
+{% if error %}
+<div class="alert alert-danger">{{ error | replace("+", " ") }}</div>
+{% endif %}
+
+{# ── Existing Overrides ── #}
+<div class="card">
+    <h2>Active Overrides ({{ overrides | length }})</h2>
+    {% if overrides %}
+    <table class="table" style="margin-top:0.75rem">
+        <thead>
+            <tr>
+                <th>Source</th>
+                <th>Source ID</th>
+                <th>Label</th>
+                <th>AniList ID</th>
+                <th>Added</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for ov in overrides %}
+            <tr>
+                <td><span class="badge badge-muted">{{ ov.source }}</span></td>
+                <td><code style="font-size:0.8rem">{{ ov.source_id }}</code></td>
+                <td>{{ ov.source_title or "—" }}</td>
+                <td>
+                    <a href="https://anilist.co/anime/{{ ov.anilist_id }}" target="_blank" rel="noopener"
+                       style="color:var(--accent)">{{ ov.anilist_id }}</a>
+                </td>
+                <td class="text-muted" style="font-size:0.85rem">{{ ov.created_at[:10] if ov.created_at else "—" }}</td>
+                <td>
+                    <form method="post" action="/mappings/{{ ov.id }}/delete" style="display:inline"
+                          onsubmit="return confirm('Delete this override?')">
+                        <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="text-muted" style="margin-top:0.75rem">No overrides configured yet.</p>
+    {% endif %}
+</div>
+
+{# ── Add Override ── #}
+<div class="card">
+    <h2>Add Override</h2>
+    <p class="text-muted" style="font-size:0.85rem;margin-bottom:1rem">
+        Search for an anime on AniList, select it, then fill in the source details and save.
+    </p>
+
+    <form method="post" action="/mappings/add" id="addOverrideForm">
+        <div class="form-grid" style="margin-bottom:1rem">
+            <div class="form-group">
+                <label for="source">Source</label>
+                <select name="source" id="source" style="width:100%">
+                    <option value="plex">Plex (rating key)</option>
+                    <option value="local">Local (folder path)</option>
+                    <option value="jellyfin">Jellyfin (item ID)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="source_id">Source ID</label>
+                <input type="text" name="source_id" id="source_id" placeholder="e.g. 12345 or /path/to/folder" style="width:100%" required>
+            </div>
+            <div class="form-group">
+                <label for="source_title">Label <span class="text-muted">(optional, for your reference)</span></label>
+                <input type="text" name="source_title" id="source_title" placeholder="e.g. Attack on Titan" style="width:100%">
+            </div>
+        </div>
+
+        {# AniList search #}
+        <div class="form-group" style="margin-bottom:0.5rem">
+            <label for="anilistSearch">AniList Search</label>
+            <div style="display:flex;gap:0.5rem">
+                <input type="text" id="anilistSearch" placeholder="Search AniList..." style="flex:1"
+                       autocomplete="off">
+                <button type="button" class="btn btn-secondary" onclick="doSearch()">Search</button>
+            </div>
+        </div>
+
+        <div id="searchResults" style="margin-bottom:1rem"></div>
+
+        <div class="form-group" style="margin-bottom:1rem">
+            <label for="anilist_id">AniList ID <span class="text-muted">(filled by selecting a result above)</span></label>
+            <input type="number" name="anilist_id" id="anilist_id" placeholder="e.g. 16498" style="width:100%;max-width:200px" required>
+        </div>
+
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Add Override</button>
+            <a href="/mappings" class="btn btn-secondary">Cancel</a>
+        </div>
+    </form>
+</div>
+
+<script>
+var _searchTimer = null;
+
+document.getElementById('anilistSearch').addEventListener('input', function() {
+    clearTimeout(_searchTimer);
+    var q = this.value.trim();
+    if (!q) {
+        document.getElementById('searchResults').innerHTML = '';
+        return;
+    }
+    _searchTimer = setTimeout(function() { doSearch(); }, 400);
+});
+
+document.getElementById('anilistSearch').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') { e.preventDefault(); doSearch(); }
+});
+
+function doSearch() {
+    var q = document.getElementById('anilistSearch').value.trim();
+    if (!q) return;
+    var container = document.getElementById('searchResults');
+    container.innerHTML = '<p class="text-muted" style="font-size:0.85rem">Searching...</p>';
+
+    fetch('/api/mappings/search?q=' + encodeURIComponent(q))
+        .then(function(r) { return r.json(); })
+        .then(function(results) { renderResults(results); })
+        .catch(function() {
+            container.innerHTML = '<p class="text-muted" style="font-size:0.85rem">Search failed.</p>';
+        });
+}
+
+function renderResults(results) {
+    var container = document.getElementById('searchResults');
+    if (!results.length) {
+        container.innerHTML = '<p class="text-muted" style="font-size:0.85rem">No results found.</p>';
+        return;
+    }
+
+    var html = '<div class="search-result-list" style="display:flex;flex-direction:column;gap:0.4rem;max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:0.5rem">';
+    results.forEach(function(item) {
+        var label = item.title_english || item.title_romaji || ('AniList #' + item.id);
+        var sub = [];
+        if (item.title_romaji && item.title_romaji !== label) sub.push(item.title_romaji);
+        if (item.year) sub.push(item.year);
+        if (item.format) sub.push(item.format);
+        if (item.episodes) sub.push(item.episodes + ' eps');
+
+        html += '<div class="search-result-row" style="display:flex;align-items:center;gap:0.75rem;padding:0.4rem 0.5rem;border-radius:var(--radius);cursor:pointer" ' +
+                'onclick="selectResult(' + item.id + ', ' + JSON.stringify(label) + ')" ' +
+                'onmouseover="this.style.background=\'var(--bg-alt)\'" onmouseout="this.style.background=\'\'">';
+        if (item.cover_image) {
+            html += '<img src="' + item.cover_image + '" alt="" style="width:36px;height:52px;object-fit:cover;border-radius:2px;flex-shrink:0">';
+        } else {
+            html += '<div style="width:36px;height:52px;background:var(--bg-alt);border-radius:2px;flex-shrink:0"></div>';
+        }
+        html += '<div><div style="font-weight:500;font-size:0.9rem">' + escHtml(label) + '</div>';
+        if (sub.length) html += '<div class="text-muted" style="font-size:0.8rem">' + escHtml(sub.join(' · ')) + '</div>';
+        html += '<div class="text-muted" style="font-size:0.75rem">ID: ' + item.id + '</div>';
+        html += '</div></div>';
+    });
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+function selectResult(id, title) {
+    document.getElementById('anilist_id').value = id;
+    if (!document.getElementById('source_title').value) {
+        document.getElementById('source_title').value = title;
+    }
+    document.getElementById('searchResults').innerHTML =
+        '<p style="font-size:0.85rem;color:var(--success)">&#10003; Selected: ' + escHtml(title) + ' (ID: ' + id + ')</p>';
+    document.getElementById('anilistSearch').value = '';
+}
+
+function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+{% endblock %}
