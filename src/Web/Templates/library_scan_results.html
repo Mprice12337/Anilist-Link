@@ -1,0 +1,268 @@
+{% extends "base.html" %}
+{% block title %}Anilist-Link: Library Scan Results{% endblock %}
+
+{% block content %}
+<h1>Library Scan Results</h1>
+
+<section class="card">
+    <h2>Summary</h2>
+    <div class="stats-grid">
+        <div class="stat">
+            <span class="stat-value">{{ matched }}</span>
+            <span class="stat-label">Matched</span>
+        </div>
+        <div class="stat">
+            <span class="stat-value">{{ unmatched }}</span>
+            <span class="stat-label">Unmatched</span>
+        </div>
+        <div class="stat">
+            <span class="stat-value">{{ total }}</span>
+            <span class="stat-label">Total Folders</span>
+        </div>
+    </div>
+</section>
+
+{% if matched_items %}
+<section class="card">
+    <h2>Matched Shows</h2>
+    <p class="text-muted hint">These folders matched to AniList entries. Click "Fix Match" to change any incorrect match.</p>
+    <form method="post" action="/library/scan/confirm" data-processing="Saving matches...">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th><input type="checkbox" id="select-all" checked title="Select / deselect all"></th>
+                    <th>Folder</th>
+                    <th>AniList Match</th>
+                    <th>Year</th>
+                    <th>Type</th>
+                    <th>Confidence</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in matched_items %}
+                <tr>
+                    <td>
+                        <input type="checkbox" name="apply_item" checked
+                               value="{{ item.index }}|{{ item.anilist_id }}|{{ item.anilist_title }}">
+                    </td>
+                    <td>
+                        <span class="folder-name" style="font-family:monospace;font-size:0.85rem">{{ item.folder_name }}</span>
+                        {% if item.folder_path %}
+                        <br><span class="text-muted" style="font-size:0.75rem;word-break:break-all">{{ item.folder_path }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if item.anilist_id %}
+                        <div style="display:flex;align-items:center;gap:0.5rem">
+                            {% if item.cover_image %}
+                            <img src="{{ item.cover_image }}" style="width:28px;height:40px;object-fit:cover;border-radius:3px" alt="">
+                            {% endif %}
+                            <a href="https://anilist.co/anime/{{ item.anilist_id }}" target="_blank" rel="noopener" class="title-romaji">
+                                {{ item.anilist_title }}
+                            </a>
+                        </div>
+                        {% else %}
+                        —
+                        {% endif %}
+                    </td>
+                    <td class="text-muted" style="font-size:0.85rem">{{ item.year or '' }}</td>
+                    <td>
+                        {% if item.format %}
+                        <span class="badge badge-muted">{{ item.format }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if item.match_confidence %}
+                        {% if item.match_confidence >= 0.9 %}
+                        <span class="badge badge-success">{{ "%.0f"|format(item.match_confidence * 100) }}%</span>
+                        {% elif item.match_confidence >= 0.75 %}
+                        <span class="badge badge-warning">{{ "%.0f"|format(item.match_confidence * 100) }}%</span>
+                        {% else %}
+                        <span class="badge badge-danger">{{ "%.0f"|format(item.match_confidence * 100) }}%</span>
+                        {% endif %}
+                        {% endif %}
+                    </td>
+                    <td>
+                        <button type="button" class="btn btn-secondary btn-sm"
+                                onclick="openFixMatch({{ item.index }}, '{{ item.folder_name | e }}')">
+                            Fix Match
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Confirm Selected</button>
+            <a href="/" class="btn btn-secondary">Skip for Now</a>
+        </div>
+    </form>
+</section>
+{% endif %}
+
+{% if unmatched_items %}
+<section class="card">
+    <h2>Unmatched Folders</h2>
+    <p class="text-muted hint">These folders could not be matched to an AniList entry. Use "Fix Match" to manually search.</p>
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Folder</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in unmatched_items %}
+            <tr>
+                <td>
+                    <span class="folder-name" style="font-family:monospace;font-size:0.85rem">{{ item.folder_name }}</span>
+                    {% if item.folder_path %}
+                    <br><span class="text-muted" style="font-size:0.75rem;word-break:break-all">{{ item.folder_path }}</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <button type="button" class="btn btn-secondary btn-sm"
+                            onclick="openFixMatch({{ item.index }}, '{{ item.folder_name | e }}')">
+                        Fix Match
+                    </button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+
+{% if not matched_items and not unmatched_items %}
+<section class="card">
+    <p class="text-muted">No folders found in the scanned directories.</p>
+    <a href="/" class="btn btn-secondary">Back to Dashboard</a>
+</section>
+{% endif %}
+
+<!-- Fix Match Modal -->
+<div id="fix-match-modal" class="modal" style="display:none">
+    <div class="modal-backdrop" onclick="closeFixMatch()"></div>
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Fix Match: <span id="modal-source-title"></span></h3>
+            <button class="modal-close" onclick="closeFixMatch()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label for="modal-search">Search AniList</label>
+                <div style="display:flex;gap:0.5rem">
+                    <input type="text" id="modal-search" placeholder="Search anime title..."
+                           style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();searchAniList();}">
+                    <button class="btn btn-primary" onclick="searchAniList()">Search</button>
+                </div>
+            </div>
+            <div id="modal-results" style="margin-top:1rem;max-height:360px;overflow-y:auto"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function () {
+    'use strict';
+
+    var _currentIndex = -1;
+
+    // Select-all checkbox
+    var selectAll = document.getElementById('select-all');
+    if (selectAll) {
+        selectAll.addEventListener('change', function () {
+            document.querySelectorAll('input[name="apply_item"]').forEach(function (cb) {
+                cb.checked = selectAll.checked;
+            });
+        });
+    }
+
+    window.openFixMatch = function (index, folderName) {
+        _currentIndex = index;
+        document.getElementById('modal-source-title').textContent = folderName;
+        document.getElementById('modal-search').value = folderName;
+        document.getElementById('modal-results').innerHTML = '';
+        document.getElementById('fix-match-modal').style.display = '';
+        document.getElementById('modal-search').focus();
+    };
+
+    window.closeFixMatch = function () {
+        document.getElementById('fix-match-modal').style.display = 'none';
+        _currentIndex = -1;
+    };
+
+    window.searchAniList = function () {
+        var query = document.getElementById('modal-search').value.trim();
+        if (!query) return;
+        var resultsEl = document.getElementById('modal-results');
+        resultsEl.innerHTML = '<div class="text-muted" style="padding:0.75rem">Searching...</div>';
+
+        fetch('/onboarding/skip-scan/search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: query }),
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            var candidates = data.candidates || [];
+            if (!candidates.length) {
+                resultsEl.innerHTML = '<div class="text-muted" style="padding:0.75rem">No results found.</div>';
+                return;
+            }
+            resultsEl.innerHTML = candidates.map(function (c) {
+                var esc = function (s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
+                var coverHtml = c.cover_image
+                    ? '<img src="' + esc(c.cover_image) + '" style="width:36px;height:52px;object-fit:cover;border-radius:3px;flex-shrink:0" alt="">'
+                    : '<div style="width:36px;height:52px;background:var(--border);border-radius:3px;flex-shrink:0"></div>';
+                return '<div style="display:flex;align-items:center;gap:0.75rem;padding:0.6rem 0.5rem;border-bottom:1px solid var(--border);cursor:pointer" ' +
+                    'onclick=\'selectMatch(' + JSON.stringify(c).replace(/\x27/g, "&#39;") + ')\'>' +
+                    coverHtml +
+                    '<div style="flex:1;min-width:0">' +
+                        '<div style="font-weight:500">' + esc(c.title) + '</div>' +
+                        '<div style="font-size:0.8rem;color:var(--text-muted)">' +
+                            (c.title_english && c.title_english !== c.title ? esc(c.title_english) + ' &middot; ' : '') +
+                            (c.year || '') + ' &middot; ' + (c.format || '') +
+                            (c.episodes ? ' &middot; ' + c.episodes + ' eps' : '') +
+                        '</div>' +
+                    '</div>' +
+                    '<button class="btn btn-primary btn-sm" style="flex-shrink:0">Select</button>' +
+                '</div>';
+            }).join('');
+        })
+        .catch(function (e) {
+            resultsEl.innerHTML = '<div class="alert alert-danger">Search failed: ' + e.message + '</div>';
+        });
+    };
+
+    window.selectMatch = function (candidate) {
+        if (_currentIndex < 0) return;
+
+        // Update server-side
+        fetch('/onboarding/skip-scan/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                index: _currentIndex,
+                anilist_id: candidate.id,
+                anilist_title: candidate.title,
+                cover_image: candidate.cover_image,
+                year: candidate.year,
+                format: candidate.format,
+                episodes: candidate.episodes,
+            }),
+        })
+        .then(function () {
+            // Reload page to show updated results
+            window.location.reload();
+        })
+        .catch(function () {
+            window.location.reload();
+        });
+
+        closeFixMatch();
+    };
+})();
+</script>
+{% endblock %}

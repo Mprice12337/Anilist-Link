@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Tools — Anilist-Link{% endblock %}
+{% block title %}Anilist-Link: Tools{% endblock %}
 
 {% block content %}
 <h1>Tools</h1>
@@ -8,7 +8,7 @@
 <div class="tools-grid">
 
   <!-- Library Restructure — only show if Plex or Jellyfin configured -->
-  {% if plex_configured or jellyfin_configured %}
+  {% if plex_configured or jellyfin_configured or has_library %}
   <div class="tool-card">
     <div class="tool-card-icon tool-card-icon-split">
       {% if plex_configured %}<img src="/static/img/plex.png" alt="Plex" class="tool-service-logo">{% endif %}
@@ -62,14 +62,14 @@
     <div class="tool-card-body">
       <h2>Metadata Scan</h2>
       <p>Scan libraries, match titles to AniList, and write metadata (descriptions, posters, ratings, genres).</p>
-      <p class="tool-card-meta">Trigger a scan from your library browser.</p>
+      <p class="tool-card-meta">Preview or live scan your media server libraries.</p>
     </div>
     <div class="tool-card-actions">
       {% if plex_configured %}
-      <a href="/library?source=plex" class="btn btn-primary">Plex Library</a>
+      <a href="/plex" class="btn btn-primary">Plex Scanner</a>
       {% endif %}
       {% if jellyfin_configured %}
-      <a href="/library?source=jellyfin" class="btn btn-primary">Jellyfin Library</a>
+      <a href="/jellyfin" class="btn btn-primary">Jellyfin Scanner</a>
       {% endif %}
     </div>
   </div>
@@ -108,7 +108,7 @@
   </div>
 
   <!-- Fallback if nothing configured -->
-  {% if not plex_configured and not jellyfin_configured and not crunchyroll_configured %}
+  {% if not plex_configured and not jellyfin_configured and not crunchyroll_configured and not has_library %}
   <div class="tool-card" style="grid-column:1/-1">
     <div class="tool-card-body">
       <h2>No media tools configured yet</h2>

@@ -10,7 +10,7 @@ import os
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from src.Matching.TitleMatcher import TitleMatcher
+from src.Matching.TitleMatcher import TitleMatcher, get_primary_title
 from src.Scanner.LibraryRestructurer import (
     LibraryRestructurer,
     RestructurePlan,
@@ -44,6 +44,16 @@ async def onboarding_page(request: Request) -> HTMLResponse:
         current_step = int(current_step_raw)
     except ValueError:
         current_step = 1
+
+    # Allow ?step= query param to override (e.g. from notification links)
+    step_override = request.query_params.get("step")
+    if step_override:
+        try:
+            override_val = int(step_override)
+            if 1 <= override_val <= 4:
+                current_step = override_val
+        except ValueError:
+            pass
 
     # Collect relevant settings for pre-filling forms
     settings = {
@@ -100,6 +110,14 @@ async def onboarding_page(request: Request) -> HTMLResponse:
     # Plex extra state
     has_plexpass = (await db.get_setting("plex.has_plexpass") or "") == "true"
 
+    # Skip-scan state: check if a scan was started or results are ready
+    skip_scan_ready = (
+        await db.get_setting("onboarding.skip_scan_ready") or ""
+    ) == "true"
+    skip_scan_active = (
+        getattr(request.app.state, "skip_scan_progress", None) is not None
+    )
+
     return templates.TemplateResponse(
         "onboarding.html",
         {
@@ -110,6 +128,7 @@ async def onboarding_page(request: Request) -> HTMLResponse:
             "connected": connected,
             "anilist_username": anilist_username,
             "has_plexpass": has_plexpass,
+            "skip_scan_started": skip_scan_ready or skip_scan_active,
             "version": "0.1.0",
         },
     )
@@ -410,12 +429,37 @@ async def _auto_index_local_libraries(app_state: object) -> None:
     scan_progress.phase = "Scanning local directories"
     app_state.library_scan_progress = scan_progress  # type: ignore[attr-defined]
 
+    # Child progress: scan_directory mutates this, not the parent
+    child_progress = RestructureProgress(status="running")
+
     try:
+        # Pre-count total folders across all paths for accurate progress
+        overall_total = 0
+        for path in library_paths:
+            try:
+                entries = sorted(os.listdir(path))
+                subdirs = [
+                    name
+                    for name in entries
+                    if not name.startswith(".")
+                    and os.path.isdir(os.path.join(path, name))
+                ]
+                overall_total += len(subdirs)
+            except OSError:
+                pass
+        scan_progress.total = overall_total
+        scan_progress.processed = 0
+
         # Phase 1: Scan root-level folders to identify shows
+        scan_progress.phase = "Scanning folders"
         root_shows: list[ShowInput] = []
         for path in library_paths:
-            shows = await dir_scanner.scan_directory(path, scan_progress)
-            root_shows.extend(shows)
+            child_progress.processed = 0
+            shows = await dir_scanner.scan_directory(path, child_progress)
+            for show in shows:
+                root_shows.append(show)
+                scan_progress.processed += 1
+                scan_progress.current_item = show.title
 
         if not root_shows:
             logger.info("_auto_index_local_libraries: no shows found")
@@ -437,11 +481,17 @@ async def _auto_index_local_libraries(app_state: object) -> None:
 
             if len(video_subdirs) >= 2:
                 # Structure B: scan each subdir as its own show
+                # Expand total: replace 1 root entry with N subdirs
+                overall_total += len(video_subdirs) - 1
+                scan_progress.total = overall_total
+                child_progress.processed = 0
                 subdir_shows = await dir_scanner.scan_directory(
-                    root_show.local_path, scan_progress
+                    root_show.local_path, child_progress
                 )
+                scan_progress.processed += len(subdir_shows) - 1
                 for sub_show in subdir_shows:
                     all_items.append((sub_show, root_name))
+                    scan_progress.current_item = sub_show.title
                 logger.info(
                     "Structure B: scanned %d subdirs in '%s'",
                     len(subdir_shows),
@@ -546,15 +596,505 @@ async def save_media_dirs(request: Request) -> JSONResponse:
 
     logger.info("Saved media directories (skip path): %s", source_dirs)
 
-    # Start local library indexing in the background so it runs while
-    # the user configures services on step 3.  The completion handler
-    # (_auto_scan_media_servers) checks library_scan_progress to avoid
-    # starting a duplicate scan.
+    return JSONResponse({"ok": True, "saved": len(source_dirs)})
+
+
+# ---------------------------------------------------------------------------
+# Skip-scan review flow: scan → review → commit
+# ---------------------------------------------------------------------------
+
+
+@router.post("/onboarding/skip-scan")
+async def skip_scan_start(request: Request) -> JSONResponse:
+    """Scan selected directories and return results for review.
+
+    Unlike save-media-dirs which auto-committed, this endpoint scans
+    directories and stores results in app_state for user review before
+    committing to the database.
+    """
+    body = await request.json()
+    source_dirs: list[str] = body.get("source_dirs") or []
+    if not source_dirs:
+        return JSONResponse(
+            {"ok": False, "error": "No source directories provided"},
+            status_code=400,
+        )
+
+    # Persist dirs to DB so they survive restarts
+    db = request.app.state.db
+    libraries = await db.get_all_libraries()
+    if not libraries:
+        await db.create_library("My Library", json.dumps(source_dirs))
+    else:
+        lib = libraries[0]
+        await db.update_library(lib["id"], lib["name"], json.dumps(source_dirs))
+
+    request.app.state.onboarding_source_dirs = source_dirs
+
+    # Clear stale progress from previous runs to avoid duplicate widgets
+    request.app.state.library_scan_progress = None  # type: ignore[attr-defined]
+
+    # Start scan in background
+    scan_progress = RestructureProgress(status="running")
+    scan_progress.phase = "Scanning local directories"
+    request.app.state.skip_scan_progress = scan_progress
+    request.app.state.skip_scan_results = None
+
     spawn_background_task(
-        request.app.state, _auto_index_local_libraries(request.app.state)
+        request.app.state,
+        _run_skip_scan(request.app.state, source_dirs, scan_progress),
     )
 
-    return JSONResponse({"ok": True, "saved": len(source_dirs)})
+    return JSONResponse({"ok": True, "message": "Scan started"})
+
+
+async def _run_skip_scan(
+    app_state: object,
+    source_dirs: list[str],
+    progress: RestructureProgress,
+) -> None:
+    """Background: scan directories and store results for review.
+
+    Uses a separate child progress object for scan_directory calls so
+    the parent progress counters stay accurate and never overshoot.
+    """
+    db = app_state.db  # type: ignore[attr-defined]
+    anilist_client = app_state.anilist_client  # type: ignore[attr-defined]
+
+    title_matcher = TitleMatcher(similarity_threshold=0.75)
+    dir_scanner = LocalDirectoryScanner(
+        db=db, anilist_client=anilist_client, title_matcher=title_matcher
+    )
+
+    # Child progress: scan_directory mutates this, not the parent
+    child_progress = RestructureProgress(status="running")
+
+    try:
+        # Pre-count total folders across all paths for accurate progress
+        total_folders = 0
+        for path in source_dirs:
+            try:
+                entries = sorted(os.listdir(path))
+                subdirs = [
+                    name
+                    for name in entries
+                    if not name.startswith(".")
+                    and os.path.isdir(os.path.join(path, name))
+                ]
+                total_folders += len(subdirs)
+            except OSError:
+                pass
+        progress.total = total_folders
+        progress.processed = 0
+
+        # Phase 1: Scan root-level folders
+        progress.phase = "Scanning folders"
+        root_shows: list[ShowInput] = []
+        for path in source_dirs:
+            child_progress.processed = 0
+            shows = await dir_scanner.scan_directory(path, child_progress)
+            for show in shows:
+                root_shows.append(show)
+                progress.processed += 1
+                progress.current_item = show.title
+
+        if not root_shows:
+            progress.status = "complete"
+            app_state.skip_scan_results = []  # type: ignore[attr-defined]
+            return
+
+        # Phase 2: Structure B — named season subdirs
+        progress.phase = "Scanning season subdirectories"
+        all_items: list[tuple[ShowInput, str]] = []
+
+        for root_show in root_shows:
+            if not root_show.local_path:
+                continue
+            root_name = os.path.basename(root_show.local_path.rstrip("/"))
+            video_subdirs = _find_video_subdirs(root_show.local_path)
+
+            if len(video_subdirs) >= 2:
+                # Expand total to account for subdirs (replacing 1 root entry)
+                total_folders += len(video_subdirs) - 1
+                progress.total = total_folders
+                child_progress.processed = 0
+                subdir_shows = await dir_scanner.scan_directory(
+                    root_show.local_path, child_progress
+                )
+                # Replace root entry progress: we already counted 1 for the
+                # root in Phase 1, now add (subdirs - 1) more
+                progress.processed += len(subdir_shows) - 1
+                for sub_show in subdir_shows:
+                    all_items.append((sub_show, root_name))
+                    progress.current_item = sub_show.title
+            else:
+                all_items.append((root_show, root_name))
+
+        # Build serializable results for review
+        progress.phase = "Preparing results"
+        results: list[dict] = []
+        for i, (show, root_name) in enumerate(all_items):
+            cached = (
+                await db.get_cached_metadata(show.anilist_id)
+                if show.anilist_id
+                else None
+            )
+            cover = (cached.get("cover_image") or "") if cached else ""
+            year = show.year or ((cached.get("year") or 0) if cached else 0)
+            fmt = show.anilist_format or (
+                (cached.get("format") or "") if cached else ""
+            )
+            eps = show.anilist_episodes or (cached.get("episodes") if cached else None)
+
+            # Get match confidence from media_mappings if available
+            confidence = 0.0
+            if show.anilist_id and show.local_path:
+                mapping = await db.get_mapping_by_source("local", show.local_path)
+                if mapping:
+                    confidence = mapping.get("match_confidence", 0) or 0
+
+            results.append(
+                {
+                    "index": i,
+                    "folder_name": show.title,
+                    "folder_path": show.local_path,
+                    "root_folder_name": root_name,
+                    "anilist_id": show.anilist_id,
+                    "anilist_title": show.anilist_title or "",
+                    "match_confidence": round(confidence, 2),
+                    "cover_image": cover,
+                    "year": year,
+                    "format": fmt,
+                    "episodes": eps,
+                    "status": "matched" if show.anilist_id else "unmatched",
+                }
+            )
+
+        app_state.skip_scan_results = results  # type: ignore[attr-defined]
+        progress.status = "complete"
+        matched_count = sum(1 for r in results if r["anilist_id"])
+        logger.info(
+            "Skip-scan complete: %d items (%d matched)",
+            len(results),
+            matched_count,
+        )
+        # Add notification so the user knows review is ready.
+        # Save step=4 so the notification link lands on the review step.
+        await db.set_setting("onboarding.skip_scan_ready", "true")
+        await db.add_notification(
+            notification_type="success",
+            message=(
+                f"Library scan complete — {matched_count}/{len(results)} matched."
+                " Review matches before finishing setup."
+            ),
+            action_url="/library/scan/results",
+            action_label="Review Matches",
+        )
+    except Exception:
+        logger.exception("Skip-scan failed")
+        progress.status = "error"
+        app_state.skip_scan_results = []  # type: ignore[attr-defined]
+        await db.add_notification(
+            notification_type="warning",
+            message="Library scan failed. Check logs for details.",
+            action_url="/onboarding",
+            action_label="Go to Onboarding",
+        )
+
+
+@router.get("/onboarding/skip-scan/status")
+async def skip_scan_status(request: Request) -> JSONResponse:
+    """Poll scan progress and return results when complete."""
+    progress = getattr(request.app.state, "skip_scan_progress", None)
+    results = getattr(request.app.state, "skip_scan_results", None)
+
+    if not progress:
+        return JSONResponse({"status": "not_started"})
+
+    total = getattr(progress, "total", 0)
+    processed = getattr(progress, "processed", 0)
+    pct = int(processed / total * 100) if total else 0
+    pct = min(pct, 99) if progress.status == "running" else pct
+
+    resp: dict = {
+        "status": progress.status,
+        "phase": getattr(progress, "phase", ""),
+        "percent": pct,
+        "processed": processed,
+        "total": total,
+    }
+
+    if progress.status in ("complete", "error") and results is not None:
+        resp["results"] = results
+        resp["matched"] = sum(1 for r in results if r.get("anilist_id"))
+        resp["unmatched"] = sum(1 for r in results if not r.get("anilist_id"))
+
+    return JSONResponse(resp)
+
+
+@router.post("/onboarding/skip-scan/search")
+async def skip_scan_search(request: Request) -> JSONResponse:
+    """Search AniList for rematch candidates."""
+    body = await request.json()
+    query = (body.get("query") or "").strip()
+    if not query:
+        return JSONResponse({"candidates": []})
+
+    anilist_client = request.app.state.anilist_client
+    try:
+        raw = await anilist_client.search_anime(query, page=1, per_page=8)
+        candidates = []
+        for entry in raw:
+            title_obj = entry.get("title") or {}
+            cover_obj = entry.get("coverImage") or {}
+            year = entry.get("seasonYear") or (
+                (entry.get("startDate") or {}).get("year") or 0
+            )
+            candidates.append(
+                {
+                    "id": entry.get("id"),
+                    "title": get_primary_title(entry),
+                    "title_romaji": title_obj.get("romaji") or "",
+                    "title_english": title_obj.get("english") or "",
+                    "year": year,
+                    "format": entry.get("format") or "",
+                    "episodes": entry.get("episodes"),
+                    "cover_image": cover_obj.get("large")
+                    or cover_obj.get("medium")
+                    or "",
+                }
+            )
+        return JSONResponse({"candidates": candidates})
+    except Exception as exc:
+        logger.warning("Skip-scan search failed: %s", exc)
+        return JSONResponse({"candidates": [], "error": str(exc)})
+
+
+@router.post("/onboarding/skip-scan/update")
+async def skip_scan_update_match(request: Request) -> JSONResponse:
+    """Update a single item's AniList match in the scan results."""
+    body = await request.json()
+    index: int = body.get("index", -1)
+    anilist_id: int | None = body.get("anilist_id")
+    anilist_title: str = body.get("anilist_title") or ""
+    cover_image: str = body.get("cover_image") or ""
+    year: int = body.get("year") or 0
+    fmt: str = body.get("format") or ""
+    episodes: int | None = body.get("episodes")
+
+    results: list[dict] | None = getattr(request.app.state, "skip_scan_results", None)
+    if results is None or index < 0 or index >= len(results):
+        return JSONResponse({"ok": False, "error": "Invalid index"}, status_code=400)
+
+    results[index]["anilist_id"] = anilist_id
+    results[index]["anilist_title"] = anilist_title
+    results[index]["cover_image"] = cover_image
+    results[index]["year"] = year
+    results[index]["format"] = fmt
+    results[index]["episodes"] = episodes
+    results[index]["status"] = "matched" if anilist_id else "unmatched"
+
+    return JSONResponse({"ok": True})
+
+
+@router.post("/onboarding/skip-scan/commit")
+async def skip_scan_commit(request: Request) -> JSONResponse:
+    """Commit reviewed scan results to database as library items."""
+    results: list[dict] | None = getattr(request.app.state, "skip_scan_results", None)
+    if results is None:
+        return JSONResponse(
+            {"ok": False, "error": "No scan results to commit"}, status_code=400
+        )
+
+    db = request.app.state.db
+    anilist_client = request.app.state.anilist_client
+
+    # Get or create library
+    libraries = await db.get_all_libraries()
+    if not libraries:
+        source_dirs = getattr(request.app.state, "onboarding_source_dirs", []) or []
+        library_id = await db.create_library("My Library", json.dumps(source_dirs))
+    else:
+        library_id = libraries[0]["id"]
+
+    # Build series groups for matched items
+    group_builder = SeriesGroupBuilder(db, anilist_client)
+    group_ids: dict[int, int] = {}
+    seen_groups: set[int] = set()
+
+    for item in results:
+        aid = item.get("anilist_id")
+        if not aid or aid in seen_groups:
+            continue
+        seen_groups.add(aid)
+        try:
+            group_id, _entries = await group_builder.build_group(aid)
+            if group_id:
+                entries = await db.get_series_group_entries(group_id)
+                for entry in entries:
+                    group_ids[entry["anilist_id"]] = group_id
+        except Exception:
+            logger.debug("Series group build failed for anilist_id=%d", aid)
+
+    # Upsert library items
+    upserted = 0
+    for item in results:
+        aid = item.get("anilist_id")
+        if not aid:
+            continue
+
+        await db.upsert_library_item(
+            library_id=library_id,
+            folder_path=item.get("folder_path"),
+            folder_name=item.get("root_folder_name") or item.get("folder_name"),
+            anilist_id=aid,
+            anilist_title=item.get("anilist_title") or item.get("folder_name"),
+            match_confidence=1.0,
+            match_method="local_scan_reviewed",
+            series_group_id=group_ids.get(aid),
+            cover_image=item.get("cover_image") or "",
+            year=item.get("year") or 0,
+            anilist_format=item.get("format") or "",
+            anilist_episodes=item.get("episodes"),
+        )
+        upserted += 1
+
+    request.app.state.library_already_seeded = True
+    logger.info("Skip-scan commit: saved %d items to library %d", upserted, library_id)
+
+    return JSONResponse({"ok": True, "library_id": library_id, "items_saved": upserted})
+
+
+# ---------------------------------------------------------------------------
+# Standalone library scan results page
+# ---------------------------------------------------------------------------
+
+
+@router.get("/library/scan/results", response_class=HTMLResponse)
+async def library_scan_results_page(request: Request):  # type: ignore[return]
+    """Render the library scan results review page."""
+    from starlette.responses import RedirectResponse as _Redirect
+
+    results: list[dict] | None = getattr(request.app.state, "skip_scan_results", None)
+    if not results:
+        return _Redirect(url="/?error=No+scan+results+available", status_code=303)
+
+    templates = request.app.state.templates
+
+    matched_items = [r for r in results if r.get("anilist_id")]
+    unmatched_items = [r for r in results if not r.get("anilist_id")]
+
+    return templates.TemplateResponse(
+        "library_scan_results.html",
+        {
+            "request": request,
+            "matched_items": matched_items,
+            "unmatched_items": unmatched_items,
+            "matched": len(matched_items),
+            "unmatched": len(unmatched_items),
+            "total": len(results),
+        },
+    )
+
+
+@router.post("/library/scan/confirm")
+async def library_scan_confirm(request: Request):
+    """Confirm selected matches from the library scan review page.
+
+    This is a form POST (not JSON) — mirrors the Plex scan apply pattern.
+    Commits results to DB and dismisses the notification.
+    """
+    from starlette.responses import RedirectResponse as _Redirect
+
+    db = request.app.state.db
+    anilist_client = request.app.state.anilist_client
+
+    form = await request.form()
+    apply_items = form.getlist("apply_item")
+
+    results: list[dict] | None = getattr(request.app.state, "skip_scan_results", None)
+    if not results:
+        return _Redirect(url="/?error=No+scan+results", status_code=303)
+
+    # Parse selected indices
+    selected_indices: set[int] = set()
+    for item_str in apply_items:
+        parts = str(item_str).split("|", 2)
+        if parts:
+            try:
+                selected_indices.add(int(parts[0]))
+            except ValueError:
+                pass
+
+    # Filter results to only selected items
+    selected_results = [r for r in results if r["index"] in selected_indices]
+
+    # Get or create library
+    libraries = await db.get_all_libraries()
+    if not libraries:
+        source_dirs = getattr(request.app.state, "onboarding_source_dirs", []) or []
+        library_id = await db.create_library("My Library", json.dumps(source_dirs))
+    else:
+        library_id = libraries[0]["id"]
+
+    # Build series groups
+    group_builder = SeriesGroupBuilder(db, anilist_client)
+    group_ids: dict[int, int] = {}
+    seen_groups: set[int] = set()
+
+    for item in selected_results:
+        aid = item.get("anilist_id")
+        if not aid or aid in seen_groups:
+            continue
+        seen_groups.add(aid)
+        try:
+            group_id, _entries = await group_builder.build_group(aid)
+            if group_id:
+                entries = await db.get_series_group_entries(group_id)
+                for entry in entries:
+                    group_ids[entry["anilist_id"]] = group_id
+        except Exception:
+            logger.debug("Series group build failed for anilist_id=%d", aid)
+
+    # Upsert library items
+    upserted = 0
+    for item in selected_results:
+        aid = item.get("anilist_id")
+        if not aid:
+            continue
+        await db.upsert_library_item(
+            library_id=library_id,
+            folder_path=item.get("folder_path"),
+            folder_name=item.get("root_folder_name") or item.get("folder_name"),
+            anilist_id=aid,
+            anilist_title=item.get("anilist_title") or item.get("folder_name"),
+            match_confidence=1.0,
+            match_method="local_scan_reviewed",
+            series_group_id=group_ids.get(aid),
+            cover_image=item.get("cover_image") or "",
+            year=item.get("year") or 0,
+            anilist_format=item.get("format") or "",
+            anilist_episodes=item.get("episodes"),
+        )
+        upserted += 1
+
+    request.app.state.library_already_seeded = True
+
+    # Dismiss the scan notification
+    await db.dismiss_notifications_by_url("/library/scan/results")
+    await db.clear_dismissed_notifications()
+
+    # Clear scan results from memory
+    request.app.state.skip_scan_results = None
+    request.app.state.skip_scan_progress = None
+
+    logger.info(
+        "Library scan confirm: saved %d items to library %d", upserted, library_id
+    )
+
+    return _Redirect(
+        url=f"/?message=Library+indexed:+{upserted}+items+saved", status_code=303
+    )
 
 
 @router.post("/onboarding/restructure/analyze")

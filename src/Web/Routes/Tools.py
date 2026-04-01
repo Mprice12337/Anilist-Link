@@ -55,6 +55,25 @@ async def tools_page(request: Request) -> HTMLResponse:
     radarr_configured = bool(config.radarr.url and config.radarr.api_key)
     downloads_configured = sonarr_configured or radarr_configured
 
+    # Check if user has a local library with media paths configured
+    has_library = False
+    try:
+        libraries = await db.get_all_libraries()
+        if libraries:
+            import json as _json
+
+            for lib in libraries:
+                paths_raw = lib.get("paths") or "[]"
+                try:
+                    paths = _json.loads(paths_raw)
+                    if paths:
+                        has_library = True
+                        break
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     return templates.TemplateResponse(
         "tools.html",
         {
@@ -68,6 +87,7 @@ async def tools_page(request: Request) -> HTMLResponse:
             "sonarr_configured": sonarr_configured,
             "radarr_configured": radarr_configured,
             "downloads_configured": downloads_configured,
+            "has_library": has_library,
             "version": "0.1.0",
         },
     )

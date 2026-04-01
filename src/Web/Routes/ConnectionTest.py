@@ -14,6 +14,7 @@ from src.Clients.JellyfinClient import JellyfinClient
 from src.Clients.PlexClient import PlexClient
 from src.Clients.RadarrClient import RadarrClient
 from src.Clients.SonarrClient import SonarrClient
+from src.Utils.Config import load_config_from_db_settings
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,11 @@ async def bulk_save_settings(request: Request) -> JSONResponse:
     db = request.app.state.db
     for key, value in settings.items():
         await db.set_setting(str(key), str(value))
+
+    # Rebuild in-memory config so all route handlers see the new values
+    db_settings = await db.get_all_settings()
+    new_config = load_config_from_db_settings(db_settings)
+    request.app.state.config = new_config
 
     return JSONResponse({"ok": True, "saved": len(settings)})
 
@@ -79,7 +85,7 @@ async def fs_mkdir(request: Request) -> JSONResponse:
 
 
 @router.get("/api/fs/browse")
-async def fs_browse(path: str = "/data") -> JSONResponse:
+async def fs_browse(path: str = "/media") -> JSONResponse:
     """Return immediate child directories of *path*.
 
     The response is a JSON object:
@@ -216,37 +222,82 @@ async def get_progress(request: Request) -> JSONResponse:
             }
         )
 
-    # Library scanner (local directory)
-    # May be stored as a dict {library_id: LibraryScanProgress} (from onboarding)
-    # or as a single LibraryScanProgress object (from direct library scan routes).
-    lib_scan_raw = getattr(app_state, "library_scan_progress", None)
-    lib_scan_candidates: list[Any] = []
-    if isinstance(lib_scan_raw, dict):
-        lib_scan_candidates = list(lib_scan_raw.values())
-    elif lib_scan_raw is not None:
-        lib_scan_candidates = [lib_scan_raw]
+    # Skip-scan (onboarding skip flow) — checked first so we can
+    # suppress the legacy library_scan_progress when skip-scan is active.
+    skip_scan = getattr(app_state, "skip_scan_progress", None)
+    skip_scan_active = skip_scan and getattr(skip_scan, "status", "") not in (
+        "",
+        "complete",
+        "error",
+    )
+    if skip_scan_active:
+        total = getattr(skip_scan, "total", 0)
+        done = min(getattr(skip_scan, "processed", 0), total) if total else 0
+        pct = int(done / total * 100) if total else 0
+        pct = min(pct, 99)  # Don't show 100% until truly complete
+        tasks.append(
+            {
+                "id": "skip_scan",
+                "type": "Library Scan",
+                "label": getattr(skip_scan, "phase", "Scanning directories")
+                or "Scanning directories",
+                "status": skip_scan.status,
+                "percent": pct,
+                "detail": f"{done}/{total}" if total else "",
+            }
+        )
 
-    for i, lib_scan in enumerate(lib_scan_candidates):
-        status = getattr(lib_scan, "status", "")
-        if status not in ("", "complete", "error"):
-            total = getattr(lib_scan, "total", 0)
-            done = getattr(lib_scan, "processed", 0)
-            pct = int(done / total * 100) if total else 0
-            tasks.append(
-                {
-                    "id": f"library_scan_{i}",
-                    "type": "Library Scan",
-                    "label": getattr(lib_scan, "phase", "Library scan")
-                    or "Library scan",
-                    "status": status,
-                    "percent": pct,
-                    "detail": (
-                        f"{done}/{total}"
-                        if total
-                        else getattr(lib_scan, "current_item", "")
-                    ),
-                }
-            )
+    # Library scanner (local directory) — only when skip-scan is NOT active
+    # to avoid duplicate "Library Scan" widgets.
+    if not skip_scan_active:
+        lib_scan_raw = getattr(app_state, "library_scan_progress", None)
+        lib_scan_candidates: list[Any] = []
+        if isinstance(lib_scan_raw, dict):
+            lib_scan_candidates = list(lib_scan_raw.values())
+        elif lib_scan_raw is not None:
+            lib_scan_candidates = [lib_scan_raw]
+
+        for i, lib_scan in enumerate(lib_scan_candidates):
+            status = getattr(lib_scan, "status", "")
+            if status not in ("", "complete", "error"):
+                total = getattr(lib_scan, "total", 0)
+                done = min(getattr(lib_scan, "processed", 0), total) if total else 0
+                pct = int(done / total * 100) if total else 0
+                pct = min(pct, 99)
+                tasks.append(
+                    {
+                        "id": f"library_scan_{i}",
+                        "type": "Library Scan",
+                        "label": getattr(lib_scan, "phase", "Library scan")
+                        or "Library scan",
+                        "status": status,
+                        "percent": pct,
+                        "detail": (
+                            f"{done}/{total}"
+                            if total
+                            else getattr(lib_scan, "current_item", "")
+                        ),
+                    }
+                )
+
+    # Post-restructure media server refresh
+    media_refresh = getattr(app_state, "media_refresh_progress", None)
+    if media_refresh and getattr(media_refresh, "status", "") not in (
+        "",
+        "complete",
+        "error",
+    ):
+        tasks.append(
+            {
+                "id": "media_refresh",
+                "type": "Media Refresh",
+                "label": getattr(media_refresh, "phase", "Refreshing media server…")
+                or "Refreshing media server…",
+                "status": media_refresh.status,
+                "percent": 50,  # indeterminate — we don't have granular progress
+                "detail": "",
+            }
+        )
 
     # Crunchyroll preview scan
     cr_preview = getattr(app_state, "cr_preview_progress", None)
@@ -266,6 +317,29 @@ async def get_progress(request: Request) -> JSONResponse:
         )
 
     return JSONResponse({"tasks": tasks})
+
+
+# ---------------------------------------------------------------------------
+# Persistent notifications
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/notifications")
+async def get_notifications(request: Request) -> JSONResponse:
+    """Return all active (non-dismissed) notifications."""
+    db = request.app.state.db
+    items = await db.get_notifications()
+    return JSONResponse({"notifications": items})
+
+
+@router.post("/api/notifications/{notification_id}/dismiss")
+async def dismiss_notification(request: Request, notification_id: str) -> JSONResponse:
+    """Dismiss a notification by id."""
+    db = request.app.state.db
+    found = await db.dismiss_notification(notification_id)
+    # Periodically clean up dismissed entries
+    await db.clear_dismissed_notifications()
+    return JSONResponse({"ok": found})
 
 
 # ---------------------------------------------------------------------------
@@ -324,6 +398,10 @@ async def test_plex(request: Request) -> JSONResponse:
         await db.set_setting("plex.has_plexpass", "true" if has_plexpass else "false")
         await db.set_setting("plex.connected", "true")
 
+        # Rebuild in-memory config
+        db_settings = await db.get_all_settings()
+        request.app.state.config = load_config_from_db_settings(db_settings)
+
         await client.close()
 
         return JSONResponse(
@@ -363,6 +441,10 @@ async def test_jellyfin(request: Request) -> JSONResponse:
         db = request.app.state.db
         await db.set_setting("jellyfin.connected", "true")
 
+        # Rebuild in-memory config
+        db_settings = await db.get_all_settings()
+        request.app.state.config = load_config_from_db_settings(db_settings)
+
         return JSONResponse(
             {
                 "ok": True,
@@ -389,8 +471,11 @@ async def test_anilist(request: Request) -> JSONResponse:
             {"ok": False, "error": "client_id is required"}, status_code=400
         )
 
-    # Validate by hitting the public AniList GraphQL endpoint
-    query = "{ Viewer { id name } }"
+    # Validate by hitting the public AniList GraphQL endpoint with a
+    # lightweight public query (no auth required).  The Viewer query
+    # requires authentication and AniList returns 403 for it, so we
+    # use a simple anime lookup instead.
+    query = "{ Media(id: 1, type: ANIME) { id title { romaji } } }"
     try:
         async with httpx.AsyncClient(timeout=10) as http:
             resp = await http.post(
@@ -399,15 +484,27 @@ async def test_anilist(request: Request) -> JSONResponse:
                 headers={
                     "Content-Type": "application/json",
                     "Accept": "application/json",
+                    "User-Agent": "AnilistLink/1.0",
                 },
             )
-        # 200/400/401 = API reachable (401 = no token, expected for public ping).
-        # 429 = rate limited — the API is definitely reachable, just busy right now
-        # (often triggered by a background library scan running in parallel).
-        reachable = resp.status_code in (200, 400, 401, 429)
+        # 200 = API reachable and responding.
+        # 429 = rate limited — the API is definitely reachable, just busy.
+        # 400/401/403 = API reachable (unexpected for a public query but
+        # still confirms connectivity).
+        reachable = resp.status_code in (200, 400, 401, 403, 429)
+        body_snippet = resp.text[:300] if resp.text else "(empty)"
+        if resp.status_code != 200:
+            logger.warning(
+                "AniList connection test HTTP %d. Body: %s",
+                resp.status_code,
+                body_snippet,
+            )
         if reachable:
             db = request.app.state.db
             await db.set_setting("anilist.connected", "true")
+            # Rebuild in-memory config
+            db_settings = await db.get_all_settings()
+            request.app.state.config = load_config_from_db_settings(db_settings)
             note = (
                 "AniList API reachable. Credentials will be validated "
                 "when a user completes OAuth."
@@ -417,9 +514,17 @@ async def test_anilist(request: Request) -> JSONResponse:
                     "AniList API reachable (rate limited — background scan running)."
                     " Credentials validated via OAuth."
                 )
+            if resp.status_code == 403:
+                note = (
+                    "AniList API reachable (returned 403 — API may be "
+                    "temporarily restricted). OAuth may still work."
+                )
             return JSONResponse({"ok": True, "note": note})
         return JSONResponse(
-            {"ok": False, "error": f"AniList returned {resp.status_code}"}
+            {
+                "ok": False,
+                "error": f"AniList returned {resp.status_code}: {body_snippet[:100]}",
+            }
         )
     except Exception as exc:
         logger.warning("AniList connection test failed: %s", exc)
@@ -446,6 +551,9 @@ async def test_sonarr(request: Request) -> JSONResponse:
         await db.set_setting("sonarr.url", url)
         await db.set_setting("sonarr.api_key", api_key)
         await db.set_setting("sonarr.connected", "true")
+        # Rebuild in-memory config
+        db_settings = await db.get_all_settings()
+        request.app.state.config = load_config_from_db_settings(db_settings)
         return JSONResponse({"ok": True, **status})
     except Exception as exc:
         await client.close()
@@ -473,6 +581,9 @@ async def test_radarr(request: Request) -> JSONResponse:
         await db.set_setting("radarr.url", url)
         await db.set_setting("radarr.api_key", api_key)
         await db.set_setting("radarr.connected", "true")
+        # Rebuild in-memory config
+        db_settings = await db.get_all_settings()
+        request.app.state.config = load_config_from_db_settings(db_settings)
         return JSONResponse({"ok": True, **status})
     except Exception as exc:
         await client.close()
@@ -520,6 +631,9 @@ async def test_crunchyroll(request: Request) -> JSONResponse:
     if flaresolverr_url:
         await db.set_setting("crunchyroll.flaresolverr_url", flaresolverr_url)
     await db.set_setting("crunchyroll.connected", "true")
+    # Rebuild in-memory config
+    db_settings = await db.get_all_settings()
+    request.app.state.config = load_config_from_db_settings(db_settings)
     return JSONResponse(
         {
             "ok": True,

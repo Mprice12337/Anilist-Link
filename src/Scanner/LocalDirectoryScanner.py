@@ -36,6 +36,7 @@ class LocalDirectoryScanner:
         directory: str,
         progress: RestructureProgress,
         force_rescan: bool = False,
+        manage_total: bool = True,
     ) -> list[ShowInput]:
         """Scan a directory for show folders and match each to AniList.
 
@@ -44,6 +45,10 @@ class LocalDirectoryScanner:
 
         When *force_rescan* is True, cached mappings are ignored and every
         folder is re-matched against AniList.
+
+        When *manage_total* is False, the caller is responsible for setting
+        ``progress.total`` before calling.  This prevents the per-directory
+        reset that causes incorrect fractions when scanning multiple dirs.
         """
         progress.phase = "Scanning directory"
         results: list[ShowInput] = []
@@ -60,7 +65,8 @@ class LocalDirectoryScanner:
             for name in entries
             if not name.startswith(".") and os.path.isdir(os.path.join(directory, name))
         ]
-        progress.total = len(subdirs)
+        if manage_total:
+            progress.total = len(subdirs)
         progress.phase = "Matching folders to AniList"
 
         for folder_name in subdirs:

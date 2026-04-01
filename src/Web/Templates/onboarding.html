@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Setup — Anilist-Link{% endblock %}
+{% block title %}Anilist-Link: Setup{% endblock %}
 
 {% block content %}
 <style>
@@ -644,8 +644,8 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
     ═══════════════════════════════════════════════════════════ -->
     <div class="step-panel" id="step-2">
         <div class="card">
-            <h2>Configure file organization</h2>
-            <p class="text-muted hint">Select source directories containing your anime and choose where to put the organized output.</p>
+            <h2 id="step2-heading">Configure file organization</h2>
+            <p class="text-muted hint" id="step2-desc">Select source directories containing your anime and choose where to put the organized output.</p>
 
             <!-- Source directories -->
             <div style="margin-bottom: 1.5rem">
@@ -653,7 +653,7 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
                 <div class="file-browser" id="src-browser">
                     <div class="file-browser-toolbar">
                         <button class="btn btn-secondary btn-sm" onclick="srcBrowseParent()">↑ Parent</button>
-                        <div class="file-browser-path" id="src-current-path">/data</div>
+                        <div class="file-browser-path" id="src-current-path">/media</div>
                     </div>
                     <div class="file-browser-list" id="src-browser-list">
                         <div class="file-browser-empty">Loading…</div>
@@ -667,13 +667,13 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
                 </div>
             </div>
 
-            <!-- Output directory -->
-            <div style="margin-bottom: 1.5rem">
+            <!-- Output directory (hidden in skip mode) -->
+            <div style="margin-bottom: 1.5rem" id="step2-output-section">
                 <div class="section-label">Output Directory</div>
                 <div class="file-browser" id="out-browser">
                     <div class="file-browser-toolbar">
                         <button class="btn btn-secondary btn-sm" onclick="outBrowseParent()">↑ Parent</button>
-                        <div class="file-browser-path" id="out-current-path">/data</div>
+                        <div class="file-browser-path" id="out-current-path">/media</div>
                         <button class="btn btn-secondary btn-sm" onclick="outShowNewFolder()" id="out-new-folder-btn" title="Create new folder">+ New Folder</button>
                     </div>
                     <div id="out-new-folder-row" class="hidden" style="display:flex;align-items:center;gap:0.5rem;padding:0.4rem 0.75rem;border-bottom:1px solid var(--border);background:var(--bg-card)">
@@ -696,16 +696,28 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
                 </div>
             </div>
 
-            <!-- Advanced: Credentials.md templates -->
-            <details class="advanced-section">
+            <!-- Advanced: Naming templates (hidden in skip mode) -->
+            <details class="advanced-section" id="step2-templates-section">
                 <summary>Advanced — Naming Templates</summary>
                 <div class="advanced-body">
+                    <!-- Preset chips -->
+                    <div style="margin-bottom:1rem">
+                        <div class="text-muted" style="font-size:0.82rem;margin-bottom:0.4rem">Quick presets</div>
+                        <div style="display:flex;flex-wrap:wrap;gap:0.4rem" id="tpl-preset-chips">
+                            <button type="button" class="btn btn-secondary btn-sm tpl-preset-chip" data-preset="english" style="font-size:0.8rem;padding:0.25rem 0.7rem">English</button>
+                            <button type="button" class="btn btn-secondary btn-sm tpl-preset-chip" data-preset="english_season_names" style="font-size:0.8rem;padding:0.25rem 0.7rem">English + Season Names</button>
+                            <button type="button" class="btn btn-secondary btn-sm tpl-preset-chip" data-preset="romaji" style="font-size:0.8rem;padding:0.25rem 0.7rem">Romaji</button>
+                            <button type="button" class="btn btn-secondary btn-sm tpl-preset-chip" data-preset="romaji_season_names" style="font-size:0.8rem;padding:0.25rem 0.7rem">Romaji + Season Names</button>
+                            <button type="button" class="btn btn-secondary btn-sm tpl-preset-chip" data-preset="with_quality" style="font-size:0.8rem;padding:0.25rem 0.7rem">Standard + Quality</button>
+                            <button type="button" class="btn btn-secondary btn-sm tpl-preset-chip" data-preset="standard" style="font-size:0.8rem;padding:0.25rem 0.7rem">Standard</button>
+                        </div>
+                    </div>
                     <div class="form-grid">
                         <div class="form-group">
                             <label for="tpl-episode">Episode template</label>
                             <input type="text" id="tpl-episode" name="tpl_episode"
                                    class="tpl-input"
-                                   placeholder="{title} - S{season:02d}E{episode:02d} - {episode_title}">
+                                   placeholder="{title} - S{season}E{episode}">
                         </div>
                         <div class="form-group">
                             <label for="tpl-folder">Folder template</label>
@@ -717,7 +729,7 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
                             <label for="tpl-season">Season folder template</label>
                             <input type="text" id="tpl-season" name="tpl_season"
                                    class="tpl-input"
-                                   placeholder="Season {season:02d}">
+                                   placeholder="Season {season}">
                         </div>
                         <div class="form-group">
                             <label for="tpl-movie">Movie file template</label>
@@ -770,8 +782,8 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
                 </div>
             </details>
 
-            <!-- Analyze / Execute section -->
-            <div style="margin-top: 1.5rem">
+            <!-- Analyze / Execute section (hidden in skip mode) -->
+            <div style="margin-top: 1.5rem" id="step2-analyze-section">
                 <button class="btn btn-primary" id="analyze-btn" onclick="runAnalyze()">
                     Analyze &amp; Execute
                 </button>
@@ -811,6 +823,8 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
                 <div class="spacer"></div>
                 <button class="btn btn-secondary" id="step2-skip" onclick="skipRestructure()">Skip file organization</button>
                 <button class="btn btn-primary" id="step2-next" onclick="runAnalyze()">Analyze &amp; Continue →</button>
+                <button class="btn btn-primary" id="step2-skip-next" onclick="saveMediaDirsAndContinue()" style="display:none">Scan &amp; Continue →</button>
+                <button class="btn btn-secondary" id="step2-skip-media" onclick="skipMediaSetup()" style="display:none">Skip — no local media</button>
             </div>
         </div>
     </div>
@@ -826,11 +840,11 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
             <!-- Tab bar -->
             <div class="tab-bar" id="service-tabs">
                 <button class="tab-btn active" onclick="switchTab('anilist', this)"><img src="/static/img/anilist.png" alt="" class="tab-service-logo">AniList</button>
-                <button class="tab-btn" onclick="switchTab('plex', this)"><img src="/static/img/plex.png" alt="" class="tab-service-logo">Plex</button>
-                <button class="tab-btn" onclick="switchTab('jellyfin', this)"><img src="/static/img/jellyfin.png" alt="" class="tab-service-logo">Jellyfin</button>
                 <button class="tab-btn" onclick="switchTab('crunchyroll', this)"><img src="/static/img/crunchyroll.png" alt="" class="tab-service-logo">Crunchyroll</button>
-                <button class="tab-btn" onclick="switchTab('sonarr', this)"><img src="/static/img/sonarr.webp" alt="" class="tab-service-logo">Sonarr</button>
+                <button class="tab-btn" onclick="switchTab('jellyfin', this)"><img src="/static/img/jellyfin.png" alt="" class="tab-service-logo">Jellyfin</button>
+                <button class="tab-btn" onclick="switchTab('plex', this)"><img src="/static/img/plex.png" alt="" class="tab-service-logo">Plex</button>
                 <button class="tab-btn" onclick="switchTab('radarr', this)"><img src="/static/img/radarr.png" alt="" class="tab-service-logo">Radarr</button>
+                <button class="tab-btn" onclick="switchTab('sonarr', this)"><img src="/static/img/sonarr.webp" alt="" class="tab-service-logo">Sonarr</button>
             </div>
 
             <!-- AniList tab -->
@@ -1101,9 +1115,28 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
                         <input type="password" id="sonarr-api-key" name="sonarr_api_key" placeholder="(your Sonarr API key)" value="{{ settings.sonarr_api_key }}">
                     </div>
                 </div>
-                <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap">
+                <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap; margin-bottom:1rem">
                     <button class="btn btn-primary" id="sonarr-test-btn" onclick="testService('sonarr')">Test Connection</button>
                     <span class="test-badge hidden" id="sonarr-badge"></span>
+                </div>
+                <!-- Advanced Sonarr settings (revealed after connection) -->
+                <div class="hidden" id="sonarr-advanced-section">
+                    <div class="form-grid" style="margin-bottom: 1rem">
+                        <div class="form-group">
+                            <label for="sonarr-root-folder">Anime root folder path</label>
+                            <input type="text" id="sonarr-root-folder" placeholder="/media/anime" value="{{ settings.sonarr_anime_root_folder }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="sonarr-path-prefix">Sonarr path prefix</label>
+                            <input type="text" id="sonarr-path-prefix" placeholder="/media/anime" value="{{ settings.sonarr_path_prefix }}">
+                            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.2rem">Path as Sonarr sees it</div>
+                        </div>
+                        <div class="form-group">
+                            <label for="sonarr-local-prefix">Local path prefix</label>
+                            <input type="text" id="sonarr-local-prefix" placeholder="/mnt/media/anime" value="{{ settings.sonarr_local_path_prefix }}">
+                            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.2rem">Same path as this container sees it</div>
+                        </div>
+                    </div>
                 </div>
                 <div id="sonarr-service-status" style="display:none; margin-top:0.75rem; font-size:0.85rem; color:var(--text-muted)">
                     Skipped
@@ -1136,9 +1169,62 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
                         <input type="password" id="radarr-api-key" name="radarr_api_key" placeholder="(your Radarr API key)" value="{{ settings.radarr_api_key }}">
                     </div>
                 </div>
-                <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap">
+                <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap; margin-bottom:1rem">
                     <button class="btn btn-primary" id="radarr-test-btn" onclick="testService('radarr')">Test Connection</button>
                     <span class="test-badge hidden" id="radarr-badge"></span>
+                </div>
+                <!-- Advanced Radarr settings (revealed after connection) -->
+                <div class="hidden" id="radarr-advanced-section">
+                    <div class="form-grid" style="margin-bottom: 1rem">
+                        <div class="form-group">
+                            <label for="radarr-root-folder">Anime root folder path</label>
+                            <input type="text" id="radarr-root-folder" placeholder="/media/movies" value="{{ settings.radarr_anime_root_folder }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="radarr-path-prefix">Radarr path prefix</label>
+                            <input type="text" id="radarr-path-prefix" placeholder="/media/movies" value="{{ settings.radarr_path_prefix }}">
+                            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.2rem">Path as Radarr sees it</div>
+                        </div>
+                        <div class="form-group">
+                            <label for="radarr-local-prefix">Local path prefix</label>
+                            <input type="text" id="radarr-local-prefix" placeholder="/mnt/media/movies" value="{{ settings.radarr_local_path_prefix }}">
+                            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.2rem">Same path as this container sees it</div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Download settings (shared between Sonarr/Radarr, shown on last *arr tab) -->
+                <div class="hidden" id="arr-download-settings">
+                    <div style="border-top:1px solid var(--border);padding-top:1rem;margin-top:0.5rem">
+                        <div class="section-label">Download Automation</div>
+                        <div class="form-grid" style="margin-bottom:1rem">
+                            <div class="form-group">
+                                <label class="toggle">
+                                    <input type="checkbox" id="arr-enabled" {{ 'checked' if settings.downloads_arr_enabled == 'true' else '' }}>
+                                    <span class="toggle-label">Enable Sonarr/Radarr integration</span>
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label class="toggle">
+                                    <input type="checkbox" id="arr-auto-search" {{ 'checked' if settings.downloads_auto_search == 'true' else '' }}>
+                                    <span class="toggle-label">Search immediately on add</span>
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label for="arr-auto-statuses">Auto-add list statuses</label>
+                                <input type="text" id="arr-auto-statuses" placeholder="CURRENT,PLANNING" value="{{ settings.downloads_auto_statuses }}">
+                                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.2rem">Comma-separated. Leave blank to disable auto-add.</div>
+                            </div>
+                            <div class="form-group">
+                                <label for="arr-monitor-mode">Monitor mode</label>
+                                <select id="arr-monitor-mode" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:0.45rem 0.65rem;font-size:0.9rem">
+                                    <option value="future" {{ 'selected' if settings.downloads_monitor_mode == 'future' else '' }}>Future episodes only</option>
+                                    <option value="all" {{ 'selected' if settings.downloads_monitor_mode == 'all' else '' }}>All episodes</option>
+                                    <option value="firstSeason" {{ 'selected' if settings.downloads_monitor_mode == 'firstSeason' else '' }}>First season</option>
+                                    <option value="latestSeason" {{ 'selected' if settings.downloads_monitor_mode == 'latestSeason' else '' }}>Latest season</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 <div id="radarr-service-status" style="display:none; margin-top:0.75rem; font-size:0.85rem; color:var(--text-muted)">
                     Skipped
@@ -1269,11 +1355,39 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
         if (pSeason && se) pSeason.textContent = renderTpl(se.value, sampleTokens) || se.placeholder;
         if (pMovie  && mo) pMovie.textContent  = (renderTpl(mo.value, movieTokens) || mo.placeholder) + '.mkv';
     }
+    // Naming template presets
+    var PRESETS = {
+        standard:              { file: '{title} - S{season}E{episode}', folder: '{title}', season_folder: 'Season {season}', movie_file: '{title} [{year}]' },
+        with_year:             { file: '{title} [{year}] - S{season}E{episode}', folder: '{title} [{year}]', season_folder: 'Season {season}', movie_file: '{title} [{year}]' },
+        with_quality:          { file: '{title} [{year}] - S{season}E{episode} [{quality}]', folder: '{title} [{year}]', season_folder: 'Season {season}', movie_file: '{title} [{year}] [{quality}]' },
+        english:               { file: '{title.english} ({year}) - S{season}E{episode} - {episode.title} [{quality}]', folder: '{title.english} ({year})', season_folder: 'Season {season}', movie_file: '{title.english} ({year}) [{quality}]' },
+        english_season_names:  { file: '{title.english} ({year}) - S{season}E{episode} - {episode.title} [{quality}]', folder: '{title.english} ({year})', season_folder: '{season.name} ({year})', movie_file: '{title.english} ({year}) [{quality}]' },
+        romaji:                { file: '{title.romaji} ({year}) - S{season}E{episode} - {episode.title} [{quality}]', folder: '{title.romaji} ({year})', season_folder: 'Season {season}', movie_file: '{title.romaji} ({year}) [{quality}]' },
+        romaji_season_names:   { file: '{title.romaji} ({year}) - S{season}E{episode} - {episode.title} [{quality}]', folder: '{title.romaji} ({year})', season_folder: '{season.name} ({year})', movie_file: '{title.romaji} ({year}) [{quality}]' },
+        dots:                  { file: '{title}.S{season}E{episode}.{quality.resolution}', folder: '{title}.({year})', season_folder: 'Season.{season}', movie_file: '{title}.({year})' },
+    };
     document.addEventListener('DOMContentLoaded', function () {
         document.querySelectorAll('.tpl-input').forEach(function (el) {
             el.addEventListener('input', updateTplPreview);
         });
         updateTplPreview();
+
+        // Preset chip click handler
+        document.querySelectorAll('.tpl-preset-chip').forEach(function (chip) {
+            chip.addEventListener('click', function () {
+                var key = chip.dataset.preset;
+                var p = PRESETS[key];
+                if (!p) return;
+                document.getElementById('tpl-episode').value = p.file;
+                document.getElementById('tpl-folder').value = p.folder;
+                document.getElementById('tpl-season').value = p.season_folder;
+                document.getElementById('tpl-movie').value = p.movie_file;
+                // Highlight active chip
+                document.querySelectorAll('.tpl-preset-chip').forEach(function (c) { c.classList.remove('active'); });
+                chip.classList.add('active');
+                updateTplPreview();
+            });
+        });
     });
 }());
 
@@ -1284,10 +1398,11 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
     var state = {
         currentStep: {{ current_step | default(1) }},
         restructureMode: null,       // 'quick' | 'full' | 'skip'
+        skipMode: false,             // true when skip chosen — step 2 shows minimal dir picker
         sourceDirs: [],
         outputDir: null,
-        srcBrowsePath: '/data',
-        outBrowsePath: '/data',
+        srcBrowsePath: '/media',
+        outBrowsePath: '/media',
         services: {
             anilist: 'pending',      // 'ok' | 'skip' | 'fail' | 'pending'
             plex: 'pending',
@@ -1299,6 +1414,7 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
         restructureStatus: 'pending', // 'running' | 'complete' | 'skip'
         conflictResolutions: {},     // rowIndex -> 'overwrite' | 'merge' | 'skip_show'
         conflictCount: 0,
+        skipScanStarted: false,      // true after skip-scan kicked off
     };
 
     /* ── Helpers ───────────────────────────────────────────── */
@@ -1415,12 +1531,91 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
         }
         if (state.restructureMode === 'skip') {
             state.restructureStatus = 'skip';
-            goToStep(3);
+            state.skipMode = true;
         } else {
-            goToStep(2);
-            initFileBrowsers();
+            state.skipMode = false;
         }
+        goToStep(2);
+        initFileBrowsers();
+        applySkipMode();
     };
+
+    /* ── Skip-mode helpers ─────────────────────────────────── */
+
+    function applySkipMode() {
+        var skip = state.skipMode;
+        // Toggle visibility of restructure-only sections
+        var hide = ['step2-output-section', 'step2-templates-section', 'step2-analyze-section'];
+        hide.forEach(function (id) {
+            var el_ = document.getElementById(id);
+            if (el_) el_.style.display = skip ? 'none' : '';
+        });
+        // Swap heading / description
+        var heading = document.getElementById('step2-heading');
+        var desc = document.getElementById('step2-desc');
+        if (heading) heading.textContent = skip
+            ? 'Where are your anime files?'
+            : 'Configure file organization';
+        if (desc) desc.textContent = skip
+            ? 'Select the directory containing your anime library so Anilist-Link can index it.'
+            : 'Select source directories containing your anime and choose where to put the organized output.';
+        // Swap nav buttons
+        var skipBtn = document.getElementById('step2-skip');
+        var analyzeBtn = document.getElementById('step2-next');
+        var skipNextBtn = document.getElementById('step2-skip-next');
+        var skipMediaBtn = document.getElementById('step2-skip-media');
+        if (skipBtn) skipBtn.style.display = skip ? 'none' : '';
+        if (analyzeBtn) analyzeBtn.style.display = skip ? 'none' : '';
+        if (skipNextBtn) skipNextBtn.style.display = skip ? '' : 'none';
+        if (skipMediaBtn) skipMediaBtn.style.display = skip ? '' : 'none';
+    }
+
+    window.saveMediaDirsAndContinue = function () {
+        // If nothing explicitly selected, use current browse path
+        if (state.sourceDirs.length === 0) {
+            if (state.srcBrowsePath && state.srcBrowsePath !== '/') {
+                state.sourceDirs.push(state.srcBrowsePath);
+                renderSourceTags();
+            } else {
+                alert('Please select at least one directory containing your anime files.');
+                return;
+            }
+        }
+        var btn = document.getElementById('step2-skip-next');
+        if (btn) { btn.disabled = true; btn.textContent = 'Starting scan…'; }
+
+        // Start background scan and advance immediately
+        fetch('/onboarding/skip-scan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ source_dirs: state.sourceDirs }),
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (btn) { btn.disabled = false; btn.textContent = 'Scan & Continue →'; }
+            if (!data.ok) {
+                alert(data.error || 'Failed to start scan');
+                return;
+            }
+            state.skipScanStarted = true;
+            // Advance to step 3 — scan runs in background via floating widget
+            goToStep(3);
+        })
+        .catch(function (e) {
+            if (btn) { btn.disabled = false; btn.textContent = 'Scan & Continue →'; }
+            // Non-fatal — still advance
+            state.skipScanStarted = true;
+            goToStep(3);
+        });
+    };
+
+    /* ── Skip — no local media ───────────────────────────────── */
+    window.skipMediaSetup = function () {
+        state.restructureStatus = 'skip';
+        goToStep(3);
+    };
+
+    /* (Skip-scan review is on its own page at /library/scan/results) */
 
     /* ── File browsers ──────────────────────────────────────── */
     var srcClickTimers = {}; // path → timer id
@@ -1650,8 +1845,9 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
             return;
         }
         if (!state.outputDir) {
-            alert('Please select an output directory.');
-            return;
+            // Fall back to the directory the user is currently browsing
+            state.outputDir = state.outBrowsePath;
+            el('out-selected-path').textContent = state.outBrowsePath;
         }
 
         // Capture template values before navigating away from step 2
@@ -1686,38 +1882,24 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
                 return;
             }
 
+            var groups = data.total_groups || 0;
+            var files = data.file_count || 0;
             var conflicts = data.conflicts || [];
             if (conflicts.length > 0) {
-                // Surface conflict info but proceed automatically with no resolutions (skip)
-                showRestructureBanner('conflicts', conflicts.length + ' conflict' + (conflicts.length !== 1 ? 's' : '') + ' detected');
-                // Store conflicts in state so step 2 can show them if user goes back
                 state.pendingConflicts = conflicts;
                 buildConflictTable(conflicts);
                 showEl('conflict-section');
             }
 
-            // Chain into execute automatically
-            state.restructureStatus = 'running';
-            showRestructureBanner('running');
-            return fetch('/onboarding/restructure/execute', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ resolutions: [] }),
-            });
-        })
-        .then(function (r) {
-            if (!r) return; // error case already handled above
-            return r.json();
-        })
-        .then(function (data) {
-            if (!data) return;
-            if (data.error) {
-                state.restructureStatus = 'error';
-                showRestructureBanner('error', data.error);
-                return;
-            }
-            // Execute started as background task — poll for real completion
-            startExecPoll();
+            // Analysis complete — show banner with link to review/approve.
+            // Do NOT auto-chain into execute; the user reviews via the
+            // restructure preview page (a notification was created).
+            state.restructureStatus = 'analyzed';
+            showRestructureBanner('done',
+                groups + ' show' + (groups !== 1 ? 's' : '') + ', ' +
+                files + ' file' + (files !== 1 ? 's' : '') +
+                ' ready to organize. Use the notification above or ' +
+                '<a href="/restructure/preview">review the plan</a> before continuing.');
         })
         .catch(function (e) {
             state.restructureStatus = 'error';
@@ -1851,6 +2033,15 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
 
     window.skipRestructure = function () {
         state.restructureStatus = 'skip';
+        // If user selected source dirs before deciding to skip,
+        // persist them so the local library still gets indexed.
+        if (state.sourceDirs.length > 0) {
+            fetch('/onboarding/save-media-dirs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ source_dirs: state.sourceDirs }),
+            }).catch(function () { /* non-fatal */ });
+        }
         goToStep(3);
     };
 
@@ -1874,7 +2065,7 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
         } catch (_) { /* not a valid URL, let default paste happen */ }
     };
 
-    var TAB_ORDER = ['anilist', 'plex', 'jellyfin', 'crunchyroll'];
+    var TAB_ORDER = ['anilist', 'crunchyroll', 'jellyfin', 'plex', 'radarr', 'sonarr'];
     state.activeTab = 'anilist';
 
     window.switchTab = function (name, btn) {
@@ -1926,10 +2117,17 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
     };
 
     window.step3Back = function () {
-        if (state.restructureMode === 'skip' || !state.restructureMode) {
+        if (!state.restructureMode) {
             goToStep(1);
-        } else {
+        } else if (state.restructureMode === 'skip') {
             goToStep(2);
+            applySkipMode();
+        } else {
+            // Reset restructure state so the user can re-analyze
+            // with different settings (naming template, dirs, etc.)
+            state.restructureStatus = null;
+            goToStep(2);
+            applySkipMode();
         }
     };
 
@@ -2049,9 +2247,13 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
         }
         if (connected.sonarr) {
             restoreConnected('sonarr', 'Connected');
+            showEl('sonarr-advanced-section');
+            showEl('arr-download-settings');
         }
         if (connected.radarr) {
             restoreConnected('radarr', 'Connected');
+            showEl('radarr-advanced-section');
+            showEl('arr-download-settings');
         }
     })();
 
@@ -2120,10 +2322,26 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
             case 'sonarr':
                 settings['sonarr.url'] = el('sonarr-url').value.trim();
                 settings['sonarr.api_key'] = el('sonarr-api-key').value.trim();
+                settings['sonarr.anime_root_folder'] = el('sonarr-root-folder').value.trim();
+                settings['sonarr.path_prefix'] = el('sonarr-path-prefix').value.trim();
+                settings['sonarr.local_path_prefix'] = el('sonarr-local-prefix').value.trim();
+                // Include download automation settings
+                settings['downloads.arr_enabled'] = el('arr-enabled').checked ? 'true' : 'false';
+                settings['downloads.auto_search'] = el('arr-auto-search').checked ? 'true' : 'false';
+                settings['downloads.auto_statuses'] = el('arr-auto-statuses').value.trim();
+                settings['downloads.monitor_mode'] = el('arr-monitor-mode').value;
                 break;
             case 'radarr':
                 settings['radarr.url'] = el('radarr-url').value.trim();
                 settings['radarr.api_key'] = el('radarr-api-key').value.trim();
+                settings['radarr.anime_root_folder'] = el('radarr-root-folder').value.trim();
+                settings['radarr.path_prefix'] = el('radarr-path-prefix').value.trim();
+                settings['radarr.local_path_prefix'] = el('radarr-local-prefix').value.trim();
+                // Include download automation settings
+                settings['downloads.arr_enabled'] = el('arr-enabled').checked ? 'true' : 'false';
+                settings['downloads.auto_search'] = el('arr-auto-search').checked ? 'true' : 'false';
+                settings['downloads.auto_statuses'] = el('arr-auto-statuses').value.trim();
+                settings['downloads.monitor_mode'] = el('arr-monitor-mode').value;
                 break;
         }
         if (!Object.keys(settings).length) return Promise.resolve();
@@ -2188,6 +2406,15 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
                     saveJellyfinSettings(data.libraries);
                 }
                 break;
+            case 'sonarr':
+                showEl('sonarr-advanced-section');
+                // Show download settings if either *arr is connected
+                showEl('arr-download-settings');
+                break;
+            case 'radarr':
+                showEl('radarr-advanced-section');
+                showEl('arr-download-settings');
+                break;
         }
     }
 
@@ -2218,6 +2445,7 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
         var settings = {
             'plex.poll_interval': interval,
             'plex.sync_libraries': checked.join(','),
+            'plex.anime_library_keys': JSON.stringify(checked),
         };
         if (libraries) {
             settings['plex.libraries_json'] = JSON.stringify(libraries);
@@ -2247,7 +2475,10 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
             document.querySelectorAll('#jf-library-list input[type=checkbox]:checked')
         ).map(function (cb) { return cb.value; });
 
-        var settings = { 'jellyfin.sync_libraries': checked.join(',') };
+        var settings = {
+            'jellyfin.sync_libraries': checked.join(','),
+            'jellyfin.anime_library_ids': JSON.stringify(checked),
+        };
         if (librariesOverride) {
             settings['jellyfin.libraries_json'] = JSON.stringify(librariesOverride);
         }
@@ -2450,10 +2681,22 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
     /* ── Finish onboarding ──────────────────────────────────── */
     window.finishOnboarding = function () {
         setSpinner('done-btn', true);
-        fetch('/onboarding/status', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status: 'completed' }),
+
+        // Auto-commit skip-scan results if user hasn't reviewed them yet
+        var commitPromise = Promise.resolve();
+        if (state.skipScanStarted) {
+            commitPromise = fetch('/onboarding/skip-scan/commit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+            }).then(function (r) { return r.json(); }).catch(function () { return {}; });
+        }
+
+        commitPromise.then(function () {
+            return fetch('/onboarding/status', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: 'completed' }),
+            });
         })
         .then(function () {
             window.location.href = '/';
@@ -2472,12 +2715,21 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
         el('step-' + startStep).classList.add('active');
         state.currentStep = startStep;
 
+        // Restore skip-scan state from server (survives page reload)
+        state.skipScanStarted = {{ skip_scan_started | default(false) | tojson }};
+
         // Restore restructure mode guess from onboarding_status
         // (if returning to step 2, we don't know the previous mode; default to skip guard)
         if (startStep === 2) {
             state.restructureMode = 'quick'; // safe default so back-nav doesn't break
             initFileBrowsers();
         }
+
+        // If landing on step 4, load review data
+        if (startStep === 4) {
+            buildReview();
+            loadRestructureReport();
+                    }
 
         renderSourceTags();
     })();
