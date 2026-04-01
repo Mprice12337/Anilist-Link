@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -17,9 +16,12 @@ from src.Clients.JellyfinClient import JellyfinClient
 from src.Clients.PlexClient import PlexClient
 from src.Matching.TitleMatcher import TitleMatcher, get_primary_title
 from src.Scanner.JellyfinMetadataScanner import JellyfinMetadataScanner
+from src.Scanner.LibraryRestructurer import LibraryRestructurer, RestructureProgress
 from src.Scanner.LibraryScanner import LibraryScanner, LibraryScanProgress
+from src.Scanner.LocalDirectoryScanner import LocalDirectoryScanner
 from src.Scanner.MetadataScanner import MetadataScanner
 from src.Scanner.SeriesGroupBuilder import SeriesGroupBuilder
+from src.Web.App import spawn_background_task
 
 logger = logging.getLogger(__name__)
 
@@ -75,15 +77,6 @@ async def _run_library_scan(
 # Page endpoints
 # ------------------------------------------------------------------
 
-
-@router.get("/library")
-async def library_index(request: Request) -> RedirectResponse:
-    """Redirect to the single library, or to settings if none exists."""
-    db = request.app.state.db
-    libraries = await db.get_all_libraries()
-    if libraries:
-        return RedirectResponse(url=f"/library/{libraries[0]['id']}", status_code=303)
-    return RedirectResponse(url="/settings?setup=library", status_code=303)
 
 
 @router.get("/library/{library_id}", response_class=HTMLResponse)
@@ -201,8 +194,9 @@ async def library_scan(request: Request, library_id: int) -> RedirectResponse:
     progress_map = _get_scan_progress(request.app.state)
     progress_map[library_id] = LibraryScanProgress()
 
-    asyncio.create_task(
-        _run_library_scan(request.app.state, library_id, path_list, force_rescan)
+    spawn_background_task(
+        request.app.state,
+        _run_library_scan(request.app.state, library_id, path_list, force_rescan),
     )
 
     return RedirectResponse(url=f"/library/{library_id}/scan/progress", status_code=303)
@@ -488,7 +482,7 @@ async def _refresh_plex_media(db: Any, config: Any) -> None:
         # Trigger refresh on each library, skipping any that fail
         for lib in show_libs:
             try:
-                await plex_client.refresh_library_and_wait(lib.key, timeout=120.0)
+                await plex_client.refresh_library_and_wait(lib.key)
             except Exception:
                 logger.warning(
                     "Could not refresh Plex library %s (%s), skipping",
@@ -762,3 +756,150 @@ async def library_jellyfin_apply_all(
     if errors:
         msg += f"+({errors}+errors)"
     return RedirectResponse(url=f"/library/{library_id}?message={msg}", status_code=303)
+
+
+@router.post("/api/library/reindex-all")
+async def library_reindex_all(request: Request) -> JSONResponse:
+    """Re-index all local libraries using the restructurer's analyze pipeline."""
+    db = request.app.state.db
+    anilist_client = request.app.state.anilist_client
+
+    libraries = await db.get_all_libraries()
+    if not libraries:
+        return JSONResponse(
+            {"ok": True, "seeded": 0, "message": "No libraries configured"}
+        )
+
+    title_matcher = TitleMatcher(similarity_threshold=0.75)
+    group_builder = SeriesGroupBuilder(db, anilist_client)
+    restructurer = LibraryRestructurer(db=db, group_builder=group_builder)
+    dir_scanner = LocalDirectoryScanner(
+        db=db, anilist_client=anilist_client, title_matcher=title_matcher
+    )
+
+    total_seeded = 0
+    total_groups = 0
+    try:
+        for library in libraries:
+            raw = library.get("paths") or "[]"
+            try:
+                library_paths: list[str] = json.loads(raw)
+            except Exception:
+                continue
+            if not library_paths:
+                continue
+
+            all_shows = []
+            scan_progress = RestructureProgress(status="running")
+            for path in library_paths:
+                shows = await dir_scanner.scan_directory(path, scan_progress)
+                all_shows.extend(shows)
+
+            if not all_shows:
+                continue
+
+            progress = RestructureProgress(status="running")
+            plan = await restructurer.analyze(
+                all_shows, progress, level="full_restructure"
+            )
+
+            # Clear stale rows before re-seeding
+            await db.execute(
+                "DELETE FROM library_items WHERE library_id = ?", (library["id"],)
+            )
+
+            seeded = await restructurer.seed_library_items(
+                plan, library["id"], from_source=True
+            )
+            total_seeded += seeded
+            total_groups += plan.total_groups
+
+        return JSONResponse(
+            {
+                "ok": True,
+                "seeded": total_seeded,
+                "groups": total_groups,
+                "message": (
+                    f"Re-indexed {total_seeded} items" f" across {total_groups} groups"
+                ),
+            }
+        )
+    except Exception as exc:
+        logger.exception("Library reindex-all failed")
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@router.post("/api/library/{library_id}/reindex")
+async def library_reindex(request: Request, library_id: int) -> JSONResponse:
+    """Re-index a local library using the restructurer's analyze pipeline.
+
+    Runs LocalDirectoryScanner + LibraryRestructurer.analyze() in read-only
+    mode, then seeds library_items with series-group-aware per-season rows.
+    Safe to run against an existing library — all upserts are non-destructive.
+    """
+    db = request.app.state.db
+    anilist_client = request.app.state.anilist_client
+
+    library = await db.get_library(library_id)
+    if not library:
+        return JSONResponse(
+            {"ok": False, "error": "Library not found"}, status_code=404
+        )
+
+    raw = library.get("paths") or "[]"
+    try:
+        library_paths: list[str] = json.loads(raw)
+    except Exception:
+        return JSONResponse(
+            {"ok": False, "error": "Invalid library paths"}, status_code=400
+        )
+
+    if not library_paths:
+        return JSONResponse(
+            {"ok": False, "error": "Library has no paths configured"}, status_code=400
+        )
+
+    title_matcher = TitleMatcher(similarity_threshold=0.75)
+    group_builder = SeriesGroupBuilder(db, anilist_client)
+    restructurer = LibraryRestructurer(db=db, group_builder=group_builder)
+    dir_scanner = LocalDirectoryScanner(
+        db=db, anilist_client=anilist_client, title_matcher=title_matcher
+    )
+
+    try:
+        all_shows = []
+        scan_progress = RestructureProgress(status="running")
+        for path in library_paths:
+            shows = await dir_scanner.scan_directory(path, scan_progress)
+            all_shows.extend(shows)
+
+        if not all_shows:
+            return JSONResponse(
+                {"ok": True, "seeded": 0, "message": "No shows found in library paths"}
+            )
+
+        progress = RestructureProgress(status="running")
+        plan = await restructurer.analyze(all_shows, progress, level="full_restructure")
+
+        # Clear stale rows before re-seeding so removed/renamed folders don't persist
+        await db.execute(
+            "DELETE FROM library_items WHERE library_id = ?", (library_id,)
+        )
+
+        seeded = await restructurer.seed_library_items(
+            plan, library_id, from_source=True
+        )
+
+        return JSONResponse(
+            {
+                "ok": True,
+                "seeded": seeded,
+                "groups": plan.total_groups,
+                "message": (
+                    f"Re-indexed {seeded} items" f" across {plan.total_groups} groups"
+                ),
+            }
+        )
+    except Exception as exc:
+        logger.exception("Library reindex failed for library %d", library_id)
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)

@@ -16,35 +16,109 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["unified-library"])
 
 
+def _make_local_entry(
+    item: dict[str, Any],
+    lib: dict[str, Any],
+    anilist_id: int | None = None,
+    title: str = "",
+    cover_image: str | None = None,
+) -> dict[str, Any]:
+    """Build a unified-library local entry dict from a library_items row.
+
+    When *anilist_id* differs from the item's own anilist_id (virtual entry
+    for a related season), cover_url uses the explicitly supplied *cover_image*
+    (typically from anilist_cache via series_group_entries JOIN).
+    """
+    aid = anilist_id if anilist_id is not None else item.get("anilist_id")
+    own = aid == item.get("anilist_id")
+    cover = (
+        (item.get("display_cover") or item.get("cover_image") or None)
+        if own
+        else (cover_image or None)
+    )
+    return {
+        "source": "local",
+        "sources": ["local"],
+        "source_id": str(item.get("id", "")),
+        "folder_name": item.get("folder_name", ""),
+        "folder_path": item.get("folder_path", ""),
+        "title": title or item.get("anilist_title") or item.get("folder_name", ""),
+        "cover_url": cover,
+        "anilist_id": aid,
+        "title_romaji": item.get("title_romaji") or "",
+        "title_english": item.get("title_english") or "",
+        "match_confidence": item.get("match_confidence"),
+        "match_method": item.get("match_method") or "",
+        "episodes": item.get("episodes"),
+        "anilist_status": item.get("anilist_status") or "",
+        "year": item.get("anilist_year") or item.get("year") or None,
+        "library_name": lib.get("name", ""),
+        "virtual": False,
+    }
+
+
 async def _get_local_items(db: Any) -> list[dict[str, Any]]:
-    """Return all local library items across all libraries."""
+    """Return all local library items across all libraries.
+
+    Each library_items row is emitted as one local entry.  Multi-season shows
+    that went through Structure B detection already have a separate DB row per
+    season subdir (each with the correct per-season anilist_id), so no
+    expansion is needed here.  _aggregate_by_anilist_id handles deduplication
+    of any rows that share an anilist_id (e.g. a Specials folder that fell
+    back to the series S1 id).
+
+    When an item has a series_group_id, virtual entries are emitted for every
+    entry in that series group so that Plex/Jellyfin items matched to
+    individual group members (e.g. Evangelion Rebuild movies) can merge with
+    the local presence via _aggregate_by_anilist_id.
+    """
     libraries = await db.get_all_libraries()
     result: list[dict[str, Any]] = []
+
+    # Pre-load series group entries referenced by library items to avoid N+1
+    _sg_cache: dict[int, list[dict[str, Any]]] = {}
+
     for lib in libraries:
         items = await db.get_library_items_with_cache(lib["id"])
         for item in items:
-            result.append(
-                {
-                    "source": "local",
-                    "sources": ["local"],
-                    "source_id": str(item.get("id", "")),
-                    "folder_name": item.get("folder_name", ""),
-                    "folder_path": item.get("folder_path", ""),
-                    "title": (item.get("anilist_title") or item.get("folder_name", "")),
-                    "cover_url": (
-                        item.get("display_cover") or item.get("cover_image") or None
-                    ),
-                    "anilist_id": item.get("anilist_id"),
-                    "title_romaji": item.get("title_romaji") or "",
-                    "title_english": item.get("title_english") or "",
-                    "match_confidence": item.get("match_confidence"),
-                    "match_method": item.get("match_method") or "",
-                    "episodes": item.get("episodes"),
-                    "anilist_status": item.get("anilist_status") or "",
-                    "year": item.get("anilist_year") or item.get("year") or None,
-                    "library_name": lib.get("name", ""),
-                }
-            )
+            result.append(_make_local_entry(item, lib))
+
+            # Expand series group: emit a virtual local entry per group member
+            # whose anilist_id differs from the item's own id.
+            sg_id = item.get("series_group_id")
+            if not sg_id:
+                continue
+            if sg_id not in _sg_cache:
+                _sg_cache[sg_id] = await db.fetch_all(
+                    "SELECT sge.anilist_id, sge.display_title,"
+                    "       sge.format, sge.episodes, sge.start_date,"
+                    "       ac.cover_image, ac.title_romaji,"
+                    "       ac.title_english, ac.year AS anilist_year"
+                    "  FROM series_group_entries sge"
+                    "  LEFT JOIN anilist_cache ac"
+                    "    ON ac.anilist_id = sge.anilist_id"
+                    "   AND ac.expires_at > datetime('now')"
+                    " WHERE sge.group_id = ?",
+                    (sg_id,),
+                )
+            own_aid = item.get("anilist_id")
+            for sge in _sg_cache[sg_id]:
+                if sge["anilist_id"] == own_aid:
+                    continue  # already emitted above
+                virtual_entry = _make_local_entry(
+                    item,
+                    lib,
+                    anilist_id=sge["anilist_id"],
+                    title=sge.get("display_title") or "",
+                    cover_image=sge.get("cover_image") or None,
+                )
+                virtual_entry["virtual"] = True
+                # Override romaji/english from anilist_cache so the
+                # virtual entry displays its own title, not the parent's.
+                virtual_entry["title_romaji"] = sge.get("title_romaji") or ""
+                virtual_entry["title_english"] = sge.get("title_english") or ""
+                virtual_entry["year"] = sge.get("anilist_year") or None
+                result.append(virtual_entry)
     return result
 
 
@@ -135,6 +209,9 @@ def _aggregate_by_anilist_id(
                 for s in item["sources"]:
                     if s not in existing["sources"]:
                         existing["sources"].append(s)
+                # If a non-virtual item merges in, result is non-virtual
+                if not item.get("virtual", False):
+                    existing["virtual"] = False
                 # Prefer AniList cover; keep first non-null cover
                 if not existing["cover_url"] and item["cover_url"]:
                     existing["cover_url"] = item["cover_url"]
@@ -195,11 +272,19 @@ async def unified_library(
     except Exception:
         logger.exception("Error loading unified library items")
 
-    # Aggregate multi-source items when showing all
-    if source == "all":
-        items = _aggregate_by_anilist_id(raw_items)
-    else:
-        items = raw_items
+    # Always deduplicate — source-filtered views can still have multiple
+    # virtual entries sharing the same anilist_id (e.g. from series-group
+    # expansion), and _aggregate_by_anilist_id is safe to run on any subset.
+    items = _aggregate_by_anilist_id(raw_items)
+
+    # Remove phantom virtual entries that didn't merge with any non-local
+    # source.  These are series-group expansions for anime the user doesn't
+    # actually have on disk — they only exist to enable cross-source merging.
+    items = [
+        i
+        for i in items
+        if not i.get("virtual") or set(i.get("sources", [])) != {"local"}
+    ]
 
     matched_count = sum(1 for i in items if i.get("anilist_id"))
     title_display = await db.get_setting("app.title_display") or "romaji"

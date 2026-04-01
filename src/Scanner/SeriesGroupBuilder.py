@@ -52,6 +52,10 @@ class SeriesGroupBuilder:
         self._db = db
         self._anilist = anilist_client
         self._max_age_hours = max_age_hours
+        # In-memory session cache: anilist_id → (group_id, entries)
+        # Prevents repeated DB + API calls for IDs we already resolved
+        # during this builder instance's lifetime.
+        self._session_cache: dict[int, tuple[int, list[dict[str, Any]]]] = {}
 
     async def get_or_build_group(
         self, anilist_id: int
@@ -61,6 +65,10 @@ class SeriesGroupBuilder:
         If the group is already cached and fresh, returns from the database.
         Otherwise traverses the relation graph, persists, and returns.
         """
+        # Fast path: in-memory session cache (avoids DB + API entirely)
+        if anilist_id in self._session_cache:
+            return self._session_cache[anilist_id]
+
         # Check if this AniList ID already belongs to a fresh cached group
         existing = await self._db.get_series_group_by_anilist_id(anilist_id)
         if existing:
@@ -72,7 +80,11 @@ class SeriesGroupBuilder:
                     existing["display_title"],
                     len(entries),
                 )
-                return existing["id"], entries
+                result = (existing["id"], entries)
+                # Cache all IDs in this group so siblings hit the fast path
+                for e in entries:
+                    self._session_cache[e["anilist_id"]] = result
+                return result
 
         # Traverse the relation graph
         collected = await self._traverse_relations(anilist_id)
@@ -124,7 +136,34 @@ class SeriesGroupBuilder:
             len(entries),
             root_anilist_id,
         )
-        return group_id, entries
+        result = (group_id, entries)
+        # Cache all IDs so sibling entries hit the fast path
+        for e in entries:
+            self._session_cache[e["anilist_id"]] = result
+        return result
+
+    async def _cache_entry_metadata(self, entry: dict[str, Any]) -> None:
+        """Persist an entry's metadata in anilist_cache (cover, desc, etc.)."""
+        title = entry.get("title") or {}
+        cover = (entry.get("coverImage") or {}).get("large", "")
+        year = entry.get("seasonYear") or (
+            (entry.get("startDate") or {}).get("year") or 0
+        )
+        genres = entry.get("genres") or []
+        import json
+
+        await self._db.set_cached_metadata(
+            anilist_id=entry["id"],
+            title_romaji=title.get("romaji") or "",
+            title_english=title.get("english") or "",
+            title_native=title.get("native") or "",
+            episodes=entry.get("episodes"),
+            cover_image=cover,
+            description=entry.get("description") or "",
+            genres=json.dumps(genres),
+            status=entry.get("status") or "",
+            year=year,
+        )
 
     async def _traverse_relations(self, start_id: int) -> list[dict[str, Any]]:
         """BFS walk of SEQUEL/PREQUEL edges, collecting all ANIME entries."""
@@ -144,6 +183,8 @@ class SeriesGroupBuilder:
                 continue
 
             collected.append(root_data)
+            # Cache metadata so cover images etc. are available later
+            await self._cache_entry_metadata(root_data)
 
             for edge in edges:
                 rel_type = edge.get("relationType", "")

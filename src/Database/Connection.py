@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -294,15 +297,15 @@ class DatabaseManager:
             """,
             (
                 anilist_id,
-                title_romaji,
-                title_english,
-                title_native,
+                title_romaji or "",
+                title_english or "",
+                title_native or "",
                 episodes,
-                cover_image,
-                description,
-                genres,
-                status,
-                year,
+                cover_image or "",
+                description or "",
+                genres or "[]",
+                status or "",
+                year or 0,
             ),
         )
 
@@ -311,6 +314,12 @@ class DatabaseManager:
             "DELETE FROM anilist_cache WHERE expires_at <= datetime('now')"
         )
         return cursor.rowcount
+
+    async def delete_cached_metadata(self, anilist_id: int) -> None:
+        """Remove a single AniList cache entry so it is re-fetched on next use."""
+        await self.execute(
+            "DELETE FROM anilist_cache WHERE anilist_id=?", (anilist_id,)
+        )
 
     # ------------------------------------------------------------------
     # Manual Overrides
@@ -409,6 +418,103 @@ class DatabaseManager:
             r["key"]: {"value": r["value"], "is_secret": bool(r["is_secret"])}
             for r in rows
         }
+
+    # ------------------------------------------------------------------
+    # Notifications (persisted across page loads)
+    # ------------------------------------------------------------------
+
+    async def get_notifications(self) -> list[dict[str, Any]]:
+        """Return all active (non-dismissed) notifications."""
+        raw = await self.get_setting("notifications")
+        if not raw:
+            return []
+        try:
+            items = json.loads(raw)
+            return [n for n in items if not n.get("dismissed")]
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    async def add_notification(
+        self,
+        *,
+        notification_type: str,
+        message: str,
+        action_url: str = "",
+        action_label: str = "",
+    ) -> str:
+        """Add a persistent notification. Returns its id."""
+        items = []
+        raw = await self.get_setting("notifications")
+        if raw:
+            try:
+                items = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                items = []
+
+        nid = uuid.uuid4().hex[:12]
+        items.append(
+            {
+                "id": nid,
+                "type": notification_type,
+                "message": message,
+                "action_url": action_url,
+                "action_label": action_label,
+                "created_at": time.time(),
+                "dismissed": False,
+            }
+        )
+        await self.set_setting("notifications", json.dumps(items))
+        return nid
+
+    async def dismiss_notification(self, notification_id: str) -> bool:
+        """Mark a notification as dismissed. Returns True if found."""
+        raw = await self.get_setting("notifications")
+        if not raw:
+            return False
+        try:
+            items = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return False
+
+        found = False
+        for n in items:
+            if n.get("id") == notification_id:
+                n["dismissed"] = True
+                found = True
+        if found:
+            await self.set_setting("notifications", json.dumps(items))
+        return found
+
+    async def dismiss_notifications_by_url(self, action_url: str) -> int:
+        """Dismiss all notifications whose action_url matches. Returns count."""
+        raw = await self.get_setting("notifications")
+        if not raw:
+            return 0
+        try:
+            items = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return 0
+
+        count = 0
+        for n in items:
+            if not n.get("dismissed") and n.get("action_url") == action_url:
+                n["dismissed"] = True
+                count += 1
+        if count:
+            await self.set_setting("notifications", json.dumps(items))
+        return count
+
+    async def clear_dismissed_notifications(self) -> None:
+        """Remove all dismissed notifications from storage."""
+        raw = await self.get_setting("notifications")
+        if not raw:
+            return
+        try:
+            items = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return
+        active = [n for n in items if not n.get("dismissed")]
+        await self.set_setting("notifications", json.dumps(active))
 
     # ------------------------------------------------------------------
     # Series Groups
@@ -845,6 +951,69 @@ class DatabaseManager:
         return await self.fetch_one(
             "SELECT * FROM library_items WHERE id=?", (item_id,)
         )
+
+    async def find_anilist_match_by_folder(
+        self, folder_name: str, exclude_source: str = ""
+    ) -> dict[str, Any] | None:
+        """Find an existing AniList match for a folder name across all sources.
+
+        Checks (in order):
+        1. library_items — populated by restructure/local scans
+        2. plex_media JOIN media_mappings (skipped when exclude_source='plex')
+        3. jellyfin_media JOIN media_mappings (skipped when exclude_source='jellyfin')
+
+        Returns the first match with anilist_id, anilist_title, match_confidence,
+        match_method, and series_group_id — or None.
+        """
+        if not folder_name:
+            return None
+
+        # 1. library_items (local library, populated by restructure seeding)
+        row = await self.fetch_one(
+            """SELECT anilist_id, anilist_title, match_confidence,
+                      match_method, series_group_id
+               FROM library_items
+               WHERE folder_name = ? AND anilist_id IS NOT NULL AND anilist_id > 0
+               ORDER BY match_confidence DESC
+               LIMIT 1""",
+            (folder_name,),
+        )
+        if row:
+            return dict(row)
+
+        # 2. Plex cross-reference
+        if exclude_source != "plex":
+            row = await self.fetch_one(
+                """SELECT mm.anilist_id, mm.anilist_title, mm.match_confidence,
+                          mm.match_method, mm.series_group_id
+                   FROM plex_media pm
+                   JOIN media_mappings mm
+                       ON mm.source = 'plex' AND mm.source_id = pm.rating_key
+                   WHERE pm.folder_name = ? AND mm.anilist_id > 0
+                   ORDER BY mm.match_confidence DESC
+                   LIMIT 1""",
+                (folder_name,),
+            )
+            if row:
+                return dict(row)
+
+        # 3. Jellyfin cross-reference
+        if exclude_source != "jellyfin":
+            row = await self.fetch_one(
+                """SELECT mm.anilist_id, mm.anilist_title, mm.match_confidence,
+                          mm.match_method, mm.series_group_id
+                   FROM jellyfin_media jm
+                   JOIN media_mappings mm
+                       ON mm.source = 'jellyfin' AND mm.source_id = jm.item_id
+                   WHERE jm.folder_name = ? AND mm.anilist_id > 0
+                   ORDER BY mm.match_confidence DESC
+                   LIMIT 1""",
+                (folder_name,),
+            )
+            if row:
+                return dict(row)
+
+        return None
 
     # ------------------------------------------------------------------
     # Plex Media (continued)

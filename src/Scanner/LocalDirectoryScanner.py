@@ -195,10 +195,29 @@ class LocalDirectoryScanner:
             year = matched_entry.get("seasonYear") or (
                 (matched_entry.get("startDate") or {}).get("year") or 0
             )
-            romaji = title_obj.get("romaji", "")
-            english = title_obj.get("english", "")
+            romaji = title_obj.get("romaji") or ""
+            english = title_obj.get("english") or ""
             anilist_format = matched_entry.get("format", "") or ""
             anilist_episodes = matched_entry.get("episodes")
+
+            # Cache AniList metadata (cover, description, etc.) so that
+            # library seeding can populate cover images without an extra
+            # API call or expensive series-group traversal.
+            cover = (matched_entry.get("coverImage") or {}).get("large", "")
+            import json as _json
+
+            await self._db.set_cached_metadata(
+                anilist_id=anilist_id,
+                title_romaji=romaji,
+                title_english=english,
+                title_native=title_obj.get("native", "") or "",
+                episodes=anilist_episodes,
+                cover_image=cover,
+                description=matched_entry.get("description", "") or "",
+                genres=_json.dumps(matched_entry.get("genres") or []),
+                status=matched_entry.get("status", "") or "",
+                year=year,
+            )
 
             # Persist mapping for future runs
             await self._db.upsert_media_mapping(
@@ -226,5 +245,96 @@ class LocalDirectoryScanner:
                     anilist_episodes=anilist_episodes,
                 )
             )
+
+        # --- Retry pass for items that failed due to transient API errors ---
+        unmatched_indices = [i for i, si in enumerate(results) if not si.anilist_id]
+        if unmatched_indices:
+            logger.info(
+                "LocalDirectoryScanner: retrying %d unmatched items",
+                len(unmatched_indices),
+            )
+            for idx in unmatched_indices:
+                si = results[idx]
+                folder_name = si.title
+                folder_path = si.local_path
+                folder_year = extract_year_from_name(folder_name)
+                query = strip_bracket_tags(folder_name)
+                if not query.strip():
+                    query = folder_name
+
+                match_result = None
+                try:
+                    candidates = await self._anilist.search_anime(
+                        query, page=1, per_page=10
+                    )
+                    if candidates:
+                        match_result = self._matcher.find_best_match_with_season(
+                            folder_name,
+                            candidates,
+                            target_season=1,
+                            year_hint=folder_year,
+                            include_all_formats=True,
+                        )
+                except Exception:
+                    pass
+
+                if match_result is None:
+                    broad_query = clean_title_for_search(folder_name)
+                    if broad_query.strip() and broad_query != query:
+                        try:
+                            candidates = await self._anilist.search_anime(
+                                broad_query, page=1, per_page=10
+                            )
+                            if candidates:
+                                match_result = (
+                                    self._matcher.find_best_match_with_season(
+                                        folder_name,
+                                        candidates,
+                                        target_season=1,
+                                        year_hint=folder_year,
+                                        include_all_formats=True,
+                                    )
+                                )
+                        except Exception:
+                            pass
+
+                if match_result is None:
+                    continue
+
+                matched_entry, score, _season = match_result
+                anilist_id = matched_entry.get("id", 0)
+                anilist_title = get_primary_title(matched_entry)
+                logger.info(
+                    "LocalDirectoryScanner: retry matched %r -> %r (id=%s)",
+                    folder_name,
+                    anilist_title,
+                    anilist_id,
+                )
+                title_obj = matched_entry.get("title") or {}
+                year = matched_entry.get("seasonYear") or (
+                    (matched_entry.get("startDate") or {}).get("year") or 0
+                )
+                await self._db.upsert_media_mapping(
+                    source="local",
+                    source_id=folder_path,
+                    source_title=folder_name,
+                    anilist_id=anilist_id,
+                    anilist_title=anilist_title,
+                    match_confidence=score,
+                    match_method="fuzzy_local_scan",
+                    media_type="ANIME",
+                )
+                results[idx] = ShowInput(
+                    title=folder_name,
+                    local_path=folder_path,
+                    source_id=folder_path,
+                    anilist_id=anilist_id,
+                    anilist_title=anilist_title,
+                    year=year,
+                    anilist_title_romaji=title_obj.get("romaji", ""),
+                    anilist_title_english=title_obj.get("english", ""),
+                    anilist_format=matched_entry.get("format", "") or "",
+                    anilist_episodes=matched_entry.get("episodes"),
+                )
 
         return results
