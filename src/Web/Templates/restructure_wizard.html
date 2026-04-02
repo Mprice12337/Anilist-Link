@@ -3,7 +3,6 @@
 
 {% block content %}
 <style>
-/* Restructure wizard layout */
 .rw-browser-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -37,11 +36,11 @@
             <div class="section-label">Source Directories</div>
             <div class="file-browser" id="src-browser">
                 <div class="file-browser-toolbar">
-                    <button class="btn btn-secondary btn-sm" onclick="srcBrowseParent()">↑ Parent</button>
+                    <button class="btn btn-secondary btn-sm" onclick="window._fb.srcBrowseParent()">&#x2191; Parent</button>
                     <div class="file-browser-path" id="src-current-path">/media</div>
                 </div>
                 <div class="file-browser-list" id="src-browser-list">
-                    <div class="file-browser-empty">Loading…</div>
+                    <div class="file-browser-empty">Loading&hellip;</div>
                 </div>
             </div>
             <div class="tag-list" id="source-tags">
@@ -57,20 +56,20 @@
             <div class="section-label">Output Directory</div>
             <div class="file-browser" id="out-browser">
                 <div class="file-browser-toolbar">
-                    <button class="btn btn-secondary btn-sm" onclick="outBrowseParent()">↑ Parent</button>
+                    <button class="btn btn-secondary btn-sm" onclick="window._fb.outBrowseParent()">&#x2191; Parent</button>
                     <div class="file-browser-path" id="out-current-path">/media</div>
-                    <button class="btn btn-secondary btn-sm" onclick="outShowNewFolder()" title="Create new folder">+ New Folder</button>
+                    <button class="btn btn-secondary btn-sm" onclick="window._fb.outShowNewFolder()" title="Create new folder">+ New Folder</button>
                 </div>
                 <div id="out-new-folder-row" style="display:none;align-items:center;gap:0.5rem;padding:0.4rem 0.75rem;border-bottom:1px solid var(--border);background:var(--bg-card)">
-                    <span style="font-size:0.85rem">📁</span>
-                    <input type="text" id="out-new-folder-input" placeholder="New folder name…"
+                    <span style="font-size:0.85rem">&#x1F4C1;</span>
+                    <input type="text" id="out-new-folder-input" placeholder="New folder name&hellip;"
                            style="flex:1;background:var(--bg);color:var(--text);border:1px solid var(--accent);border-radius:var(--radius);padding:0.3rem 0.5rem;font-size:0.85rem"
-                           onkeydown="outNewFolderKey(event)">
-                    <button class="btn btn-primary btn-sm" onclick="outCreateFolder()">Create</button>
-                    <button class="btn btn-secondary btn-sm" onclick="outHideNewFolder()">Cancel</button>
+                           onkeydown="window._fb.outNewFolderKey(event)">
+                    <button class="btn btn-primary btn-sm" onclick="window._fb.outCreateFolder()">Create</button>
+                    <button class="btn btn-secondary btn-sm" onclick="window._fb.outHideNewFolder()">Cancel</button>
                 </div>
                 <div class="file-browser-list" id="out-browser-list">
-                    <div class="file-browser-empty">Loading…</div>
+                    <div class="file-browser-empty">Loading&hellip;</div>
                 </div>
             </div>
             <div class="selected-path-display">
@@ -107,8 +106,6 @@
     <!-- Naming Templates (always visible) -->
     <div style="margin-top: 1.5rem">
         <div class="section-label">Naming Templates</div>
-
-        <!-- Preset chips -->
         <div style="margin-bottom:1rem">
             <div class="text-muted" style="font-size:0.82rem;margin-bottom:0.4rem">Quick presets</div>
             <div style="display:flex;flex-wrap:wrap;gap:0.4rem" id="tpl-preset-chips">
@@ -123,45 +120,39 @@
         <div class="form-grid">
             <div class="form-group">
                 <label for="tpl-episode">Episode file template</label>
-                <input type="text" id="tpl-episode" name="tpl_episode"
-                       class="tpl-input"
+                <input type="text" id="tpl-episode" class="tpl-input"
                        value="{{ naming_values.get('naming.file_template', '') }}"
                        placeholder="{title} - S{season}E{episode}">
             </div>
             <div class="form-group">
                 <label for="tpl-folder">Show folder template</label>
-                <input type="text" id="tpl-folder" name="tpl_folder"
-                       class="tpl-input"
+                <input type="text" id="tpl-folder" class="tpl-input"
                        value="{{ naming_values.get('naming.folder_template', '') }}"
                        placeholder="{title} ({year})">
             </div>
             <div class="form-group">
                 <label for="tpl-season">Season folder template</label>
-                <input type="text" id="tpl-season" name="tpl_season"
-                       class="tpl-input"
+                <input type="text" id="tpl-season" class="tpl-input"
                        value="{{ naming_values.get('naming.season_folder_template', '') }}"
                        placeholder="Season {season}">
             </div>
             <div class="form-group">
                 <label for="tpl-movie">Movie file template</label>
-                <input type="text" id="tpl-movie" name="tpl_movie"
-                       class="tpl-input"
+                <input type="text" id="tpl-movie" class="tpl-input"
                        value="{{ naming_values.get('naming.movie_file_template', '') }}"
                        placeholder="{title} ({year})">
             </div>
             <div class="form-group">
                 <label for="tpl-illegal">Illegal character replacement</label>
-                <select id="tpl-illegal" name="tpl_illegal"
+                <select id="tpl-illegal"
                         style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:0.45rem 0.65rem;font-size:0.9rem">
-                    <option value="" {% if not naming_values.get('naming.illegal_char_replacement') %}selected{% endif %}>Remove — Re:Zero → ReZero</option>
-                    <option value="-" {% if naming_values.get('naming.illegal_char_replacement') == '-' %}selected{% endif %}>Hyphen — Re:Zero → Re-Zero</option>
-                    <option value=" " {% if naming_values.get('naming.illegal_char_replacement') == ' ' %}selected{% endif %}>Space — Re:Zero → Re Zero</option>
-                    <option value="_" {% if naming_values.get('naming.illegal_char_replacement') == '_' %}selected{% endif %}>Underscore — Re:Zero → Re_Zero</option>
+                    <option value="" {% if not naming_values.get('naming.illegal_char_replacement') %}selected{% endif %}>Remove &mdash; Re:Zero &rarr; ReZero</option>
+                    <option value="-" {% if naming_values.get('naming.illegal_char_replacement') == '-' %}selected{% endif %}>Hyphen &mdash; Re:Zero &rarr; Re-Zero</option>
+                    <option value=" " {% if naming_values.get('naming.illegal_char_replacement') == ' ' %}selected{% endif %}>Space &mdash; Re:Zero &rarr; Re Zero</option>
+                    <option value="_" {% if naming_values.get('naming.illegal_char_replacement') == '_' %}selected{% endif %}>Underscore &mdash; Re:Zero &rarr; Re_Zero</option>
                 </select>
             </div>
         </div>
-
-        <!-- Live preview -->
         <div style="margin-top:1rem;padding:0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius)">
             <div class="text-muted" style="font-size:0.8rem;margin-bottom:0.5rem">Preview</div>
             <div style="font-size:0.85rem">
@@ -171,24 +162,22 @@
                 <div><span class="text-muted">Movie:</span> <code id="tpl-preview-movie"></code></div>
             </div>
         </div>
-
-        <!-- Available tokens (collapsible) -->
         <details style="margin-top:0.75rem">
             <summary class="text-muted" style="font-size:0.85rem;cursor:pointer">Available tokens</summary>
             <div style="margin-top:0.5rem;font-size:0.8rem;columns:2;column-gap:2rem">
-                <div><code>{title}</code> — Display title</div>
-                <div><code>{title.romaji}</code> — Romaji title</div>
-                <div><code>{title.english}</code> — English title</div>
-                <div><code>{year}</code> — Year (e.g. 2013)</div>
-                <div><code>{season}</code> — Season number (zero-padded)</div>
-                <div><code>{episode}</code> — Episode number (zero-padded)</div>
-                <div><code>{episode.title}</code> — Episode title (future)</div>
-                <div><code>{quality}</code> — Full quality (e.g. 1080p BluRay x265)</div>
-                <div><code>{quality.resolution}</code> — Resolution only</div>
-                <div><code>{quality.source}</code> — Source only</div>
-                <div><code>{season.name}</code> — Season AniList title</div>
-                <div><code>{format}</code> — AniList format (e.g. MOVIE)</div>
-                <div><code>{format.short}</code> — Short format (e.g. Movie)</div>
+                <div><code>{title}</code> &mdash; Display title</div>
+                <div><code>{title.romaji}</code> &mdash; Romaji title</div>
+                <div><code>{title.english}</code> &mdash; English title</div>
+                <div><code>{year}</code> &mdash; Year (e.g. 2013)</div>
+                <div><code>{season}</code> &mdash; Season number (zero-padded)</div>
+                <div><code>{episode}</code> &mdash; Episode number (zero-padded)</div>
+                <div><code>{episode.title}</code> &mdash; Episode title (future)</div>
+                <div><code>{quality}</code> &mdash; Full quality (e.g. 1080p BluRay x265)</div>
+                <div><code>{quality.resolution}</code> &mdash; Resolution only</div>
+                <div><code>{quality.source}</code> &mdash; Source only</div>
+                <div><code>{season.name}</code> &mdash; Season AniList title</div>
+                <div><code>{format}</code> &mdash; AniList format (e.g. MOVIE)</div>
+                <div><code>{format.short}</code> &mdash; Short format (e.g. Movie)</div>
             </div>
         </details>
     </div>
@@ -211,327 +200,66 @@
     </div>
 </div>
 
+<script src="/static/file-browser.js"></script>
+<script src="/static/naming-templates.js"></script>
 <script>
 (function () {
     'use strict';
 
-    /* ── State ─────────────────────────────────────────────── */
-    var state = {
-        sourceDirs: [],
-        outputDir: null,
-        srcBrowsePath: '{{ initial_browse_path }}',
-        outBrowsePath: '{{ initial_browse_path }}',
-        operationLevel: 'folder_rename',
-    };
+    var operationLevel = 'folder_rename';
 
-    /* ── Helpers ───────────────────────────────────────────── */
-    function esc(str) {
-        return String(str)
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    }
-    function el(id) { return document.getElementById(id); }
+    // Init file browser
+    var fb = new FileBrowser({
+        srcListId: 'src-browser-list', srcPathId: 'src-current-path',
+        outListId: 'out-browser-list', outPathId: 'out-current-path',
+        sourceTagsId: 'source-tags', outSelectedId: 'out-selected-path',
+        newFolderRowId: 'out-new-folder-row', newFolderInputId: 'out-new-folder-input',
+        initialPath: '{{ initial_browse_path }}',
+    });
+    fb.init();
 
-    /* ── Operation Level ──────────────────────────────────── */
+    // Init naming templates
+    NamingTemplates.init();
+
+    // Operation level cards
     window.selectLevel = function (card, level) {
         document.querySelectorAll('.option-card').forEach(function (c) {
             c.classList.remove('selected');
-            var radio = c.querySelector('input[type="radio"]');
-            if (radio) radio.checked = false;
         });
         card.classList.add('selected');
-        var radio = card.querySelector('input[type="radio"]');
-        if (radio) radio.checked = true;
-        state.operationLevel = level;
+        operationLevel = level;
     };
 
-    /* ── File browsers ──────────────────────────────────────── */
-    var srcClickTimers = {};
-    var outClickTimers = {};
-
-    async function browsePath(path, listId, pathId, mode) {
-        var listEl = el(listId);
-        listEl.innerHTML = '<div class="file-browser-empty">Loading…</div>';
-        try {
-            var resp = await fetch('/api/fs/browse?path=' + encodeURIComponent(path));
-            if (!resp.ok) throw new Error('HTTP ' + resp.status);
-            var data = await resp.json();
-            el(pathId).textContent = data.current || path;
-
-            var dirs = (data.dirs || []);
-            if (dirs.length === 0) {
-                listEl.innerHTML = '<div class="file-browser-empty">No subdirectories here.</div>';
-                return;
-            }
-
-            listEl.innerHTML = dirs.map(function (d) {
-                var fullPath = d.path || (path.replace(/\/$/, '') + '/' + d.name);
-                if (mode === 'multi') {
-                    var isSel = state.sourceDirs.includes(fullPath);
-                    return '<div class="file-browser-item' + (isSel ? ' selected' : '') + '" data-path="' + esc(fullPath) + '">' +
-                        '<span class="dir-icon">' + (isSel ? '✓' : '📁') + '</span>' +
-                        '<span class="dir-name">' + esc(d.name) + '</span>' +
-                        '<span class="dir-hint">double-click to open</span>' +
-                        '</div>';
-                } else {
-                    var isSelOut = state.outputDir === fullPath;
-                    return '<div class="file-browser-item' + (isSelOut ? ' selected' : '') + '" data-path="' + esc(fullPath) + '">' +
-                        '<span class="dir-icon">' + (isSelOut ? '✓' : '📁') + '</span>' +
-                        '<span class="dir-name">' + esc(d.name) + '</span>' +
-                        '<span class="dir-hint">double-click to open</span>' +
-                        '</div>';
-                }
-            }).join('');
-
-            // Attach click / dblclick handlers
-            if (mode === 'single') {
-                listEl.querySelectorAll('.file-browser-item').forEach(function (row) {
-                    var rowPath = row.dataset.path;
-                    row.addEventListener('click', function () {
-                        if (outClickTimers[rowPath]) return;
-                        outClickTimers[rowPath] = setTimeout(function () {
-                            delete outClickTimers[rowPath];
-                            state.outputDir = rowPath;
-                            el('out-selected-path').textContent = rowPath;
-                            browsePath(state.outBrowsePath, 'out-browser-list', 'out-current-path', 'single');
-                        }, 220);
-                    });
-                    row.addEventListener('dblclick', function () {
-                        if (outClickTimers[rowPath]) {
-                            clearTimeout(outClickTimers[rowPath]);
-                            delete outClickTimers[rowPath];
-                        }
-                        if (state.outputDir === rowPath) {
-                            state.outputDir = null;
-                            el('out-selected-path').textContent = 'none';
-                        }
-                        outNavInto(rowPath);
-                    });
-                });
-            }
-            if (mode === 'multi') {
-                listEl.querySelectorAll('.file-browser-item').forEach(function (row) {
-                    var rowPath = row.dataset.path;
-                    row.addEventListener('click', function () {
-                        if (srcClickTimers[rowPath]) return;
-                        srcClickTimers[rowPath] = setTimeout(function () {
-                            delete srcClickTimers[rowPath];
-                            srcToggleSelect(rowPath);
-                        }, 220);
-                    });
-                    row.addEventListener('dblclick', function () {
-                        if (srcClickTimers[rowPath]) {
-                            clearTimeout(srcClickTimers[rowPath]);
-                            delete srcClickTimers[rowPath];
-                        }
-                        var idx = state.sourceDirs.indexOf(rowPath);
-                        if (idx !== -1) {
-                            state.sourceDirs.splice(idx, 1);
-                            renderSourceTags();
-                        }
-                        srcNavInto(rowPath);
-                    });
-                });
-            }
-        } catch (e) {
-            listEl.innerHTML = '<div class="file-browser-empty" style="color:var(--danger)">Error: ' + esc(e.message) + '</div>';
-        }
-    }
-
-    function srcToggleSelect(path) {
-        var idx = state.sourceDirs.indexOf(path);
-        if (idx === -1) {
-            state.sourceDirs.push(path);
-        } else {
-            state.sourceDirs.splice(idx, 1);
-        }
-        renderSourceTags();
-        browsePath(state.srcBrowsePath, 'src-browser-list', 'src-current-path', 'multi');
-    }
-
-    function renderSourceTags() {
-        var container = el('source-tags');
-        if (state.sourceDirs.length === 0) {
-            container.innerHTML = '<span class="text-muted" style="font-size:0.82rem">No sources added yet.</span>';
-            return;
-        }
-        container.innerHTML = state.sourceDirs.map(function (p, i) {
-            return '<span class="tag">' + esc(p) +
-                '<button class="tag-remove" onclick="removeSource(' + i + ')" title="Remove">\u00d7</button>' +
-                '</span>';
-        }).join('');
-    }
-
-    window.removeSource = function (i) {
-        state.sourceDirs.splice(i, 1);
-        renderSourceTags();
-        browsePath(state.srcBrowsePath, 'src-browser-list', 'src-current-path', 'multi');
-    };
-
-    // Source browser navigation
-    function srcNavInto(path) {
-        state.srcBrowsePath = path;
-        browsePath(path, 'src-browser-list', 'src-current-path', 'multi');
-    }
-    window.srcBrowseParent = function () {
-        var parent = state.srcBrowsePath.split('/').slice(0, -1).join('/') || '/';
-        state.srcBrowsePath = parent;
-        browsePath(parent, 'src-browser-list', 'src-current-path', 'multi');
-    };
-
-    // Output browser navigation
-    function outNavInto(path) {
-        state.outBrowsePath = path;
-        browsePath(path, 'out-browser-list', 'out-current-path', 'single');
-    }
-    window.outBrowseParent = function () {
-        var parent = state.outBrowsePath.split('/').slice(0, -1).join('/') || '/';
-        state.outBrowsePath = parent;
-        browsePath(parent, 'out-browser-list', 'out-current-path', 'single');
-    };
-
-    // New folder
-    window.outShowNewFolder = function () {
-        var row = el('out-new-folder-row');
-        row.style.display = 'flex';
-        var input = el('out-new-folder-input');
-        input.value = '';
-        input.focus();
-    };
-    window.outHideNewFolder = function () {
-        el('out-new-folder-row').style.display = 'none';
-        el('out-new-folder-input').value = '';
-    };
-    window.outNewFolderKey = function (e) {
-        if (e.key === 'Enter') window.outCreateFolder();
-        if (e.key === 'Escape') window.outHideNewFolder();
-    };
-    window.outCreateFolder = async function () {
-        var name = el('out-new-folder-input').value.trim();
-        if (!name) return;
-        var parent = state.outBrowsePath;
-        try {
-            var resp = await fetch('/api/fs/mkdir', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ parent: parent, name: name }),
-            });
-            var data = await resp.json();
-            if (!resp.ok || data.error) {
-                alert('Could not create folder: ' + (data.error || resp.status));
-                return;
-            }
-            outHideNewFolder();
-            var newPath = data.path;
-            state.outputDir = newPath;
-            el('out-selected-path').textContent = newPath;
-            outNavInto(newPath);
-        } catch (e) {
-            alert('Request failed: ' + e.message);
-        }
-    };
-
-    /* ── Naming template preview ──────────────────────────── */
-    var sampleTokens = {
-        'title': 'Attack on Titan',
-        'title.romaji': 'Shingeki no Kyojin',
-        'title.english': 'Attack on Titan',
-        'year': '2013',
-        'season': '01',
-        'episode': '05',
-        'episode.title': '',
-        'quality': '1080p BluRay x265',
-        'quality.resolution': '1080p',
-        'quality.source': 'BluRay',
-        'season.name': 'Shingeki no Kyojin Season 2',
-        'format': 'TV',
-        'format.short': 'TV'
-    };
-    var movieTokens = {
-        'title': 'Sen to Chihiro no Kamikakushi',
-        'title.romaji': 'Sen to Chihiro no Kamikakushi',
-        'title.english': 'Spirited Away',
-        'year': '2001',
-        'season': '01',
-        'episode': '',
-        'episode.title': '',
-        'quality': '1080p BluRay x265',
-        'quality.resolution': '1080p',
-        'quality.source': 'BluRay',
-        'season.name': '',
-        'format': 'MOVIE',
-        'format.short': 'Movie'
-    };
-
-    function renderTpl(template, tokens) {
-        var result = template.replace(/\{([a-z]+(?:\.[a-z]+)?)\}/g, function (m, key) {
-            return tokens[key] || '';
-        });
-        result = result.replace(/\[\s*\]/g, '').replace(/\(\s*\)/g, '');
-        result = result.replace(/(\s*-\s*){2,}/g, ' - ');
-        result = result.replace(/\.{2,}/g, '.');
-        result = result.replace(/ {2,}/g, ' ');
-        result = result.replace(/[\s.\-]+$/, '').replace(/^[\s.\-]+/, '');
-        return result.trim();
-    }
-
-    function updateTplPreview() {
-        var ep = el('tpl-episode');
-        var fo = el('tpl-folder');
-        var se = el('tpl-season');
-        var mo = el('tpl-movie');
-        if (!ep || !fo || !se) return;
-
-        var pFile = el('tpl-preview-file');
-        var pFolder = el('tpl-preview-folder');
-        var pSeason = el('tpl-preview-season');
-        var pMovie = el('tpl-preview-movie');
-        if (pFile) pFile.textContent = (renderTpl(ep.value, sampleTokens) || ep.placeholder) + '.mkv';
-        if (pFolder) pFolder.textContent = renderTpl(fo.value, sampleTokens) || fo.placeholder;
-        if (pSeason) pSeason.textContent = renderTpl(se.value, sampleTokens) || se.placeholder;
-        if (pMovie && mo) pMovie.textContent = (renderTpl(mo.value, movieTokens) || mo.placeholder) + '.mkv';
-    }
-
-    /* ── Naming presets ───────────────────────────────────── */
-    var PRESETS = {
-        standard:              { file: '{title} - S{season}E{episode}', folder: '{title}', season_folder: 'Season {season}', movie_file: '{title} [{year}]' },
-        with_quality:          { file: '{title} [{year}] - S{season}E{episode} [{quality}]', folder: '{title} [{year}]', season_folder: 'Season {season}', movie_file: '{title} [{year}] [{quality}]' },
-        english:               { file: '{title.english} ({year}) - S{season}E{episode} - {episode.title} [{quality}]', folder: '{title.english} ({year})', season_folder: 'Season {season}', movie_file: '{title.english} ({year}) [{quality}]' },
-        english_season_names:  { file: '{title.english} ({year}) - S{season}E{episode} - {episode.title} [{quality}]', folder: '{title.english} ({year})', season_folder: '{season.name} ({year})', movie_file: '{title.english} ({year}) [{quality}]' },
-        romaji:                { file: '{title.romaji} ({year}) - S{season}E{episode} - {episode.title} [{quality}]', folder: '{title.romaji} ({year})', season_folder: 'Season {season}', movie_file: '{title.romaji} ({year}) [{quality}]' },
-        romaji_season_names:   { file: '{title.romaji} ({year}) - S{season}E{episode} - {episode.title} [{quality}]', folder: '{title.romaji} ({year})', season_folder: '{season.name} ({year})', movie_file: '{title.romaji} ({year}) [{quality}]' },
-    };
-
-    /* ── Analyze ──────────────────────────────────────────── */
+    // Analyze
     window.runAnalyze = async function () {
-        if (state.sourceDirs.length === 0) {
+        if (fb.state.sourceDirs.length === 0) {
             alert('Please add at least one source directory.');
             return;
         }
-        if (!state.outputDir) {
-            state.outputDir = state.outBrowsePath;
-            el('out-selected-path').textContent = state.outBrowsePath;
+        if (!fb.state.outputDir) {
+            fb.state.outputDir = fb.state.outBrowsePath;
+            document.getElementById('out-selected-path').textContent = fb.state.outBrowsePath;
         }
 
-        var btn = el('analyze-btn');
-        var statusEl = el('analyze-status');
-        var errorEl = el('analyze-error');
+        var btn = document.getElementById('analyze-btn');
+        var statusEl = document.getElementById('analyze-status');
+        var errorEl = document.getElementById('analyze-error');
         btn.disabled = true;
-        btn.innerHTML = '<span class="spinner-inline"></span> Analyzing…';
-        statusEl.textContent = 'Scanning directories and matching to AniList…';
+        btn.innerHTML = '<span class="spinner-inline"></span> Analyzing\u2026';
+        statusEl.textContent = 'Scanning directories and matching to AniList\u2026';
         errorEl.classList.add('hidden');
 
         var payload = {
-            source_dirs: state.sourceDirs,
-            output_dir: state.outputDir,
-            level: state.operationLevel,
-            force_rescan: el('force-rescan').checked,
+            source_dirs: fb.state.sourceDirs,
+            output_dir: fb.state.outputDir,
+            level: operationLevel,
+            force_rescan: document.getElementById('force-rescan').checked,
             templates: {
-                episode: el('tpl-episode').value || null,
-                folder: el('tpl-folder').value || null,
-                season: el('tpl-season').value || null,
-                movie: el('tpl-movie').value || null,
-                illegal_char_replacement: el('tpl-illegal').value,
+                episode: document.getElementById('tpl-episode').value || null,
+                folder: document.getElementById('tpl-folder').value || null,
+                season: document.getElementById('tpl-season').value || null,
+                movie: document.getElementById('tpl-movie').value || null,
+                illegal_char_replacement: document.getElementById('tpl-illegal').value,
             },
         };
 
@@ -540,8 +268,6 @@
         {% endif %}
 
         try {
-            // Use the shared onboarding analyze endpoint so both flows
-            // run the exact same scan → match → analyze → conflict-detect code.
             var resp = await fetch('/onboarding/restructure/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -556,8 +282,6 @@
                 errorEl.classList.remove('hidden');
                 return;
             }
-            // Analysis complete — plan stored, notification created.
-            // Redirect to the restructure preview page for review.
             window.location.href = '/restructure/preview';
         } catch (e) {
             btn.disabled = false;
@@ -568,49 +292,19 @@
         }
     };
 
-    /* ── Init ─────────────────────────────────────────────── */
-    document.addEventListener('DOMContentLoaded', function () {
-        // Init file browsers
-        browsePath(state.srcBrowsePath, 'src-browser-list', 'src-current-path', 'multi');
-        browsePath(state.outBrowsePath, 'out-browser-list', 'out-current-path', 'single');
-
-        // Init naming preview
-        document.querySelectorAll('.tpl-input').forEach(function (inp) {
-            inp.addEventListener('input', updateTplPreview);
-        });
-        updateTplPreview();
-
-        // Preset chip handlers
-        document.querySelectorAll('.tpl-preset-chip').forEach(function (chip) {
-            chip.addEventListener('click', function () {
-                var key = chip.dataset.preset;
-                var p = PRESETS[key];
-                if (!p) return;
-                el('tpl-episode').value = p.file;
-                el('tpl-folder').value = p.folder;
-                el('tpl-season').value = p.season_folder;
-                el('tpl-movie').value = p.movie_file;
-                document.querySelectorAll('.tpl-preset-chip').forEach(function (c) { c.classList.remove('active'); });
-                chip.classList.add('active');
-                updateTplPreview();
-            });
-        });
-
-        {% if library_context and library_context.paths %}
-        // Pre-select library paths as sources
-        var libPaths = {{ library_context.paths | tojson }};
-        libPaths.forEach(function (p) {
-            if (state.sourceDirs.indexOf(p) === -1) {
-                state.sourceDirs.push(p);
-            }
-        });
-        renderSourceTags();
-        if (libPaths.length > 0) {
-            state.srcBrowsePath = libPaths[0];
-            browsePath(libPaths[0], 'src-browser-list', 'src-current-path', 'multi');
+    {% if library_context and library_context.paths %}
+    // Pre-select library paths as sources
+    var libPaths = {{ library_context.paths | tojson }};
+    libPaths.forEach(function (p) {
+        if (fb.state.sourceDirs.indexOf(p) === -1) {
+            fb.state.sourceDirs.push(p);
         }
-        {% endif %}
     });
+    fb.renderSourceTags();
+    if (libPaths.length > 0) {
+        fb.browseSrc(libPaths[0]);
+    }
+    {% endif %}
 }());
 </script>
 {% endblock %}

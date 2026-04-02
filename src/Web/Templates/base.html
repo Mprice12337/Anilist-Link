@@ -52,6 +52,12 @@
     </div>
 
     <script>
+    // Global HTML-escape utility used by multiple scripts
+    window.escHtml = function (s) {
+        return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+            .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    };
+
     (function () {
         var mini  = document.getElementById('pw-mini');
         var panel = document.getElementById('pw-panel');
@@ -88,17 +94,12 @@
         function renderTask(t) {
             return '<div class="pw-task">' +
                 '<div class="pw-task-head">' +
-                    '<span class="pw-task-type">' + esc(t.type) + '</span>' +
-                    '<span class="pw-task-label">' + esc(t.label) + '</span>' +
+                    '<span class="pw-task-type">' + escHtml(t.type) + '</span>' +
+                    '<span class="pw-task-label">' + escHtml(t.label) + '</span>' +
                 '</div>' +
                 '<div class="pw-bar"><div class="pw-bar-fill" style="width:' + t.percent + '%"></div></div>' +
-                '<div class="pw-task-detail">' + esc(t.detail) + ' — ' + esc(t.status) + '</div>' +
+                '<div class="pw-task-detail">' + escHtml(t.detail) + ' — ' + escHtml(t.status) + '</div>' +
             '</div>';
-        }
-
-        function esc(s) {
-            return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
-                .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
         }
 
         function poll() {
@@ -168,11 +169,6 @@
             try {
                 return JSON.parse(sessionStorage.getItem(HIDE_KEY) || '[]');
             } catch (e) { return []; }
-        }
-
-        function escHtml(str) {
-            return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;')
-                .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
         }
 
         function renderNotification(n) {

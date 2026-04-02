@@ -1038,78 +1038,10 @@
                    font-size:1.1rem;line-height:1;flex-shrink:0;padding:0" title="Dismiss">×</button>
 </div>
 
+<script src="/static/naming-templates.js"></script>
+<script src="/static/file-browser.js"></script>
 <script>
-// ── Credentials.md template live preview ──
-(function () {
-    var sampleTokens = {
-        'title': 'Attack on Titan', 'title.romaji': 'Shingeki no Kyojin',
-        'title.english': 'Attack on Titan', 'year': '2013', 'season': '01',
-        'episode': '05', 'episode.title': '', 'quality': '1080p BluRay x265',
-        'quality.resolution': '1080p', 'quality.source': 'BluRay',
-        'season.name': 'Shingeki no Kyojin Season 2', 'format': 'TV', 'format.short': 'TV'
-    };
-    var movieTokens = {
-        'title': 'Sen to Chihiro no Kamikakushi', 'title.romaji': 'Sen to Chihiro no Kamikakushi',
-        'title.english': 'Spirited Away', 'year': '2001', 'season': '01',
-        'episode': '', 'episode.title': '', 'quality': '1080p BluRay x265',
-        'quality.resolution': '1080p', 'quality.source': 'BluRay',
-        'season.name': '', 'format': 'MOVIE', 'format.short': 'Movie'
-    };
-    function renderTpl(tpl, tokens) {
-        var r = tpl.replace(/\{([a-z]+(?:\.[a-z]+)?)\}/g, function (m, k) { return tokens[k] || ''; });
-        r = r.replace(/\[\s*\]/g, '').replace(/\(\s*\)/g, '');
-        r = r.replace(/(\s*-\s*){2,}/g, ' - ').replace(/\.{2,}/g, '.').replace(/ {2,}/g, ' ');
-        return r.replace(/[\s.\-]+$/, '').replace(/^[\s.\-]+/, '').trim();
-    }
-    function updateTplPreview() {
-        var ep = document.getElementById('tpl-episode');
-        var fo = document.getElementById('tpl-folder');
-        var se = document.getElementById('tpl-season');
-        var mo = document.getElementById('tpl-movie');
-        var pFile   = document.getElementById('tpl-preview-file');
-        var pFolder = document.getElementById('tpl-preview-folder');
-        var pSeason = document.getElementById('tpl-preview-season');
-        var pMovie  = document.getElementById('tpl-preview-movie');
-        if (pFile   && ep) pFile.textContent   = (renderTpl(ep.value, sampleTokens) || ep.placeholder) + '.mkv';
-        if (pFolder && fo) pFolder.textContent = renderTpl(fo.value, sampleTokens) || fo.placeholder;
-        if (pSeason && se) pSeason.textContent = renderTpl(se.value, sampleTokens) || se.placeholder;
-        if (pMovie  && mo) pMovie.textContent  = (renderTpl(mo.value, movieTokens) || mo.placeholder) + '.mkv';
-    }
-    // Naming template presets
-    var PRESETS = {
-        standard:              { file: '{title} - S{season}E{episode}', folder: '{title}', season_folder: 'Season {season}', movie_file: '{title} [{year}]' },
-        with_year:             { file: '{title} [{year}] - S{season}E{episode}', folder: '{title} [{year}]', season_folder: 'Season {season}', movie_file: '{title} [{year}]' },
-        with_quality:          { file: '{title} [{year}] - S{season}E{episode} [{quality}]', folder: '{title} [{year}]', season_folder: 'Season {season}', movie_file: '{title} [{year}] [{quality}]' },
-        english:               { file: '{title.english} ({year}) - S{season}E{episode} - {episode.title} [{quality}]', folder: '{title.english} ({year})', season_folder: 'Season {season}', movie_file: '{title.english} ({year}) [{quality}]' },
-        english_season_names:  { file: '{title.english} ({year}) - S{season}E{episode} - {episode.title} [{quality}]', folder: '{title.english} ({year})', season_folder: '{season.name} ({year})', movie_file: '{title.english} ({year}) [{quality}]' },
-        romaji:                { file: '{title.romaji} ({year}) - S{season}E{episode} - {episode.title} [{quality}]', folder: '{title.romaji} ({year})', season_folder: 'Season {season}', movie_file: '{title.romaji} ({year}) [{quality}]' },
-        romaji_season_names:   { file: '{title.romaji} ({year}) - S{season}E{episode} - {episode.title} [{quality}]', folder: '{title.romaji} ({year})', season_folder: '{season.name} ({year})', movie_file: '{title.romaji} ({year}) [{quality}]' },
-        dots:                  { file: '{title}.S{season}E{episode}.{quality.resolution}', folder: '{title}.({year})', season_folder: 'Season.{season}', movie_file: '{title}.({year})' },
-    };
-    document.addEventListener('DOMContentLoaded', function () {
-        document.querySelectorAll('.tpl-input').forEach(function (el) {
-            el.addEventListener('input', updateTplPreview);
-        });
-        updateTplPreview();
-
-        // Preset chip click handler
-        document.querySelectorAll('.tpl-preset-chip').forEach(function (chip) {
-            chip.addEventListener('click', function () {
-                var key = chip.dataset.preset;
-                var p = PRESETS[key];
-                if (!p) return;
-                document.getElementById('tpl-episode').value = p.file;
-                document.getElementById('tpl-folder').value = p.folder;
-                document.getElementById('tpl-season').value = p.season_folder;
-                document.getElementById('tpl-movie').value = p.movie_file;
-                // Highlight active chip
-                document.querySelectorAll('.tpl-preset-chip').forEach(function (c) { c.classList.remove('active'); });
-                chip.classList.add('active');
-                updateTplPreview();
-            });
-        });
-    });
-}());
+document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init(); });
 
 (function () {
     'use strict';
@@ -1138,11 +1070,7 @@
     };
 
     /* ── Helpers ───────────────────────────────────────────── */
-    function esc(str) {
-        return String(str)
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    }
+    var esc = window.escHtml;
 
     function showEl(id) { document.getElementById(id).classList.remove('hidden'); }
     function hideEl(id) { document.getElementById(id).classList.add('hidden'); }
