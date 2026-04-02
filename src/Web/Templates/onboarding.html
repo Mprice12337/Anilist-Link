@@ -372,7 +372,7 @@
                 <div class="section-label">Source Directories</div>
                 <div class="file-browser" id="src-browser">
                     <div class="file-browser-toolbar">
-                        <button class="btn btn-secondary btn-sm" onclick="srcBrowseParent()">↑ Parent</button>
+                        <button class="btn btn-secondary btn-sm" onclick="window._fb.srcBrowseParent()">↑ Parent</button>
                         <div class="file-browser-path" id="src-current-path">/media</div>
                     </div>
                     <div class="file-browser-list" id="src-browser-list">
@@ -392,17 +392,17 @@
                 <div class="section-label">Output Directory</div>
                 <div class="file-browser" id="out-browser">
                     <div class="file-browser-toolbar">
-                        <button class="btn btn-secondary btn-sm" onclick="outBrowseParent()">↑ Parent</button>
+                        <button class="btn btn-secondary btn-sm" onclick="window._fb.outBrowseParent()">↑ Parent</button>
                         <div class="file-browser-path" id="out-current-path">/media</div>
-                        <button class="btn btn-secondary btn-sm" onclick="outShowNewFolder()" id="out-new-folder-btn" title="Create new folder">+ New Folder</button>
+                        <button class="btn btn-secondary btn-sm" onclick="window._fb.outShowNewFolder()" id="out-new-folder-btn" title="Create new folder">+ New Folder</button>
                     </div>
-                    <div id="out-new-folder-row" class="hidden" style="display:flex;align-items:center;gap:0.5rem;padding:0.4rem 0.75rem;border-bottom:1px solid var(--border);background:var(--bg-card)">
+                    <div id="out-new-folder-row" style="display:none;align-items:center;gap:0.5rem;padding:0.4rem 0.75rem;border-bottom:1px solid var(--border);background:var(--bg-card)">
                         <span style="font-size:0.85rem">📁</span>
                         <input type="text" id="out-new-folder-input" placeholder="New folder name…"
                                style="flex:1;background:var(--bg);color:var(--text);border:1px solid var(--accent);border-radius:var(--radius);padding:0.3rem 0.5rem;font-size:0.85rem"
-                               onkeydown="outNewFolderKey(event)">
-                        <button class="btn btn-primary btn-sm" onclick="outCreateFolder()">Create</button>
-                        <button class="btn btn-secondary btn-sm" onclick="outHideNewFolder()">Cancel</button>
+                               onkeydown="window._fb.outNewFolderKey(event)">
+                        <button class="btn btn-primary btn-sm" onclick="window._fb.outCreateFolder()">Create</button>
+                        <button class="btn btn-secondary btn-sm" onclick="window._fb.outHideNewFolder()">Cancel</button>
                     </div>
                     <div class="file-browser-list" id="out-browser-list">
                         <div class="file-browser-empty">Loading…</div>
@@ -1053,8 +1053,6 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
         skipMode: false,             // true when skip chosen — step 2 shows minimal dir picker
         sourceDirs: [],
         outputDir: null,
-        srcBrowsePath: '/media',
-        outBrowsePath: '/media',
         services: {
             anilist: 'pending',      // 'ok' | 'skip' | 'fail' | 'pending'
             plex: 'pending',
@@ -1220,10 +1218,12 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
 
     window.saveMediaDirsAndContinue = function () {
         // If nothing explicitly selected, use current browse path
+        syncFromFb();
         if (state.sourceDirs.length === 0) {
-            if (state.srcBrowsePath && state.srcBrowsePath !== '/') {
-                state.sourceDirs.push(state.srcBrowsePath);
-                renderSourceTags();
+            if (fb.state.srcBrowsePath && fb.state.srcBrowsePath !== '/') {
+                fb.state.sourceDirs.push(fb.state.srcBrowsePath);
+                fb.renderSourceTags();
+                syncFromFb();
             } else {
                 alert('Please select at least one directory containing your anime files.');
                 return;
@@ -1265,200 +1265,27 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
 
     /* (Skip-scan review is on its own page at /library/scan/results) */
 
-    /* ── File browsers ──────────────────────────────────────── */
-    var srcClickTimers = {}; // path → timer id
-
-    async function browsePath(path, listId, pathId, mode) {
-        // mode: 'multi' (click-to-select) or 'single' (radio/click)
-        var listEl = el(listId);
-        listEl.innerHTML = '<div class="file-browser-empty">Loading…</div>';
-        try {
-            var resp = await fetch('/api/fs/browse?path=' + encodeURIComponent(path));
-            if (!resp.ok) throw new Error('HTTP ' + resp.status);
-            var data = await resp.json();
-            el(pathId).textContent = data.current || path;
-
-            var dirs = (data.dirs || []);
-            if (dirs.length === 0) {
-                listEl.innerHTML = '<div class="file-browser-empty">No subdirectories here.</div>';
-                return;
-            }
-
-            listEl.innerHTML = dirs.map(function (d) {
-                var fullPath = d.path || (path.replace(/\/$/, '') + '/' + d.name);
-                if (mode === 'multi') {
-                    var isSel = state.sourceDirs.includes(fullPath);
-                    return '<div class="file-browser-item' + (isSel ? ' selected' : '') + '" data-path="' + esc(fullPath) + '" style="cursor:pointer">' +
-                        '<span class="dir-icon">' + (isSel ? '✓' : '📁') + '</span>' +
-                        '<span class="dir-name">' + esc(d.name) + '</span>' +
-                        '<span class="dir-hint">double-click to open</span>' +
-                        '</div>';
-                } else {
-                    var isSelOut = state.outputDir === fullPath;
-                    return '<div class="file-browser-item' + (isSelOut ? ' selected' : '') + '" data-path="' + esc(fullPath) + '" style="cursor:pointer">' +
-                        '<span class="dir-icon">' + (isSelOut ? '✓' : '📁') + '</span>' +
-                        '<span class="dir-name">' + esc(d.name) + '</span>' +
-                        '<span class="dir-hint">double-click to open</span>' +
-                        '</div>';
-                }
-            }).join('');
-
-            // Attach click / dblclick after render
-            if (mode === 'single') {
-                listEl.querySelectorAll('.file-browser-item').forEach(function (row) {
-                    var rowPath = row.dataset.path;
-                    row.addEventListener('click', function () {
-                        if (outClickTimers[rowPath]) return;
-                        outClickTimers[rowPath] = setTimeout(function () {
-                            delete outClickTimers[rowPath];
-                            state.outputDir = rowPath;
-                            el('out-selected-path').textContent = rowPath;
-                            browsePath(state.outBrowsePath, 'out-browser-list', 'out-current-path', 'single');
-                        }, 220);
-                    });
-                    row.addEventListener('dblclick', function () {
-                        if (outClickTimers[rowPath]) {
-                            clearTimeout(outClickTimers[rowPath]);
-                            delete outClickTimers[rowPath];
-                        }
-                        if (state.outputDir === rowPath) {
-                            state.outputDir = null;
-                            el('out-selected-path').textContent = 'none';
-                        }
-                        outNavInto(rowPath);
-                    });
-                });
-            }
-            if (mode === 'multi') {
-                listEl.querySelectorAll('.file-browser-item').forEach(function (row) {
-                    var rowPath = row.dataset.path;
-                    row.addEventListener('click', function () {
-                        if (srcClickTimers[rowPath]) return; // dblclick already pending
-                        srcClickTimers[rowPath] = setTimeout(function () {
-                            delete srcClickTimers[rowPath];
-                            srcToggleSelect(rowPath);
-                        }, 220);
-                    });
-                    row.addEventListener('dblclick', function () {
-                        if (srcClickTimers[rowPath]) {
-                            clearTimeout(srcClickTimers[rowPath]);
-                            delete srcClickTimers[rowPath];
-                        }
-                        // Deselect the folder being navigated into
-                        var idx = state.sourceDirs.indexOf(rowPath);
-                        if (idx !== -1) {
-                            state.sourceDirs.splice(idx, 1);
-                            renderSourceTags();
-                        }
-                        srcNavInto(rowPath);
-                    });
-                });
-            }
-        } catch (e) {
-            listEl.innerHTML = '<div class="file-browser-empty" style="color:var(--danger)">Error: ' + esc(e.message) + '</div>';
-        }
-    }
-
-    function srcToggleSelect(path) {
-        var idx = state.sourceDirs.indexOf(path);
-        if (idx === -1) {
-            state.sourceDirs.push(path);
-        } else {
-            state.sourceDirs.splice(idx, 1);
-        }
-        renderSourceTags();
-        browsePath(state.srcBrowsePath, 'src-browser-list', 'src-current-path', 'multi');
-    }
+    /* ── File browsers (uses shared FileBrowser class) ─────── */
+    var fb = new FileBrowser({
+        srcListId: 'src-browser-list', srcPathId: 'src-current-path',
+        outListId: 'out-browser-list', outPathId: 'out-current-path',
+        sourceTagsId: 'source-tags', outSelectedId: 'out-selected-path',
+        newFolderRowId: 'out-new-folder-row', newFolderInputId: 'out-new-folder-input',
+        initialPath: '/media',
+    });
 
     function initFileBrowsers() {
-        browsePath(state.srcBrowsePath, 'src-browser-list', 'src-current-path', 'multi');
-        browsePath(state.outBrowsePath, 'out-browser-list', 'out-current-path', 'single');
-        renderSourceTags();
+        fb.init();
+        // Sync shared FileBrowser state ↔ onboarding state
+        state.sourceDirs = fb.state.sourceDirs;
+        state.outputDir = fb.state.outputDir;
     }
 
-    // Source browser
-    function srcNavInto(path) {
-        state.srcBrowsePath = path;
-        browsePath(path, 'src-browser-list', 'src-current-path', 'multi');
+    // Keep onboarding state in sync with FileBrowser state (they share the same arrays/refs)
+    function syncFromFb() {
+        state.sourceDirs = fb.state.sourceDirs;
+        state.outputDir = fb.state.outputDir;
     }
-    window.srcBrowseParent = function () {
-        var parent = state.srcBrowsePath.split('/').slice(0, -1).join('/') || '/';
-        state.srcBrowsePath = parent;
-        browsePath(parent, 'src-browser-list', 'src-current-path', 'multi');
-    };
-
-    function renderSourceTags() {
-        var container = el('source-tags');
-        if (state.sourceDirs.length === 0) {
-            container.innerHTML = '<span class="text-muted" style="font-size:0.82rem">No sources added yet.</span>';
-            return;
-        }
-        container.innerHTML = state.sourceDirs.map(function (p, i) {
-            return '<span class="tag">' + esc(p) +
-                '<button class="tag-remove" onclick="removeSource(' + i + ')" title="Remove">×</button>' +
-                '</span>';
-        }).join('');
-    }
-
-    window.removeSource = function (i) {
-        state.sourceDirs.splice(i, 1);
-        renderSourceTags();
-    };
-
-    // Output browser
-    var outClickTimers = {};
-
-    window.outShowNewFolder = function () {
-        var row = el('out-new-folder-row');
-        row.classList.remove('hidden');
-        row.style.display = 'flex';
-        var input = el('out-new-folder-input');
-        input.value = '';
-        input.focus();
-    };
-    window.outHideNewFolder = function () {
-        el('out-new-folder-row').classList.add('hidden');
-        el('out-new-folder-input').value = '';
-    };
-    window.outNewFolderKey = function (e) {
-        if (e.key === 'Enter') { window.outCreateFolder(); }
-        if (e.key === 'Escape') { window.outHideNewFolder(); }
-    };
-    window.outCreateFolder = async function () {
-        var name = el('out-new-folder-input').value.trim();
-        if (!name) return;
-        var parent = state.outBrowsePath;
-        try {
-            var resp = await fetch('/api/fs/mkdir', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ parent: parent, name: name }),
-            });
-            var data = await resp.json();
-            if (!resp.ok || data.error) {
-                alert('Could not create folder: ' + (data.error || resp.status));
-                return;
-            }
-            outHideNewFolder();
-            // Navigate into the new folder and select it automatically
-            var newPath = data.path;
-            state.outputDir = newPath;
-            el('out-selected-path').textContent = newPath;
-            outNavInto(newPath);
-        } catch (e) {
-            alert('Request failed: ' + e.message);
-        }
-    };
-
-    function outNavInto(path) {
-        state.outBrowsePath = path;
-        browsePath(path, 'out-browser-list', 'out-current-path', 'single');
-    }
-    window.outBrowseParent = function () {
-        var parent = state.outBrowsePath.split('/').slice(0, -1).join('/') || '/';
-        state.outBrowsePath = parent;
-        browsePath(parent, 'out-browser-list', 'out-current-path', 'single');
-    };
 
     /* ── Step 2: Analyze & Execute ──────────────────────────── */
 
@@ -1488,14 +1315,16 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
             return;
         }
 
+        syncFromFb();
         if (state.sourceDirs.length === 0) {
             alert('Please add at least one source directory.');
             return;
         }
         if (!state.outputDir) {
             // Fall back to the directory the user is currently browsing
-            state.outputDir = state.outBrowsePath;
-            el('out-selected-path').textContent = state.outBrowsePath;
+            state.outputDir = fb.state.outBrowsePath;
+            fb.state.outputDir = fb.state.outBrowsePath;
+            el('out-selected-path').textContent = fb.state.outBrowsePath;
         }
 
         // Capture template values before navigating away from step 2
@@ -1683,6 +1512,7 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
         state.restructureStatus = 'skip';
         // If user selected source dirs before deciding to skip,
         // persist them so the local library still gets indexed.
+        syncFromFb();
         if (state.sourceDirs.length > 0) {
             fetch('/onboarding/save-media-dirs', {
                 method: 'POST',
@@ -2379,7 +2209,7 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
             loadRestructureReport();
                     }
 
-        renderSourceTags();
+        fb.renderSourceTags();
     })();
 
     // Expose goToStep globally for inline onclick
