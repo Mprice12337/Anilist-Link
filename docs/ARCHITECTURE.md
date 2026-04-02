@@ -2,13 +2,13 @@
 
 This document defines the architecture of Anilist-Link, organized around its four functional pillars. It serves as the primary reference for understanding the system's design, components, and implementation status. Update this document as the codebase evolves.
 
-**Date of Last Update**: 2026-03-19
+**Date of Last Update**: 2026-04-01
 
 ---
 
 ## 1. Project Vision & The 4 Pillars
 
-Anilist-Link is a self-hosted Docker container that connects AniList with media platforms (Plex, Jellyfin, Crunchyroll) and download managers (Sonarr, Radarr, Prowlarr). Rather than being a single-purpose sync tool, it delivers four distinct capabilities:
+Anilist-Link is a self-hosted Docker container that connects AniList with media platforms (Plex, Jellyfin, Crunchyroll) and download managers (Sonarr, Radarr). Rather than being a single-purpose sync tool, it delivers four distinct capabilities:
 
 | # | Pillar | Summary | Priority | Status |
 |---|--------|---------|----------|--------|
@@ -42,7 +42,7 @@ All four pillars share a common foundation: the AniList Client, Title Matcher, S
                          │                         │                                    │
   [Sonarr/Radarr]  <───  │  ┌──────────────────────┴──────────────────────┐           │
                          │  │  P4: Download        ┌──────────────┐       │           │
-  [Prowlarr]        <──  │  │  Management          │  Web UI      │       │           │
+                         │  │  Management          │  Web UI      │       │           │
                          │  └──────────────────────┤  (FastAPI)   │───────┘           │
   [Browser]        <───> │                         └──────────────┘                    │
                          └──────────────────────────────────────────────────────────────┘
@@ -325,7 +325,7 @@ The `WatchSyncer` handles:
 
 ### 7.1. Overview
 
-Integrates with Sonarr, Radarr, and Prowlarr to send add/search requests using AniList data. Resolves AniList entries to TVDB/TMDB IDs, routes TV series to Sonarr and movies to Radarr, and pushes AniList alternative titles for better indexer matching.
+Integrates with Sonarr and Radarr to send add/search requests using AniList data. Resolves AniList entries to TVDB/TMDB IDs, routes TV series to Sonarr and movies to Radarr, and pushes AniList alternative titles for better indexer matching.
 
 ### 7.2. Implementation Status
 
@@ -333,8 +333,6 @@ Integrates with Sonarr, Radarr, and Prowlarr to send add/search requests using A
 |-----------|--------|
 | `SonarrClient` (`src/Clients/SonarrClient.py`) | ✅ Implemented — full API v3 |
 | `RadarrClient` (`src/Clients/RadarrClient.py`) | ✅ Implemented — full API v3 |
-| `ProwlarrClient` (`src/Clients/ProwlarrClient.py`) | ✅ Implemented — search + grab |
-| `QBittorrentClient` (`src/Clients/QBittorrentClient.py`) | ✅ Implemented — add/monitor |
 | `DownloadManager` (`src/Download/DownloadManager.py`) | ✅ Implemented |
 | `MappingResolver` (`src/Download/MappingResolver.py`) | ✅ Implemented |
 | `ArrPostProcessor` (`src/Download/ArrPostProcessor.py`) | ✅ Implemented |
@@ -372,8 +370,6 @@ Integrates with Sonarr, Radarr, and Prowlarr to send add/search requests using A
 **Environment variables** (P4):
 - `SONARR_URL`, `SONARR_API_KEY`
 - `RADARR_URL`, `RADARR_API_KEY`
-- `PROWLARR_URL`, `PROWLARR_API_KEY`
-- `QBITTORRENT_URL`, `QBITTORRENT_USERNAME`, `QBITTORRENT_PASSWORD`
 
 ---
 
@@ -492,8 +488,6 @@ Anilist-Link/
 │   │   ├── CrunchyrollClient.py                  # Crunchyroll reverse-engineered client [✅]
 │   │   ├── SonarrClient.py                       # Sonarr API v3 client [✅]
 │   │   ├── RadarrClient.py                       # Radarr API v3 client [✅]
-│   │   ├── ProwlarrClient.py                     # Prowlarr API v1 client [✅]
-│   │   └── QBittorrentClient.py                  # qBittorrent Web API v2 client [✅]
 │   ├── Matching/                                 # Title matching engine
 │   │   ├── TitleMatcher.py                       # Multi-algorithm fuzzy matching [✅]
 │   │   └── Normalizer.py                         # Anime-specific title normalization [✅]
@@ -537,8 +531,11 @@ Anilist-Link/
 │   │   │   ├── SonarrSync.py                     # Sonarr sync management [✅]
 │   │   │   ├── ArrWebhook.py                     # Sonarr/Radarr webhook receiver [✅]
 │   │   │   └── Tools.py                          # Admin tools [✅]
-│   │   ├── Templates/                            # Jinja2 HTML templates (20+ files)
-│   │   └── Static/                               # CSS, images, static assets
+│   │   ├── Templates/                            # Jinja2 HTML templates (26 files)
+│   │   └── Static/                               # CSS, JS modules, images
+│   │       ├── style.css                         # Application stylesheet [✅]
+│   │       ├── file-browser.js                   # Shared dual-pane file browser [✅]
+│   │       └── naming-templates.js               # Shared naming template presets/preview [✅]
 │   ├── Database/                                 # Database layer
 │   │   ├── Connection.py                         # Async SQLite connection manager [✅]
 │   │   ├── Models.py                             # Table definitions and dataclasses [✅]
@@ -560,7 +557,6 @@ Anilist-Link/
 │       ├── test_naming_template.py               # Quality parsing tests (21 cases)
 │       ├── test_normalizer.py                    # Title normalizer tests (68 cases)
 │       ├── test_plex_client.py                   # PlexClient helper tests (33 cases)
-│       ├── test_prowlarr_client.py               # ProwlarrClient tests (29 cases)
 │       ├── test_rate_limiter.py                  # RateLimiter tests (18 cases)
 │       ├── test_series_group_builder.py          # SeriesGroupBuilder tests (22 cases)
 │       └── test_title_matcher.py                 # TitleMatcher tests (55 cases)
@@ -623,8 +619,6 @@ Short-lived caching of frequently accessed data during active scan/sync operatio
 | Jellyfin | `JellyfinClient` | Library access, metadata writing, watch status | API key | ✅ Implemented |
 | Sonarr API v3 | `SonarrClient` | Add/search TV series with alt titles | API key | ✅ Implemented |
 | Radarr API v3 | `RadarrClient` | Add/search movies with alt titles | API key | ✅ Implemented |
-| Prowlarr API v1 | `ProwlarrClient` | Release search across indexers | API key | ✅ Implemented |
-| qBittorrent Web API v2 | `QBittorrentClient` | Torrent add/monitor | Username/Password | ✅ Implemented |
 | Plex.tv API | (via `PlexClient`) | Per-user token retrieval | X-Plex-Token | Planned (P1) |
 
 ---
@@ -662,7 +656,7 @@ Each pillar can function independently, but the recommended order maximizes data
 - **P2 (File Organization)**: All 3 levels (folder rename, file rename, full restructure). Multi-source, conflict detection, Jellyfin support, restructure log.
 - **P3 (Metadata)**: Full scan/match/apply for both Plex and Jellyfin. Unified library browser. Manual overrides.
 - **P1 (Crunchyroll)**: WatchSyncer, CrunchyrollPreviewRunner with preview/approve/undo.
-- **P4 (Clients)**: SonarrClient, RadarrClient, ProwlarrClient, QBittorrentClient fully implemented.
+- **P4 (Clients)**: SonarrClient, RadarrClient fully implemented.
 - **P4 (Manager)**: DownloadManager, MappingResolver, ArrPostProcessor, DownloadSyncer implemented.
 - **P4 (UI)**: Downloads page, manual grab, watchlist browser, Sonarr sync, webhook receiver.
 - **Infrastructure**: Onboarding wizard, connection test endpoints, floating progress widget.
@@ -721,7 +715,6 @@ See `docker-compose.yml` and `docs/CLAUDE.md` for full Docker configuration.
 | `test_config.py` | 30 | Config dataclass construction, env var loading |
 | `test_database.py` | 31 | DatabaseManager CRUD via in-memory SQLite |
 | `test_plex_client.py` | 33 | PlexClient helpers, metadata building, HTML stripping |
-| `test_prowlarr_client.py` | 29 | Quality parsing, search dedup, release result parsing |
 | `test_series_group_builder.py` | 22 | BFS traversal, caching, sorting, format filtering |
 | `test_naming_template.py` | 21 | Quality parsing from filenames |
 | `test_rate_limiter.py` | 18 | Token bucket acquire/refill, high-priority bypass |
@@ -757,7 +750,6 @@ mypy src/                       # Type check (0 errors)
 - **AniDB**: Anime database; entries can be cross-referenced to AniList IDs
 - **Sonarr**: PVR for Usenet and BitTorrent TV show downloads
 - **Radarr**: PVR for Usenet and BitTorrent movie downloads (Sonarr fork)
-- **Prowlarr**: Indexer manager/proxy for Sonarr and Radarr
 - **Binhex**: Docker container standardization conventions for volume paths and env vars
 - **PUID/PGID**: Process User ID / Process Group ID for Docker file permission management
 - **TTL**: Time To Live — duration before cached data expires

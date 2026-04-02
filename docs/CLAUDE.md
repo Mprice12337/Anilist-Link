@@ -201,17 +201,22 @@ Move to `/docs` when:
 ### Primary Models/Components
 - **AniList Client**: GraphQL client with OAuth2 flow, rate limiting (90 req/min), public queries, and authenticated mutations [implemented]
 - **Plex Client**: Library enumeration, metadata writing, per-user watch tracking via Plex.tv API [implemented]
-- **Jellyfin Client**: Library access, metadata writing, watch status tracking via open API [stub — P3]
+- **Jellyfin Client**: Library access, metadata writing, watch status tracking via open API [implemented]
 - **Crunchyroll Client**: Reverse-engineered auth + watch history retrieval with session persistence [implemented]
-- **Sonarr Client**: Sonarr API v3 integration for add series requests [planned — P4]
-- **Radarr Client**: Radarr API v3 integration for add movie requests [planned — P4]
+- **Sonarr Client**: Sonarr API v3 integration for series add/lookup [implemented]
+- **Radarr Client**: Radarr API v3 integration for movie add/lookup [implemented]
 - **Title Matching Engine**: rapidfuzz-based multi-algorithm fuzzy matching with anime-specific normalization [implemented]
 - **Metadata Scanner**: Orchestrates scan → match → cache → apply pipeline across Plex libraries [implemented]
+- **Jellyfin Metadata Scanner**: Parallel scanner for Jellyfin libraries [implemented]
 - **Series Group Builder**: BFS traversal of AniList SEQUEL/PREQUEL graph to build series groups [implemented]
-- **Library Restructurer**: Analyzes and reorganizes Plex library files into Structure A [implemented]
+- **Library Restructurer**: Analyzes and reorganizes anime files into Structure A [implemented]
 - **Watch Syncer**: Crunchyroll→AniList watch sync with status transitions (PLANNING → CURRENT → COMPLETED) [implemented]
+- **Crunchyroll Preview Runner**: Preview/approve/undo pipeline for CR sync [implemented]
+- **Download Manager**: Orchestrates AniList→Sonarr/Radarr add requests [implemented]
+- **Download Syncer**: Periodic AniList watchlist → Sonarr/Radarr auto-add [implemented]
 - **Plex Watch Syncer**: Plex→AniList watch sync via polling/webhooks [planned — P1]
-- **Download Manager**: Orchestrates AniList→Sonarr/Radarr add requests [planned — P4]
+- **Onboarding Wizard**: 4-step first-run setup wizard with service configuration [implemented]
+- **Floating Progress Widget**: In-page background task monitor polling `/api/progress` [implemented]
 
 ### Design Patterns Used
 - **Pipeline Pattern**: Metadata Scanner uses scan → match → cache → apply pipeline
@@ -223,7 +228,7 @@ Move to `/docs` when:
 - **P2 (File Organization)**: User selects Plex library → Restructurer analyzes shows → matches to AniList → builds series groups → generates move plan → user previews → executes file moves → triggers Plex refresh
 - **P3 (Metadata)**: Scanner enumerates Plex shows → Title Matcher finds AniList entries → Series Group Builder walks relation graph → AniList metadata cached → metadata written to Plex (show + season level)
 - **P1 (Watch Sync)**: Scheduler triggers periodic sync → Crunchyroll watch history fetched → episodes matched to AniList entries → status updated per linked user (Plex/Jellyfin polling + webhooks planned)
-- **P4 (Downloads)**: User selects AniList entry → resolve to TVDB/TMDB IDs → send add request to Sonarr/Radarr with alt titles (planned)
+- **P4 (Downloads)**: User selects AniList entry → resolve to TVDB/TMDB IDs via NamingTranslator → MappingResolver persists AniList↔Arr mappings → DownloadManager sends add request to Sonarr/Radarr with alt titles
 
 See `ARCHITECTURE.md` for detailed per-pillar architecture.
 
@@ -348,7 +353,7 @@ Application-specific variables:
 
 ## Database
 
-### Schema Overview (v6)
+### Schema Overview (v17)
 Current tables:
 - `media_mappings` - Maps media server library items to AniList IDs with confidence scores, match method, and optional series group reference
 - `users` - Linked AniList accounts with OAuth tokens
@@ -361,11 +366,19 @@ Current tables:
 - `series_groups` - Groups of AniList entries connected by SEQUEL/PREQUEL relations
 - `series_group_entries` - Individual entries within a series group, ordered chronologically
 - `restructure_log` - File move operation audit trail
-
-Planned tables:
+- `jellyfin_media` - Persistent Jellyfin library item snapshot
+- `libraries` - Local library definitions (name, paths)
+- `library_items` - Items in a local library with match data
 - `plex_users` - Per-user Plex tokens for watch tracking (P1)
 - `jellyfin_users` - Per-user Jellyfin credentials (P1)
-- `download_requests` - Sonarr/Radarr request tracking (P4)
+- `cr_sync_preview` - Pending Crunchyroll sync changes awaiting approval
+- `cr_sync_log` - Applied CR sync changes with undo support
+- `download_requests` - Sonarr/Radarr add request tracking
+- `anilist_sonarr_mapping` - AniList↔Sonarr series mappings
+- `anilist_radarr_mapping` - AniList↔Radarr movie mappings
+- `sonarr_series_cache` - Cached Sonarr series data (by TVDB ID)
+- `radarr_movie_cache` - Cached Radarr movie data (by TMDB ID)
+- `user_watchlist` - Cached AniList watchlist per linked user
 
 ### Migration Strategy
 - Schema migrations handled via versioned SQL scripts in `src/Database/Migrations.py`
@@ -387,17 +400,29 @@ Planned tables:
 - **Key Endpoints**:
   - `GET /` - Dashboard home page
   - `GET /api/status` - System status and sync statistics
+  - `GET /api/progress` - Background task progress (floating widget)
+  - `GET /api/fs/browse` - File system browser for restructure/onboarding
   - `GET /settings` - GUI configuration page
+  - `GET /onboarding` - First-run setup wizard
+  - `POST /api/test/{service}` - Connection test endpoints (plex, jellyfin, anilist, etc.)
   - `POST /api/sync` - Trigger manual Crunchyroll watch sync
   - `GET /auth/anilist` - Initiate AniList OAuth2 flow
   - `GET /auth/anilist/callback` - AniList OAuth2 callback handler
   - `GET /plex` - Plex library browser with mapping management
-  - `POST /plex/scan/preview` - Preview metadata scan for a library
-  - `POST /plex/scan/live` - Execute live metadata scan
-  - `POST /plex/apply-all` - Apply AniList metadata to all matched items
+  - `GET /jellyfin` - Jellyfin library browser with mapping management
+  - `POST /plex/scan/preview`, `POST /plex/scan/live` - Plex scan modes
+  - `POST /scan/jellyfin/preview`, `POST /scan/jellyfin/live` - Jellyfin scan modes
+  - `POST /plex/apply-all` - Apply AniList metadata to all matched Plex items
+  - `GET /library/{id}` - Unified library detail view
   - `GET /restructure` - File restructure wizard
-  - `POST /restructure/analyze` - Begin library analysis for restructure
+  - `POST /onboarding/restructure/analyze` - Shared restructure analysis endpoint
   - `POST /restructure/execute` - Execute approved file moves
+  - `GET /crunchyroll` - Crunchyroll sync page with preview/history/undo
+  - `GET /downloads` - Download manager UI
+  - `GET /manual-grab` - Manual release grab
+  - `GET /watchlist` - AniList watchlist browser
+  - `POST /arr-webhook` - Sonarr/Radarr webhook receiver
+  - `GET /tools` - Admin tools
   - `GET /api/scan/plex/search` - AniList title search for manual rematch
 
 ---
@@ -409,12 +434,14 @@ Planned tables:
 #### Key Job Categories
 - **Crunchyroll Watch Sync**: Periodic Crunchyroll→AniList watch sync [implemented]
 - **Plex Metadata Scan**: Periodic scan of Plex libraries, matching to AniList, metadata application [triggered manually via UI]
+- **Jellyfin Metadata Scan**: Periodic scan of Jellyfin libraries [triggered manually via UI]
+- **Download Sync**: Periodic AniList watchlist → Sonarr/Radarr auto-add [implemented]
 - **Plex Watch Sync**: Periodic Plex→AniList watch sync [planned — P1]
-- **Jellyfin Metadata Scan**: Periodic Jellyfin library scan [planned — P3]
 - **Jellyfin Watch Sync**: Periodic Jellyfin→AniList watch sync [planned — P1]
 
 #### Important Job Classes
 - `crunchyroll_sync` - Scheduled Crunchyroll watch sync at configurable interval [implemented]
+- `download_sync` - Periodic AniList watchlist → Sonarr/Radarr sync [implemented]
 - `plex_metadata_scan` - Plex library scan and metadata application [planned for scheduling]
 - `plex_watch_sync` - Plex watch progress polling [planned — P1]
 
@@ -465,13 +492,13 @@ All containers support these consistent environment variables:
 #### Standard Logging
 - **Process Manager**: Supervisord (manages all container processes)
 - **Main Log Location**: `/config/supervisord.log`
-- Application logs also write to `/config/anilist_link.log`
+- Application logs also write to `/config/logs/anilist_link.log`
 
 #### Example Docker Compose Configuration
 ```yaml
 services:
   AnilistLink:
-    build: .
+    image: dogberttech/anilist-link:latest
     container_name: AnilistLink
     restart: unless-stopped
     volumes:
@@ -503,7 +530,8 @@ services:
 
 ### Docker Commands
 ```bash
-docker build -t anilist-link .                    # Build image
+docker pull dogberttech/anilist-link:latest       # Pull latest image
+docker build -t dogberttech/anilist-link:latest . # Build image locally (dev)
 docker-compose up -d                              # Run container
 docker logs AnilistLink                           # View container logs
 docker exec -it AnilistLink cat /config/supervisord.log  # View detailed logs
@@ -568,7 +596,7 @@ docker-compose down                               # Stop container
 5. Update this file if new conventions or patterns are introduced
 
 ### Debugging
-- **Logs Location**: `/config/anilist_link.log` (application) and `/config/supervisord.log` (container)
+- **Logs Location**: `/config/logs/anilist_link.log` (application) and `/config/supervisord.log` (container)
 - **Debug Mode**: Set `DEBUG=true` environment variable for verbose logging
 - **Common Issues**: See [QUICK-REFERENCE.md](QUICK-REFERENCE.md) troubleshooting section
 
@@ -598,7 +626,7 @@ alias alstop='docker-compose down'           # Stop Anilist-Link
 - **Production**: Docker container on Unraid/Docker host, SQLite in mounted `/config` volume
 
 ### Deployment Process
-1. Build Docker image: `docker build -t anilist-link .`
+1. Pull the published image: `docker pull dogberttech/anilist-link:latest`
 2. Update `docker-compose.yml` with correct environment variables
 3. Deploy: `docker-compose up -d`
 4. Verify: Check `http://localhost:9876` for dashboard
@@ -618,7 +646,7 @@ alias alstop='docker-compose down'           # Stop Anilist-Link
 
 ### Logging Strategy
 - **Log Levels**: DEBUG (verbose), INFO (normal operations), WARNING (non-critical issues), ERROR (failures)
-- **Log Location**: `/config/anilist_link.log` (application), `/config/supervisord.log` (container process)
+- **Log Location**: `/config/logs/anilist_link.log` (application), `/config/supervisord.log` (container process)
 - **Retention**: Log rotation configured to prevent unbounded growth
 
 ---
@@ -647,22 +675,26 @@ alias alstop='docker-compose down'           # Stop Anilist-Link
 ### Technical Debt
 **P2 — File Organization**: ✅ Complete
 - All 3 operation levels implemented: folder rename (L1), folder+file rename (L2), full restructure (L3)
-- Wizard UI, analyze, execute, and auto-rescan all working
+- Wizard UI with shared file browser and naming template modules, analyze, execute, and auto-rescan all working
+- Multi-source restructure with conflict detection and resolution
 
-**P3 — Metadata**: ✅ Complete (core)
-- MetadataScanner, PlexClient metadata writing, structure A/B/C detection, series groups all working
+**P3 — Metadata**: ✅ Complete (Plex + Jellyfin)
+- MetadataScanner (Plex) and JellyfinMetadataScanner, PlexClient + JellyfinClient metadata writing, structure A/B/C detection, series groups all working
 - Manual overrides UI at `/mappings` (list, add, delete)
-- Deferred (non-blocking): staff/credits writing to Plex, Jellyfin client (stub), GUID-based high-confidence matching
+- Deferred (non-blocking): staff/credits writing to Plex, GUID-based high-confidence matching
 
-**P1 — Watch Sync**:
+**P1 — Watch Sync**: Crunchyroll done, Plex/Jellyfin planned
+- Crunchyroll→AniList sync with preview/approve/undo pipeline (CrunchyrollPreviewRunner) ✅
+- `plex_users` and `jellyfin_users` tables created (v10) ✅
 - Plex watch sync (polling + webhook) not yet implemented
 - Jellyfin watch sync not yet implemented
 - AniList backfill syncer (AniList→media server) not yet implemented
 - AniList token auto-refresh not yet wired up
-- `plex_users` and `jellyfin_users` tables not yet created
 
-**P4 — Downloads**:
-- Entire pillar not yet started (Sonarr/Radarr clients, DownloadManager, UI, DB table)
+**P4 — Downloads**: ✅ Core implemented
+- SonarrClient, RadarrClient, DownloadManager, MappingResolver, ArrPostProcessor, DownloadSyncer all implemented
+- Download management UI, manual grab, watchlist browser, Sonarr sync, webhook receiver all working
+- Full automation (auto-search on new CURRENT status) partial — DownloadSyncer exists
 
 **General**:
 - Crunchyroll client needs ongoing maintenance as the unofficial API changes
@@ -711,7 +743,7 @@ docker ps                                         # List running containers
 ### File Locations
 - Config: `/config` (in container) - Maps to host path defined in docker-compose
 - Logs: `/config/supervisord.log` (main container log)
-- Application Logs: `/config/anilist_link.log`
+- Application Logs: `/config/logs/anilist_link.log`
 - Database: `/config/anilist_link.db`
 - Tests: `tests/`
 - **Documentation**: `/docs` folder (all docs except README.md)

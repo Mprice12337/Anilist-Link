@@ -104,7 +104,9 @@ cp .env.example .env
 
 **Required Environment Variables**:
 - [ ] `PLEX_URL` - Your Plex server URL (e.g., `http://192.168.1.100:32400`)
-- [ ] `PLEX_TOKEN` - Your Plex authentication token
+- [ ] `PLEX_TOKEN` - Your Plex admin authentication token (for metadata operations)
+
+> **Plex auth modes**: The admin `PLEX_TOKEN` is used for library enumeration and metadata writing. For per-user watch sync (P1, planned), a separate pin-based OAuth flow via Plex.tv will obtain individual user tokens stored in the `plex_users` table. This is different from the admin token.
 - [ ] `JELLYFIN_URL` - Your Jellyfin server URL (e.g., `http://192.168.1.100:8096`)
 - [ ] `JELLYFIN_API_KEY` - Your Jellyfin API key
 - [ ] `ANILIST_CLIENT_ID` - AniList OAuth2 app client ID (register at https://anilist.co/settings/developer)
@@ -115,11 +117,6 @@ cp .env.example .env
 - [ ] `SONARR_API_KEY` - Sonarr API key
 - [ ] `RADARR_URL` - Radarr server URL (e.g., `http://192.168.1.100:7878`)
 - [ ] `RADARR_API_KEY` - Radarr API key
-- [ ] `PROWLARR_URL` - Prowlarr server URL (e.g., `http://192.168.1.100:9696`)
-- [ ] `PROWLARR_API_KEY` - Prowlarr API key
-- [ ] `QBITTORRENT_URL` - qBittorrent WebUI URL (e.g., `http://192.168.1.100:8080`)
-- [ ] `QBITTORRENT_USER` - qBittorrent WebUI username
-- [ ] `QBITTORRENT_PASS` - qBittorrent WebUI password
 
 ### 7. Database Setup
 ```bash
@@ -425,6 +422,8 @@ volumes:
 - `/config` - Configuration files, SQLite database, and logs (including supervisord.log)
 - `/data` - Application data (reserved for future use)
 
+> **Note**: The media volume (e.g., `/media/anime`) is the default root for the file browser (`GET /api/fs/browse?path=`) and restructure source selection. Mount it to the same path your media server uses so that file paths align.
+
 #### Standard Environment Variables
 ```yaml
 environment:
@@ -458,13 +457,16 @@ id -g        # Returns your PGID (e.g., 1000)
 - `002` - Group writable (775 folders, 664 files) - **recommended**
 - `022` - User writable only (755 folders, 644 files) - more restrictive
 
-### 2. Test Docker Build
+### 2. Test Docker Setup
 ```bash
-# Build image
-docker build -t anilist-link .
+# Pull the published image
+docker pull dogberttech/anilist-link:latest
+
+# Or build locally for development
+docker build -t dogberttech/anilist-link:latest .
 
 # Check image size
-docker images anilist-link
+docker images dogberttech/anilist-link
 
 # Run container with Binhex standards
 docker run -d \
@@ -476,7 +478,7 @@ docker run -d \
   -e UMASK=002 \
   -e TZ=America/New_York \
   -p 9876:9876 \
-  anilist-link
+  dogberttech/anilist-link:latest
 
 # Or use docker-compose
 docker-compose up -d
