@@ -127,6 +127,10 @@ class RestructurePlan:
     # Maps anilist_id → series_group_id for standalone/unchanged shows
     # so seed_library_items can detect Structure B subdirs.
     unchanged_group_ids: dict[int, int] = field(default_factory=dict)
+    # Shows that were scanned but had no AniList match.  Stored so
+    # library seeding can create placeholder rows for them (matching
+    # LibraryScanner behaviour which seeds unmatched shows too).
+    unmatched_shows: list["ShowInput"] = field(default_factory=list)
 
 
 @dataclass
@@ -537,6 +541,10 @@ class LibraryRestructurer:
 
             if not si.anilist_id or not si.local_path:
                 skipped.append((si.title, "no AniList match or no local path"))
+                # Keep shows with a local path so library seeding can
+                # create placeholder rows (matching LibraryScanner).
+                if si.local_path:
+                    plan.unmatched_shows.append(si)
                 continue
 
             show_by_anilist[si.anilist_id] = si
@@ -1223,6 +1231,10 @@ class LibraryRestructurer:
 
             if not si.anilist_id or not si.local_path:
                 skipped.append((si.title, "no AniList match or no local path"))
+                # Keep shows with a local path so library seeding can
+                # create placeholder rows (matching LibraryScanner).
+                if si.local_path:
+                    plan.unmatched_shows.append(si)
                 continue
 
             # Determine the target title (AniList title)
@@ -1596,6 +1608,20 @@ class LibraryRestructurer:
                     **(await self._cached_metadata_kwargs(si.anilist_id)),
                 )
                 upserted += 1
+
+        # Seed unmatched shows (scanned but no AniList match).  Create
+        # placeholder rows so the library contains every folder, matching
+        # how LibraryScanner handles unmatched shows during re-index.
+        for si in plan.unmatched_shows:
+            if not si.local_path:
+                continue
+            folder_name = os.path.basename(si.local_path.rstrip("/"))
+            await self._db.upsert_library_item(
+                library_id=library_id,
+                folder_path=si.local_path,
+                folder_name=folder_name,
+            )
+            upserted += 1
 
         logger.info(
             "seed_library_items: upserted %d rows into library %d (from_source=%s)",

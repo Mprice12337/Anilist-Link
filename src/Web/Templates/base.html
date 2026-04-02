@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Anilist-Link{% endblock %}</title>
+    <link rel="icon" type="image/png" href="/static/img/anilist.png">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -20,6 +21,9 @@
         </div>
     </nav>
 
+    <!-- Persistent notification bar -->
+    <div id="notification-bar" class="notification-bar"></div>
+
     <main class="{% block container_class %}container{% endblock %}">
         {% block content %}{% endblock %}
     </main>
@@ -28,91 +32,216 @@
         <p>Anilist-Link v{{ version | default("0.1.0") }}</p>
     </footer>
 
-    <!-- Floating progress widget -->
-    <div id="progress-widget" class="progress-widget hidden" aria-live="polite">
-        <button class="progress-widget-toggle" id="progress-toggle" aria-expanded="false">
-            <span class="progress-spinner"></span>
-            <span id="progress-count">0 tasks</span>
-        </button>
-        <div class="progress-widget-panel" id="progress-panel" hidden>
-            <div id="progress-tasks"></div>
+    <!-- Processing overlay (shown when long-running forms submit) -->
+    <div id="processing-overlay" class="processing-overlay hidden">
+        <div class="processing-content">
+            <span class="processing-spinner"></span>
+            <span id="processing-label">Processing…</span>
         </div>
+    </div>
+
+    <!-- Floating progress widget -->
+    <!-- Minimized: spinner circle bottom-right -->
+    <button id="pw-mini" class="pw-mini hidden" title="Show background tasks">
+        <span class="pw-mini-spinner"></span>
+    </button>
+    <!-- Expanded: bordered card bottom-right -->
+    <div id="pw-panel" class="pw-panel hidden">
+        <button class="pw-close" id="pw-minimize" title="Close">&times;</button>
+        <div id="pw-tasks"></div>
     </div>
 
     <script>
     (function () {
-        const widget = document.getElementById('progress-widget');
-        const toggle = document.getElementById('progress-toggle');
-        const panel = document.getElementById('progress-panel');
-        const countEl = document.getElementById('progress-count');
-        const tasksEl = document.getElementById('progress-tasks');
+        var mini  = document.getElementById('pw-mini');
+        var panel = document.getElementById('pw-panel');
+        var minBtn = document.getElementById('pw-minimize');
+        var tasksEl = document.getElementById('pw-tasks');
 
-        let pollInterval = null;
-        let expanded = false;
+        // Persist widget state across page navigations via sessionStorage
+        var isMinimized = sessionStorage.getItem('pw-minimized') === '1';
+        var wasActive = sessionStorage.getItem('pw-active') === '1';
+        // Grace period: require several consecutive empty polls before
+        // hiding, so transient gaps (e.g. between analysis → execution)
+        // don't cause the widget to disappear.
+        var emptyCount = 0;
+        var EMPTY_GRACE = 3; // polls (~6 seconds at 2s interval)
 
-        toggle.addEventListener('click', function () {
-            expanded = !expanded;
-            toggle.setAttribute('aria-expanded', expanded);
-            panel.hidden = !expanded;
+        function saveState() {
+            sessionStorage.setItem('pw-minimized', isMinimized ? '1' : '0');
+            sessionStorage.setItem('pw-active', wasActive ? '1' : '0');
+        }
+
+        mini.addEventListener('click', function () {
+            isMinimized = false;
+            saveState();
+            mini.classList.add('hidden');
+            panel.classList.remove('hidden');
+        });
+        minBtn.addEventListener('click', function () {
+            isMinimized = true;
+            saveState();
+            panel.classList.add('hidden');
+            mini.classList.remove('hidden');
         });
 
-        function renderTask(task) {
-            return `<div class="progress-task-card">
-                <div class="progress-task-header">
-                    <span class="progress-task-type">${escHtml(task.type)}</span>
-                    <span class="progress-task-label">${escHtml(task.label)}</span>
-                </div>
-                <div class="progress-bar-wrap">
-                    <div class="progress-bar-fill" style="width:${task.percent}%"></div>
-                </div>
-                <div class="progress-task-detail">${escHtml(task.detail)} &mdash; ${escHtml(task.status)}</div>
-            </div>`;
+        function renderTask(t) {
+            return '<div class="pw-task">' +
+                '<div class="pw-task-head">' +
+                    '<span class="pw-task-type">' + esc(t.type) + '</span>' +
+                    '<span class="pw-task-label">' + esc(t.label) + '</span>' +
+                '</div>' +
+                '<div class="pw-bar"><div class="pw-bar-fill" style="width:' + t.percent + '%"></div></div>' +
+                '<div class="pw-task-detail">' + esc(t.detail) + ' — ' + esc(t.status) + '</div>' +
+            '</div>';
         }
 
-        function escHtml(str) {
-            return String(str)
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;');
+        function esc(s) {
+            return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+                .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
         }
 
-        let wasActive = false;
-
-        async function poll() {
-            try {
-                const resp = await fetch('/api/progress');
-                if (!resp.ok) return;
-                const data = await resp.json();
-                const tasks = data.tasks || [];
+        function poll() {
+            fetch('/api/progress').then(function (r) {
+                if (!r.ok) return;
+                return r.json();
+            }).then(function (data) {
+                if (!data) return;
+                var tasks = data.tasks || [];
 
                 if (tasks.length === 0) {
-                    if (wasActive) {
-                        // Brief "done" flash before hiding
-                        widget.classList.add('done-flash');
-                        setTimeout(() => {
-                            widget.classList.add('hidden');
-                            widget.classList.remove('done-flash');
-                        }, 1500);
+                    emptyCount++;
+                    if (wasActive && emptyCount >= EMPTY_GRACE) {
+                        // Done: hide after grace period
+                        if (!isMinimized) {
+                            panel.classList.add('pw-done');
+                            setTimeout(function () {
+                                panel.classList.add('hidden');
+                                panel.classList.remove('pw-done');
+                            }, 1200);
+                        }
+                        mini.classList.add('hidden');
                         wasActive = false;
+                        isMinimized = false;
+                        saveState();
                     }
                     return;
                 }
 
+                emptyCount = 0;
                 wasActive = true;
-                widget.classList.remove('hidden');
-                countEl.textContent = tasks.length === 1 ? '1 task' : `${tasks.length} tasks`;
+                saveState();
                 tasksEl.innerHTML = tasks.map(renderTask).join('');
-            } catch (e) {
-                // silently ignore fetch errors
+                if (isMinimized) {
+                    mini.classList.remove('hidden');
+                    panel.classList.add('hidden');
+                } else {
+                    panel.classList.remove('hidden');
+                    mini.classList.add('hidden');
+                }
+            }).catch(function () {});
+        }
+
+        // On page load, restore widget visibility if it was active
+        if (wasActive) {
+            if (isMinimized) {
+                mini.classList.remove('hidden');
+            } else {
+                panel.classList.remove('hidden');
             }
         }
 
-        // Always keep polling — the widget is a SPA-safe global observer.
-        // The server call is cheap (local SQLite read); stopping early causes
-        // background tasks started after page load to never appear.
         poll();
         setInterval(poll, 2000);
+    })();
+
+    // --- Persistent notifications (DB-backed, survives page reloads) ---
+    // X button only hides for the current session (sessionStorage).
+    // Notifications are permanently removed only when the user applies
+    // results (server calls dismiss_notifications_by_url).
+    (function () {
+        const bar = document.getElementById('notification-bar');
+        const HIDE_KEY = 'notif_hidden';
+        let currentIds = '';  // track displayed IDs to skip no-op re-renders
+
+        function getHidden() {
+            try {
+                return JSON.parse(sessionStorage.getItem(HIDE_KEY) || '[]');
+            } catch (e) { return []; }
+        }
+
+        function escHtml(str) {
+            return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+                .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
+        function renderNotification(n) {
+            const actionBtn = n.action_url
+                ? `<a href="${escHtml(n.action_url)}" class="notif-action">${escHtml(n.action_label || 'View')}</a>`
+                : '';
+            return `<div class="notif-item notif-${escHtml(n.type || 'info')}" data-id="${escHtml(n.id)}">
+                <span class="notif-message">${escHtml(n.message)}</span>
+                ${actionBtn}
+                <button class="notif-dismiss" onclick="hideNotification('${escHtml(n.id)}')" title="Hide">&times;</button>
+            </div>`;
+        }
+
+        async function pollNotifications() {
+            try {
+                const resp = await fetch('/api/notifications');
+                if (!resp.ok) return;
+                const data = await resp.json();
+                const hidden = getHidden();
+                const items = (data.notifications || []).filter(
+                    n => !hidden.includes(n.id)
+                );
+
+                // Only re-render when the visible set actually changes
+                const newIds = items.map(n => n.id).join(',');
+                if (newIds === currentIds) return;
+                currentIds = newIds;
+
+                if (items.length === 0) {
+                    bar.innerHTML = '';
+                    bar.classList.remove('has-notifications');
+                    return;
+                }
+                bar.innerHTML = items.map(renderNotification).join('');
+                bar.classList.add('has-notifications');
+            } catch (e) { /* ignore */ }
+        }
+
+        // Session-only hide (X button) — comes back on new session
+        window.hideNotification = function(id) {
+            const hidden = getHidden();
+            if (!hidden.includes(id)) {
+                hidden.push(id);
+                sessionStorage.setItem(HIDE_KEY, JSON.stringify(hidden));
+            }
+            const el = bar.querySelector(`[data-id="${id}"]`);
+            if (el) el.remove();
+            currentIds = Array.from(bar.querySelectorAll('.notif-item'))
+                .map(e => e.dataset.id).join(',');
+            if (!bar.querySelector('.notif-item')) {
+                bar.classList.remove('has-notifications');
+            }
+        };
+
+        pollNotifications();
+        setInterval(pollNotifications, 5000);
+    })();
+
+    // --- Processing overlay for long-running forms ---
+    (function () {
+        const overlay = document.getElementById('processing-overlay');
+        const label = document.getElementById('processing-label');
+        document.addEventListener('submit', function (e) {
+            const form = e.target;
+            const msg = form.getAttribute('data-processing');
+            if (!msg) return; // only intercept forms that opt in
+            label.textContent = msg;
+            overlay.classList.remove('hidden');
+        });
     })();
     </script>
 </body>

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import os
 import time
 
 from fastapi import APIRouter, Request
@@ -13,20 +11,46 @@ from starlette.responses import Response
 
 from src.Clients.JellyfinClient import JellyfinClient
 from src.Clients.PlexClient import PlexClient
-from src.Matching.TitleMatcher import TitleMatcher
-from src.Scanner.JellyfinShowProvider import JellyfinShowProvider
 from src.Scanner.LibraryRestructurer import (
     LibraryRestructurer,
     RestructurePlan,
     RestructureProgress,
 )
-from src.Scanner.LibraryScanner import LibraryScanner, LibraryScanProgress
-from src.Scanner.LocalDirectoryScanner import LocalDirectoryScanner
-from src.Scanner.PlexShowProvider import PlexShowProvider
 from src.Scanner.SeriesGroupBuilder import SeriesGroupBuilder
-from src.Utils.NamingTemplate import NAMING_PRESETS
+from src.Web.App import spawn_background_task
 
 logger = logging.getLogger(__name__)
+
+
+async def _seed_library_from_plan(app_state: object, plan: RestructurePlan) -> int:
+    """Seed library_items from a restructure plan's scan data.
+
+    Used when the user cancels or skips the restructure so the local
+    library still has all the AniList matches and cover images that
+    were discovered during the analyze phase.
+    """
+    db = app_state.db  # type: ignore[attr-defined]
+    anilist_client = app_state.anilist_client  # type: ignore[attr-defined]
+    library_id: int | None = getattr(app_state, "restructure_library_id", None)
+    if not library_id:
+        library_id = getattr(app_state, "onboarding_library_id", None)
+    if not library_id:
+        # Try to find or create a library
+        libraries = await db.get_all_libraries()
+        if libraries:
+            library_id = libraries[0]["id"]
+        else:
+            return 0
+
+    group_builder = SeriesGroupBuilder(db, anilist_client)
+    restructurer = LibraryRestructurer(db=db, group_builder=group_builder)
+
+    # Clear stale rows before seeding
+    await db.execute("DELETE FROM library_items WHERE library_id = ?", (library_id,))
+    seeded = await restructurer.seed_library_items(plan, library_id, from_source=True)
+    logger.info("Seeded %d library items from restructure plan (no execute)", seeded)
+    return seeded
+
 
 router = APIRouter(tags=["restructure"])
 
@@ -47,150 +71,14 @@ def _is_restructure_busy(app_state: object) -> bool:
     return False
 
 
-async def _auto_rescan_library(app_state: object) -> None:
-    """Rescan the library that triggered this restructure, if any."""
-    import json
-
-    library_id: int | None = getattr(app_state, "restructure_library_id", None)
-    if not library_id:
-        return
-
-    db = app_state.db  # type: ignore[attr-defined]
-    anilist_client = app_state.anilist_client  # type: ignore[attr-defined]
-
-    library = await db.get_library(library_id)
-    if not library:
-        logger.warning("Auto-rescan: library %d not found", library_id)
-        return
-
-    path_list = json.loads(library["paths"]) if library["paths"] else []
-    if not path_list:
-        return
-
-    logger.info(
-        "Auto-rescanning library %d (%s) after restructure", library_id, library["name"]
-    )
-
-    # Set up progress tracking so the library detail page shows scan status
-    if not hasattr(app_state, "library_scan_progress"):
-        app_state.library_scan_progress = {}  # type: ignore[attr-defined]
-    progress = LibraryScanProgress()
-    app_state.library_scan_progress[library_id] = progress  # type: ignore[attr-defined]
-
-    title_matcher = TitleMatcher(similarity_threshold=0.75)
-    scanner = LibraryScanner(
-        db=db, anilist_client=anilist_client, title_matcher=title_matcher
-    )
-
-    try:
-        stats = await scanner.scan_library(
-            library_id, path_list, progress, force_rescan=False
-        )
-        progress.phase = (
-            f"Done: {stats['matched']} matched, {stats['unmatched']} unmatched"
-        )
-        logger.info(
-            "Auto-rescan complete for library %d: %d matched, %d unmatched, %d pruned",
-            library_id,
-            stats["matched"],
-            stats["unmatched"],
-            stats["pruned"],
-        )
-    except Exception:
-        logger.exception("Auto-rescan failed for library %d", library_id)
-        progress.status = "error"
-        progress.error_message = "Auto-rescan after restructure failed"
-
-
-async def _run_analysis(app_state: object) -> None:
-    """Background coroutine: analyze libraries for restructuring."""
-    config = app_state.config  # type: ignore[attr-defined]
-    db = app_state.db  # type: ignore[attr-defined]
-    anilist_client = app_state.anilist_client  # type: ignore[attr-defined]
-    progress: RestructureProgress = app_state.restructure_progress  # type: ignore[attr-defined]
-    source_mode: str = app_state.restructure_source_mode  # type: ignore[attr-defined]
-    level: str = getattr(app_state, "restructure_operation_level", "full_restructure")  # type: ignore[attr-defined]
-    force_rescan: bool = getattr(app_state, "restructure_force_rescan", False)  # type: ignore[attr-defined]
-
-    group_builder = SeriesGroupBuilder(db, anilist_client)
-
-    # Load naming templates from settings
-    file_tmpl = await db.get_setting("naming.file_template") or ""
-    folder_tmpl = await db.get_setting("naming.folder_template") or ""
-    season_tmpl = await db.get_setting("naming.season_folder_template") or ""
-    movie_tmpl = await db.get_setting("naming.movie_file_template") or ""
-    title_pref = await db.get_setting("app.title_display") or "romaji"
-    illegal_char_repl = await db.get_setting("naming.illegal_char_replacement") or ""
-
-    restructurer = LibraryRestructurer(
-        db=db,
-        group_builder=group_builder,
-        file_template=file_tmpl,
-        folder_template=folder_tmpl,
-        season_folder_template=season_tmpl,
-        movie_file_template=movie_tmpl,
-        title_pref=title_pref,
-        illegal_char_replacement=illegal_char_repl,
-    )
-    plex_client: PlexClient | None = None
-    jellyfin_client: JellyfinClient | None = None
-
-    try:
-        if source_mode == "plex":
-            library_keys: list[str] = app_state.restructure_library_keys  # type: ignore[attr-defined]
-            plex_prefix = await db.get_setting("restructure.plex_path_prefix") or ""
-            local_prefix = await db.get_setting("restructure.local_path_prefix") or ""
-
-            plex_client = PlexClient(url=config.plex.url, token=config.plex.token)
-            provider = PlexShowProvider(
-                plex_client=plex_client,
-                db=db,
-                plex_path_prefix=plex_prefix,
-                local_path_prefix=local_prefix,
-            )
-            show_inputs = await provider.get_shows(library_keys, progress)
-        elif source_mode == "jellyfin":
-            library_ids: list[str] = app_state.restructure_jellyfin_library_ids  # type: ignore[attr-defined]
-            jf_prefix = await db.get_setting("restructure.jellyfin_path_prefix") or ""
-            local_prefix = await db.get_setting("restructure.local_path_prefix") or ""
-
-            jellyfin_client = JellyfinClient(
-                url=config.jellyfin.url, api_key=config.jellyfin.api_key
-            )
-            provider = JellyfinShowProvider(  # type: ignore[assignment]
-                jellyfin_client=jellyfin_client,
-                db=db,
-                jellyfin_path_prefix=jf_prefix,
-                local_path_prefix=local_prefix,
-            )
-            show_inputs = await provider.get_shows(library_ids, progress)
-        else:
-            local_directory: str = app_state.restructure_local_directory  # type: ignore[attr-defined]
-            title_matcher = TitleMatcher(similarity_threshold=0.75)
-            scanner = LocalDirectoryScanner(
-                db=db,
-                anilist_client=anilist_client,
-                title_matcher=title_matcher,
-            )
-            show_inputs = await scanner.scan_directory(
-                local_directory, progress, force_rescan=force_rescan
-            )
-
-        plan = await restructurer.analyze(show_inputs, progress, level=level)
-        app_state.restructure_plan = plan  # type: ignore[attr-defined]
-    except Exception:
-        logger.exception("Library analysis failed")
-        progress.status = "error"
-        progress.error_message = "Library analysis failed unexpectedly"
-    finally:
-        if plex_client:
-            await plex_client.close()
-        if jellyfin_client:
-            await jellyfin_client.close()
-
-
 async def _run_execution(app_state: object) -> None:
-    """Background coroutine: execute restructuring and trigger rescan."""
+    """Background coroutine: execute restructuring, seed library, then hand off.
+
+    The user-facing progress page tracks only file moves + library seeding.
+    Once seeding is done, progress is marked "complete" and the client
+    redirects to the unified library.  Media server refresh continues in a
+    separate background task shown in the floating progress widget.
+    """
     config = app_state.config  # type: ignore[attr-defined]
     db = app_state.db  # type: ignore[attr-defined]
     anilist_client = app_state.anilist_client  # type: ignore[attr-defined]
@@ -218,83 +106,182 @@ async def _run_execution(app_state: object) -> None:
         title_pref=title_pref,
         illegal_char_replacement=illegal_char_repl,
     )
-    plex_client: PlexClient | None = None
-    jellyfin_client: JellyfinClient | None = None
 
     try:
         # Phase 1: Move/rename files
         stats = await restructurer.execute(plan, progress)
         app_state.restructure_stats = stats  # type: ignore[attr-defined]
 
-        # Phase 2: Pre-seed library_items so auto-rescan skips AniList API calls
+        # Clear restructure state so _auto_scan_media_servers proceeds
+        app_state.restructure_plan = None  # type: ignore[attr-defined]
+        app_state.onboarding_restructure_plan = None  # type: ignore[attr-defined]
+        app_state.restructure_progress = None  # type: ignore[attr-defined]
+
+        # Phase 2: Pre-seed library_items for ALL groups.
+        # Enabled groups moved → seed from target paths.
+        # Disabled groups untouched → seed from source paths.
         library_id: int | None = getattr(app_state, "restructure_library_id", None)
         if library_id:
-            progress.phase = "Pre-seeding library mappings"
-            for group in plan.groups:
-                if not group.enabled or not group.anilist_id or not group.target_folder:
-                    continue
-                folder_name = os.path.basename(group.target_folder)
-                await db.upsert_library_item(
-                    library_id=library_id,
-                    folder_path=group.target_folder,
-                    folder_name=folder_name,
-                    anilist_id=group.anilist_id,
-                    anilist_title=group.display_title,
-                    match_confidence=1.0,
-                    match_method="restructure",
-                    series_group_id=group.series_group_id or None,
+            progress.phase = "Indexing library"
+            await db.execute(
+                "DELETE FROM library_items WHERE library_id = ?", (library_id,)
+            )
+
+            enabled_groups = [g for g in plan.groups if g.enabled]
+            disabled_groups = [g for g in plan.groups if not g.enabled]
+
+            if enabled_groups:
+                enabled_plan = RestructurePlan(
+                    groups=enabled_groups,
+                    operation_level=plan.operation_level,
+                )
+                await restructurer.seed_library_items(
+                    enabled_plan, library_id, from_source=False
                 )
 
-        # Phase 3: Media server refresh and wait
+            # Seed disabled groups from their original (source) paths,
+            # and include unchanged/unmatched shows so every scanned
+            # folder appears in the library.
+            disabled_plan = RestructurePlan(
+                groups=disabled_groups,
+                operation_level=plan.operation_level,
+                unchanged_shows=plan.unchanged_shows,
+                unchanged_group_ids=plan.unchanged_group_ids,
+                unmatched_shows=plan.unmatched_shows,
+            )
+            await restructurer.seed_library_items(
+                disabled_plan, library_id, from_source=True
+            )
+
+        # Prevent _auto_scan_media_servers from re-indexing — we just seeded.
+        app_state.library_already_seeded = True  # type: ignore[attr-defined]
+
+        # ---- User-facing work is done — release the progress page ----
+        progress.status = "complete"
+        progress.phase = "Operation complete"
+
+        # Phase 3: Media server refresh runs in background, tracked by the
+        # floating progress widget (not the restructure progress page).
+        spawn_background_task(
+            app_state,
+            _post_restructure_refresh(app_state, config, plan, source_mode, library_id),
+        )
+    except Exception:
+        logger.exception("Restructuring execution failed")
+        progress.status = "error"
+        progress.error_message = "Execution failed unexpectedly"
+
+
+async def _post_restructure_refresh(
+    app_state: object,
+    config: object,
+    plan: RestructurePlan,
+    source_mode: str,
+    library_id: int | None,
+) -> None:
+    """Background: refresh media servers after restructure.
+
+    Tracked by the floating progress widget via ``app_state.media_refresh_progress``.
+    """
+    refresh_progress = RestructureProgress(
+        status="running", phase="Refreshing media server…"
+    )
+    app_state.media_refresh_progress = refresh_progress  # type: ignore[attr-defined]
+    db = app_state.db  # type: ignore[attr-defined]
+
+    plex_client: PlexClient | None = None
+    jellyfin_client: JellyfinClient | None = None
+
+    try:
         if source_mode == "plex":
             library_keys: list[str] = app_state.restructure_library_keys  # type: ignore[attr-defined]
-            plex_client = PlexClient(url=config.plex.url, token=config.plex.token)
+            plex_client = PlexClient(url=config.plex.url, token=config.plex.token)  # type: ignore[attr-defined]
 
-            progress.phase = "Waiting for Plex to index"
+            refresh_progress.phase = "Waiting for Plex to index"
             for key in library_keys:
                 try:
-                    await plex_client.refresh_library_and_wait(
-                        key, poll_interval=2.0, timeout=120.0
-                    )
+                    await plex_client.refresh_library_and_wait(key, poll_interval=2.0)
                 except Exception:
                     logger.exception("Failed to refresh Plex library %s", key)
-            progress.phase = "Library indexed"
 
             if plan.operation_level == "full_restructure":
-                # Delete old plex_media entries for source shows
-                progress.phase = "Cleaning up old entries"
+                refresh_progress.phase = "Cleaning up old entries"
                 for group in plan.groups:
                     if not group.enabled:
                         continue
                     for rk in group.source_rating_keys:
                         await db.delete_plex_media_by_rating_key(rk)
 
-        # Phase 3: Jellyfin-specific post-execution
         elif (
             source_mode == "jellyfin"
-            and config.jellyfin.url
-            and config.jellyfin.api_key
+            and config.jellyfin.url  # type: ignore[attr-defined]
+            and config.jellyfin.api_key  # type: ignore[attr-defined]
         ):
             jellyfin_client = JellyfinClient(
-                url=config.jellyfin.url, api_key=config.jellyfin.api_key
+                url=config.jellyfin.url, api_key=config.jellyfin.api_key  # type: ignore[attr-defined]
             )
-            progress.phase = "Waiting for Jellyfin to index"
+            refresh_progress.phase = "Waiting for Jellyfin to index"
             try:
                 await jellyfin_client.refresh_library_and_wait(
-                    poll_interval=5.0, timeout=600.0
+                    poll_interval=5.0, inactivity_timeout=120.0
                 )
             except Exception:
                 logger.exception("Failed to refresh Jellyfin library")
 
-        progress.status = "complete"
-        progress.phase = "Operation complete"
+        if source_mode == "local":
+            if config.plex.url and config.plex.token:  # type: ignore[attr-defined]
+                refresh_progress.phase = "Waiting for Plex to re-index"
+                plex_client = PlexClient(url=config.plex.url, token=config.plex.token)  # type: ignore[attr-defined]
+                try:
+                    keys = (
+                        list(config.plex.anime_library_keys)  # type: ignore[attr-defined]
+                        if config.plex.anime_library_keys  # type: ignore[attr-defined]
+                        else None
+                    )
+                    if keys:
+                        for key in keys:
+                            await plex_client.refresh_library_and_wait(
+                                key, poll_interval=3.0
+                            )
+                    else:
+                        libs = await plex_client.get_libraries()
+                        for lib in libs:
+                            await plex_client.refresh_library_and_wait(
+                                lib.key, poll_interval=3.0
+                            )
+                except Exception:
+                    logger.exception("Local restructure: Plex refresh failed")
+                finally:
+                    await plex_client.close()
+                    plex_client = None
 
-        # Auto-rescan affected library if launched from library context
-        await _auto_rescan_library(app_state)
+            if config.jellyfin.url and config.jellyfin.api_key:  # type: ignore[attr-defined]
+                refresh_progress.phase = "Waiting for Jellyfin to re-index"
+                jellyfin_client = JellyfinClient(
+                    url=config.jellyfin.url, api_key=config.jellyfin.api_key  # type: ignore[attr-defined]
+                )
+                try:
+                    await jellyfin_client.refresh_library_and_wait(
+                        poll_interval=5.0, inactivity_timeout=120.0
+                    )
+                except Exception:
+                    logger.exception("Local restructure: Jellyfin refresh failed")
+                finally:
+                    await jellyfin_client.close()
+                    jellyfin_client = None
+
+            refresh_progress.phase = "Running metadata scans"
+            from src.Web.Routes.Onboarding import _auto_scan_media_servers
+
+            await _auto_scan_media_servers(app_state)
+
+        refresh_progress.status = "complete"
+        refresh_progress.phase = "Media server refresh complete"
+        logger.info("Post-restructure media server refresh complete")
     except Exception:
-        logger.exception("Restructuring execution failed")
-        progress.status = "error"
-        progress.error_message = "Execution failed unexpectedly"
+        logger.exception("Post-restructure media server refresh failed")
+        refresh_progress.status = "error"
+        refresh_progress.phase = "Media server refresh failed"
     finally:
         if plex_client:
             await plex_client.close()
@@ -305,12 +292,8 @@ async def _run_execution(app_state: object) -> None:
 @router.get("/restructure", response_class=HTMLResponse)
 async def restructure_wizard(request: Request) -> HTMLResponse:
     """Render the restructure wizard landing page."""
-    config = request.app.state.config
     db = request.app.state.db
     templates = request.app.state.templates
-
-    plex_prefix = await db.get_setting("restructure.plex_path_prefix") or ""
-    local_prefix = await db.get_setting("restructure.local_path_prefix") or ""
 
     # Check if coming from a library context
     library_context = None
@@ -330,41 +313,6 @@ async def restructure_wizard(request: Request) -> HTMLResponse:
         except (ValueError, TypeError):
             pass
 
-    # Fetch Plex libraries for selection
-    plex_libraries: list[dict[str, str]] = []
-    plex_configured = bool(config.plex.url and config.plex.token)
-    if plex_configured:
-        try:
-            plex_client = PlexClient(url=config.plex.url, token=config.plex.token)
-            libs = await plex_client.get_libraries()
-            plex_libraries = [
-                {"key": lib.key, "title": lib.title}
-                for lib in libs
-                if lib.type in ("show", "movie")
-            ]
-            await plex_client.close()
-        except Exception:
-            logger.warning("Could not fetch Plex libraries")
-
-    # Fetch Jellyfin libraries for selection
-    jellyfin_libraries: list[dict[str, str]] = []
-    jellyfin_configured = bool(config.jellyfin.url and config.jellyfin.api_key)
-    jellyfin_prefix = await db.get_setting("restructure.jellyfin_path_prefix") or ""
-    if jellyfin_configured:
-        try:
-            jellyfin_client = JellyfinClient(
-                url=config.jellyfin.url, api_key=config.jellyfin.api_key
-            )
-            jf_libs = await jellyfin_client.get_libraries()
-            jellyfin_libraries = [
-                {"id": lib.id, "name": lib.name}
-                for lib in jf_libs
-                if lib.type in ("tvshows", "movies", "mixed", "")
-            ]
-            await jellyfin_client.close()
-        except Exception:
-            logger.warning("Could not fetch Jellyfin libraries")
-
     # Load current naming settings
     naming_values: dict[str, str] = {}
     for key in [
@@ -372,122 +320,25 @@ async def restructure_wizard(request: Request) -> HTMLResponse:
         "naming.movie_file_template",
         "naming.folder_template",
         "naming.season_folder_template",
+        "naming.illegal_char_replacement",
         "app.title_display",
     ]:
         naming_values[key] = await db.get_setting(key) or ""
+
+    # Default browse path: first library path or /media
+    initial_browse_path = "/media"
+    if library_context and library_context["paths"]:
+        initial_browse_path = library_context["paths"][0]
 
     return templates.TemplateResponse(
         "restructure_wizard.html",
         {
             "request": request,
-            "plex_prefix": plex_prefix,
-            "local_prefix": local_prefix,
-            "plex_libraries": plex_libraries,
-            "plex_configured": plex_configured,
-            "jellyfin_libraries": jellyfin_libraries,
-            "jellyfin_configured": jellyfin_configured,
-            "jellyfin_prefix": jellyfin_prefix,
             "library_context": library_context,
             "naming_values": naming_values,
-            "naming_presets": NAMING_PRESETS,
+            "initial_browse_path": initial_browse_path,
         },
     )
-
-
-@router.post("/restructure/analyze")
-async def restructure_analyze(request: Request) -> RedirectResponse:
-    """Start background analysis, redirect to progress page."""
-    if _is_restructure_busy(request.app.state):
-        return RedirectResponse(
-            url="/restructure?error=A+restructure+operation+is+already+running",
-            status_code=303,
-        )
-
-    config = request.app.state.config
-    form = await request.form()
-
-    source_mode = str(form.get("source_mode", "plex"))
-    if source_mode not in ("plex", "jellyfin", "local"):
-        source_mode = "plex"
-
-    operation_level = str(form.get("operation_level", "full_restructure"))
-    if operation_level not in (
-        "folder_rename",
-        "folder_file_rename",
-        "full_restructure",
-    ):
-        operation_level = "full_restructure"
-
-    if source_mode == "plex":
-        if not config.plex.url or not config.plex.token:
-            return RedirectResponse(
-                url="/restructure?error=Plex+not+configured", status_code=303
-            )
-        selected_keys = form.getlist("library_key")
-        if not selected_keys:
-            return RedirectResponse(
-                url="/restructure?error=No+libraries+selected", status_code=303
-            )
-        request.app.state.restructure_library_keys = [str(k) for k in selected_keys]
-    elif source_mode == "jellyfin":
-        if not config.jellyfin.url or not config.jellyfin.api_key:
-            return RedirectResponse(
-                url="/restructure?error=Jellyfin+not+configured", status_code=303
-            )
-        selected_ids = form.getlist("jellyfin_library_id")
-        if not selected_ids:
-            return RedirectResponse(
-                url="/restructure?error=No+Jellyfin+libraries+selected", status_code=303
-            )
-        request.app.state.restructure_jellyfin_library_ids = [
-            str(i) for i in selected_ids
-        ]
-    else:
-        local_directory = str(form.get("local_directory", "")).strip()
-        if not local_directory or not os.path.isdir(local_directory):
-            return RedirectResponse(
-                url="/restructure?error=Invalid+directory+path", status_code=303
-            )
-        request.app.state.restructure_local_directory = local_directory
-
-    force_rescan = str(form.get("force_rescan", "")).lower() in ("on", "true", "1")
-
-    # Persist naming/display settings from the wizard form
-    db = request.app.state.db
-    naming_keys = [
-        "naming.file_template",
-        "naming.movie_file_template",
-        "naming.folder_template",
-        "naming.season_folder_template",
-        "app.title_display",
-    ]
-    for key in naming_keys:
-        val = str(form.get(key, "")).strip()
-        if val:
-            await db.set_setting(key, val)
-
-    # Track library_id for auto-rescan after execution
-    library_id_str = str(form.get("library_id", "")).strip()
-    restructure_library_id: int | None = None
-    if library_id_str:
-        try:
-            restructure_library_id = int(library_id_str)
-        except (ValueError, TypeError):
-            pass
-
-    # Clear all previous-run state before starting fresh
-    request.app.state.restructure_source_mode = source_mode
-    request.app.state.restructure_operation_level = operation_level
-    request.app.state.restructure_force_rescan = force_rescan
-    request.app.state.restructure_library_id = restructure_library_id
-    request.app.state.restructure_progress = RestructureProgress()
-    request.app.state.restructure_plan = None
-    request.app.state.restructure_exec_progress = None
-    request.app.state.restructure_stats = None
-
-    asyncio.create_task(_run_analysis(request.app.state))
-
-    return RedirectResponse(url="/restructure/progress", status_code=303)
 
 
 @router.get("/restructure/progress", response_class=HTMLResponse)
@@ -524,7 +375,7 @@ async def restructure_progress_api(request: Request) -> JSONResponse:
             if exec_progress.started_at > 0
             else 0
         )
-        result_url = "/restructure/results"
+        result_url = "/library?source=local"
         return JSONResponse(
             {
                 "status": exec_progress.status,
@@ -583,6 +434,41 @@ async def restructure_preview(request: Request) -> Response:
     )
 
 
+@router.post("/restructure/cancel")
+async def restructure_cancel(request: Request) -> RedirectResponse:
+    """Cancel a pending restructure plan and trigger deferred scans."""
+    db = request.app.state.db
+    plan = getattr(request.app.state, "restructure_plan", None)
+
+    # Seed library from the plan's scan data before discarding it
+    if plan:
+        await _seed_library_from_plan(request.app.state, plan)
+        # Flag so _auto_scan_media_servers skips redundant local index
+        request.app.state.library_already_seeded = True  # type: ignore[attr-defined]
+
+    # Clear all restructure state
+    request.app.state.restructure_plan = None
+    request.app.state.onboarding_restructure_plan = None
+    request.app.state.restructure_progress = None
+
+    # Dismiss the notification
+    await db.dismiss_notifications_by_url("/restructure/preview")
+    await db.clear_dismissed_notifications()
+
+    # Trigger the deferred media server scans now that the restructure
+    # is no longer blocking them.
+    from src.Web.Routes.Onboarding import _auto_scan_media_servers
+
+    spawn_background_task(
+        request.app.state, _auto_scan_media_servers(request.app.state)
+    )
+
+    return RedirectResponse(
+        url="/library?message=Restructure+skipped.+Media+server+scans+started.",
+        status_code=303,
+    )
+
+
 @router.post("/restructure/execute")
 async def restructure_execute(request: Request) -> RedirectResponse:
     """Execute selected restructure groups."""
@@ -599,6 +485,7 @@ async def restructure_execute(request: Request) -> RedirectResponse:
             url="/restructure?error=No+plan+available", status_code=303
         )
 
+    db = request.app.state.db
     form = await request.form()
     enabled_keys = {str(v) for v in form.getlist("group_key")}
 
@@ -607,14 +494,37 @@ async def restructure_execute(request: Request) -> RedirectResponse:
         group.enabled = group.group_key in enabled_keys
 
     if not any(g.enabled for g in plan.groups):
+        # No groups selected — seed library from plan data, then trigger scans
+        await _seed_library_from_plan(request.app.state, plan)
+        request.app.state.library_already_seeded = True  # type: ignore[attr-defined]
+
+        request.app.state.restructure_plan = None
+        request.app.state.onboarding_restructure_plan = None
+        request.app.state.restructure_progress = None
+        await db.dismiss_notifications_by_url("/restructure/preview")
+        await db.clear_dismissed_notifications()
+
+        from src.Web.Routes.Onboarding import _auto_scan_media_servers
+
+        spawn_background_task(
+            request.app.state,
+            _auto_scan_media_servers(request.app.state),
+        )
         return RedirectResponse(
-            url="/restructure/preview?error=No+groups+selected", status_code=303
+            url="/library?message=No+changes+applied.+Library+indexed.+Media+server+scans+started.",
+            status_code=303,
         )
 
-    request.app.state.restructure_exec_progress = RestructureProgress()
+    request.app.state.restructure_exec_progress = RestructureProgress(
+        status="running", phase="Starting restructure…"
+    )
     request.app.state.restructure_stats = None
 
-    asyncio.create_task(_run_execution(request.app.state))
+    # Dismiss the "review plan" notification now that user has approved
+    await db.dismiss_notifications_by_url("/restructure/preview")
+    await db.clear_dismissed_notifications()
+
+    spawn_background_task(request.app.state, _run_execution(request.app.state))
 
     return RedirectResponse(url="/restructure/progress", status_code=303)
 

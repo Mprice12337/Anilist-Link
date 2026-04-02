@@ -1107,6 +1107,7 @@ async def onboarding_restructure_analyze(request: Request) -> JSONResponse:
     body = await request.json()
     source_dirs: list[str] = body.get("source_dirs") or []
     output_dir: str = (body.get("output_dir") or "").strip()
+    force_rescan: bool = bool(body.get("force_rescan", False))
 
     # Map onboarding UI values to internal level identifiers
     _level_map = {"full": "full_restructure", "quick": "folder_file_rename"}
@@ -1198,7 +1199,9 @@ async def onboarding_restructure_analyze(request: Request) -> JSONResponse:
         for src_dir in source_dirs:
             progress.phase = f"Scanning {src_dir}"
             logger.info("Onboarding scan: starting directory %r", src_dir)
-            shows = await scanner.scan_directory(src_dir, progress)
+            shows = await scanner.scan_directory(
+                src_dir, progress, force_rescan=force_rescan
+            )
             matched = sum(1 for s in shows if s.anilist_id)
             unmatched = len(shows) - matched
             logger.info(
