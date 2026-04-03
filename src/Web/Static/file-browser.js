@@ -245,6 +245,33 @@ function FileBrowser(opts) {
         browsePath(path, opts.srcListId, opts.srcPathId, 'multi');
     };
 
+    /**
+     * Return effective source dirs: explicit selections, or the current
+     * browse directory as an implicit fallback.  When the fallback is used,
+     * the browse path is promoted into sourceDirs and the UI is updated.
+     */
+    this.getEffectiveSourceDirs = function () {
+        if (self.state.sourceDirs.length > 0) return self.state.sourceDirs;
+        if (self.state.srcBrowsePath && self.state.srcBrowsePath !== '/') {
+            self.state.sourceDirs.push(self.state.srcBrowsePath);
+            renderSourceTags();
+            refreshSelectionState(opts.srcListId, 'multi');
+        }
+        return self.state.sourceDirs;
+    };
+
+    /**
+     * Return effective output dir: explicit selection, or the current
+     * browse directory as an implicit fallback.
+     */
+    this.getEffectiveOutputDir = function () {
+        if (self.state.outputDir) return self.state.outputDir;
+        self.state.outputDir = self.state.outBrowsePath;
+        el(opts.outSelectedId).textContent = self.state.outBrowsePath;
+        refreshSelectionState(opts.outListId, 'single');
+        return self.state.outputDir;
+    };
+
     /** Start both browsers. */
     this.init = function () {
         browsePath(self.state.srcBrowsePath, opts.srcListId, opts.srcPathId, 'multi');

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Restructure Preview — Anilist-Link{% endblock %}
+{% block title %}Anilist-Link: Restructure Preview{% endblock %}
 
 {% block content %}
 {% if operation_level == "folder_rename" %}
@@ -55,25 +55,30 @@
                 <input type="checkbox" name="group_key" value="{{ group.group_key }}" checked>
                 <span class="toggle-label restructure-group-title">{{ group.display_title }}</span>
             </label>
-            {% if operation_level == "full_restructure" %}
-                {% if group.operation_type.startswith("standalone") %}
-                    {% if group.operation_type == "standalone_movie" %}
-                    <span class="badge badge-muted">Movie</span>
-                    {% elif group.operation_type == "standalone_ova" %}
-                    <span class="badge badge-muted">OVA</span>
-                    {% elif group.operation_type == "standalone_special" %}
-                    <span class="badge badge-muted">Special</span>
-                    {% elif group.operation_type == "standalone_ona" %}
-                    <span class="badge badge-muted">ONA</span>
-                    {% else %}
-                    <span class="badge badge-muted">TV</span>
-                    {% endif %}
+            {% if group.operation_type.startswith("standalone") %}
+                {% if group.operation_type == "standalone_movie" %}
+                <span class="badge badge-muted">Movie</span>
+                {% elif group.operation_type == "standalone_ova" %}
+                <span class="badge badge-muted">OVA</span>
+                {% elif group.operation_type == "standalone_special" %}
+                <span class="badge badge-muted">Special</span>
+                {% elif group.operation_type == "standalone_ona" %}
+                <span class="badge badge-muted">ONA</span>
                 {% else %}
-                <span class="badge badge-muted">{{ group.season_count }} seasons</span>
+                <span class="badge badge-muted">TV</span>
                 {% endif %}
-            <span class="badge badge-muted">{{ group.file_moves | length }} files</span>
-            {% elif operation_level == "folder_file_rename" %}
-            <span class="badge badge-muted">{{ group.file_moves | length }} file{{ "s" if group.file_moves | length != 1 else "" }}</span>
+            {% endif %}
+            {% set subs = grouped_moves.get(group.group_key, []) %}
+            {% set ns = namespace(dirs=0, files=0) %}
+            {% for sf in subs %}
+                {% if sf.name %}{% set ns.dirs = ns.dirs + 1 %}{% endif %}
+                {% set ns.files = ns.files + sf.files | length %}
+            {% endfor %}
+            {% if ns.dirs %}
+            <span class="badge badge-muted">{{ ns.dirs }} subfolder{{ "s" if ns.dirs != 1 else "" }}</span>
+            {% endif %}
+            {% if ns.files %}
+            <span class="badge badge-muted">{{ ns.files }} file{{ "s" if ns.files != 1 else "" }}</span>
             {% endif %}
         </div>
 
@@ -105,7 +110,7 @@
             </div>
             <div class="restructure-path-section">
                 <span class="restructure-path-label">New folder name:</span>
-                <code class="restructure-path">{{ group.display_title }}</code>
+                <code class="restructure-path">{{ group.target_folder.split('/')[-1] }}</code>
             </div>
             {% endif %}
         </div>
@@ -118,32 +123,83 @@
         </div>
         {% endif %}
 
-        {% if group.file_moves %}
-        <details class="restructure-details">
-            <summary class="text-muted">Show file changes ({{ group.file_moves | length }})</summary>
-            <table class="table" style="margin-top: 0.5rem">
-                <thead>
-                    <tr>
-                        <th>Original</th>
-                        <th>Renamed</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for fm in group.file_moves %}
-                    <tr>
-                        <td><code>{{ fm.original_filename }}</code></td>
-                        <td>
-                            {% if fm.original_filename != fm.renamed_filename %}
-                            <code>{{ fm.renamed_filename }}</code>
-                            {% else %}
-                            <span class="text-muted">{{ fm.renamed_filename }}</span>
-                            {% endif %}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </details>
+        {# -- Unified subfolder-grouped file change view (all operation levels) -- #}
+        {% set subfolders = grouped_moves.get(group.group_key, []) %}
+        {% if subfolders %}
+        <div class="restructure-subfolders" style="margin-top: 0.75rem">
+            {% for sf in subfolders %}
+            {% if sf.name %}
+            <div style="padding: 0.4rem 0; border-top: 1px solid var(--border)">
+                <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; flex-wrap: wrap">
+                    <span style="color: var(--text-muted)">&#x1F4C1;</span>
+                    {% if sf.name != sf.renamed %}
+                    <code>{{ sf.name }}</code>
+                    <span style="color: var(--text-muted)">&rarr;</span>
+                    <code style="color: var(--accent)">{{ sf.renamed }}</code>
+                    {% else %}
+                    <code>{{ sf.name }}</code>
+                    {% endif %}
+                    {% if sf.source %}
+                    <span class="text-muted" style="font-size: 0.8rem">&larr; {{ sf.source }}</span>
+                    {% endif %}
+                    {% if sf.files %}
+                    <span class="text-muted" style="font-size: 0.8rem">({{ sf.files | length }} file{{ "s" if sf.files | length != 1 else "" }})</span>
+                    {% endif %}
+                </div>
+                {% if sf.files %}
+                <details style="margin-left: 1.75rem; margin-top: 0.25rem">
+                    <summary class="text-muted" style="font-size: 0.82rem; cursor: pointer">
+                        Show files
+                    </summary>
+                    <table class="table" style="margin-top: 0.35rem; font-size: 0.85rem">
+                        <thead><tr><th>Original</th><th>Renamed</th></tr></thead>
+                        <tbody>
+                        {% for fm in sf.files %}
+                        <tr>
+                            <td><code>{{ fm.original_filename }}</code></td>
+                            <td>
+                                {% if fm.original_filename != fm.renamed_filename %}
+                                <code>{{ fm.renamed_filename }}</code>
+                                {% else %}
+                                <span class="text-muted">(no change)</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </details>
+                {% endif %}
+            </div>
+            {% elif sf.files %}
+            {# Files directly in the show folder (no subfolder) #}
+            <div style="padding: 0.4rem 0; border-top: 1px solid var(--border)">
+                <details>
+                    <summary class="text-muted" style="font-size: 0.82rem; cursor: pointer">
+                        {{ sf.files | length }} file{{ "s" if sf.files | length != 1 else "" }} in root folder
+                    </summary>
+                    <table class="table" style="margin-top: 0.35rem; font-size: 0.85rem">
+                        <thead><tr><th>Original</th><th>Renamed</th></tr></thead>
+                        <tbody>
+                        {% for fm in sf.files %}
+                        <tr>
+                            <td><code>{{ fm.original_filename }}</code></td>
+                            <td>
+                                {% if fm.original_filename != fm.renamed_filename %}
+                                <code>{{ fm.renamed_filename }}</code>
+                                {% else %}
+                                <span class="text-muted">(no change)</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </details>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
         {% endif %}
     </div>
     {% endfor %}
@@ -165,8 +221,10 @@
             Execute Restructuring
         </button>
         {% endif %}
-        <a href="/restructure" class="btn btn-secondary">Cancel</a>
+        <button type="button" class="btn btn-secondary"
+                onclick="document.getElementById('skip-form').submit()">Skip Restructure</button>
     </div>
 </form>
+<form id="skip-form" method="post" action="/restructure/cancel" style="display:none"></form>
 {% endif %}
 {% endblock %}

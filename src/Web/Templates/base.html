@@ -125,6 +125,10 @@
                         wasActive = false;
                         isMinimized = false;
                         saveState();
+                        // Immediately refresh notifications so the user sees
+                        // the "Review Plan" prompt without waiting for the
+                        // next 5-second notification poll cycle.
+                        if (window._refreshNotifications) window._refreshNotifications();
                     }
                     return;
                 }
@@ -223,6 +227,7 @@
             }
         };
 
+        window._refreshNotifications = pollNotifications;
         pollNotifications();
         setInterval(pollNotifications, 5000);
     })();

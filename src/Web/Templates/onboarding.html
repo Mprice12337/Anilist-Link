@@ -416,10 +416,10 @@
                 </div>
             </div>
 
-            <!-- Advanced: Naming templates (hidden in skip mode) -->
-            <details class="advanced-section" id="step2-templates-section">
-                <summary>Advanced — Naming Templates</summary>
-                <div class="advanced-body">
+            <!-- Naming templates (hidden in skip mode) -->
+            <div id="step2-templates-section">
+                <div class="section-label">Naming Templates</div>
+                <div>
                     <!-- Preset chips -->
                     <div style="margin-bottom:1rem">
                         <div class="text-muted" style="font-size:0.82rem;margin-bottom:0.4rem">Quick presets</div>
@@ -500,7 +500,7 @@
                         </div>
                     </details>
                 </div>
-            </details>
+            </div>
 
             <!-- Analyze / Execute section (hidden in skip mode) -->
             <div style="margin-top: 1.5rem" id="step2-analyze-section">
@@ -1041,7 +1041,7 @@
 <script src="/static/naming-templates.js"></script>
 <script src="/static/file-browser.js"></script>
 <script>
-document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init(); });
+document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init({ defaultPreset: 'english_season_names' }); });
 
 (function () {
     'use strict';
@@ -1316,15 +1316,18 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
         }
 
         syncFromFb();
+        // Use current browse directory as implicit selection if nothing selected
+        if (state.sourceDirs.length === 0) {
+            var eff = fb.getEffectiveSourceDirs();
+            state.sourceDirs = eff.slice();
+        }
         if (state.sourceDirs.length === 0) {
             alert('Please add at least one source directory.');
             return;
         }
         if (!state.outputDir) {
-            // Fall back to the directory the user is currently browsing
-            state.outputDir = fb.state.outBrowsePath;
-            fb.state.outputDir = fb.state.outBrowsePath;
-            el('out-selected-path').textContent = fb.state.outBrowsePath;
+            fb.getEffectiveOutputDir();
+            state.outputDir = fb.state.outputDir;
         }
 
         // Capture template values before navigating away from step 2
@@ -1338,6 +1341,7 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
                 season: el('tpl-season').value || null,
                 movie: el('tpl-movie').value || null,
                 illegal_char_replacement: el('tpl-illegal').value,
+                title_pref: NamingTemplates.getSelectedTitlePref() || null,
             },
         };
 

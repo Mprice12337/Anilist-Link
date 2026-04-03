@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import time
 
 from fastapi import APIRouter, Request
@@ -11,12 +13,13 @@ from starlette.responses import Response
 
 from src.Clients.JellyfinClient import JellyfinClient
 from src.Clients.PlexClient import PlexClient
+from src.Matching.TitleMatcher import TitleMatcher
 from src.Scanner.LibraryRestructurer import (
     LibraryRestructurer,
     RestructurePlan,
     RestructureProgress,
 )
-from src.Scanner.SeriesGroupBuilder import SeriesGroupBuilder
+from src.Scanner.LocalDirectoryScanner import LocalDirectoryScanner
 from src.Web.App import spawn_background_task
 
 logger = logging.getLogger(__name__)
@@ -42,8 +45,7 @@ async def _seed_library_from_plan(app_state: object, plan: RestructurePlan) -> i
         else:
             return 0
 
-    group_builder = SeriesGroupBuilder(db, anilist_client)
-    restructurer = LibraryRestructurer(db=db, group_builder=group_builder)
+    restructurer = await LibraryRestructurer.from_settings(db, anilist_client)
 
     # Clear stale rows before seeding
     await db.execute("DELETE FROM library_items WHERE library_id = ?", (library_id,))
@@ -71,6 +73,144 @@ def _is_restructure_busy(app_state: object) -> bool:
     return False
 
 
+async def _run_analysis_background(
+    app_state: object,
+    source_dirs: list[str],
+    output_dir: str,
+    level: str,
+    force_rescan: bool,
+    templates: dict[str, str] | None = None,
+) -> None:
+    """Background coroutine: run restructure analysis without blocking the request.
+
+    Updates ``app_state.restructure_progress`` for the floating widget and
+    creates a notification with a link to ``/restructure/preview`` on success.
+
+    When *templates* is provided, the restructurer is built with those values
+    instead of reading from the database (so cancelling analysis doesn't
+    overwrite the last applied naming settings).
+    """
+    db = app_state.db  # type: ignore[attr-defined]
+    anilist_client = app_state.anilist_client  # type: ignore[attr-defined]
+    progress: RestructureProgress = app_state.restructure_progress  # type: ignore[attr-defined]
+
+    try:
+        if templates:
+            from src.Scanner.SeriesGroupBuilder import SeriesGroupBuilder
+
+            group_builder = SeriesGroupBuilder(db, anilist_client)
+            restructurer = LibraryRestructurer(
+                db=db,
+                group_builder=group_builder,
+                file_template=templates.get("naming.file_template", ""),
+                folder_template=templates.get("naming.folder_template", ""),
+                season_folder_template=templates.get(
+                    "naming.season_folder_template", ""
+                ),
+                movie_file_template=templates.get("naming.movie_file_template", ""),
+                title_pref=templates.get("app.title_display", "romaji"),
+                illegal_char_replacement=templates.get(
+                    "naming.illegal_char_replacement", ""
+                ),
+            )
+        else:
+            restructurer = await LibraryRestructurer.from_settings(db, anilist_client)
+        title_matcher = TitleMatcher(similarity_threshold=0.75)
+        scanner = LocalDirectoryScanner(
+            db=db, anilist_client=anilist_client, title_matcher=title_matcher
+        )
+
+        all_shows = []
+        for src_dir in source_dirs:
+            progress.phase = f"Scanning {src_dir}"
+            logger.info("Restructure analyze (bg): scanning %r", src_dir)
+            shows = await scanner.scan_directory(
+                src_dir, progress, force_rescan=force_rescan
+            )
+            matched = sum(1 for s in shows if s.anilist_id)
+            logger.info(
+                "Restructure analyze (bg): %r -> %d folders (%d matched, %d unmatched)",
+                src_dir,
+                len(shows),
+                matched,
+                len(shows) - matched,
+            )
+            all_shows.extend(shows)
+
+        logger.info(
+            "Restructure analyze (bg): total=%d, calling analyze level=%r",
+            len(all_shows),
+            level,
+        )
+
+        plan = await restructurer.analyze(
+            all_shows, progress, level=level, output_dir=output_dir or None
+        )
+        app_state.onboarding_restructure_plan = plan  # type: ignore[attr-defined]
+
+        # Create/reuse a library for post-restructure seeding
+        lib_paths = [output_dir] if output_dir else list(source_dirs)
+        libraries = await db.get_all_libraries()
+        if libraries:
+            lib_id = libraries[0]["id"]
+            await db.update_library(lib_id, libraries[0]["name"], json.dumps(lib_paths))
+        else:
+            lib_id = await db.create_library("My Library", json.dumps(lib_paths))
+        app_state.onboarding_library_id = lib_id  # type: ignore[attr-defined]
+
+        if plan.total_groups > 0:
+            app_state.restructure_plan = plan  # type: ignore[attr-defined]
+            app_state.restructure_source_mode = "local"  # type: ignore[attr-defined]
+            app_state.restructure_library_keys = []  # type: ignore[attr-defined]
+            app_state.restructure_library_id = lib_id  # type: ignore[attr-defined]
+
+        app_state.onboarding_restructure_conflicts = (  # type: ignore[attr-defined]
+            LibraryRestructurer.detect_conflicts(plan)
+        )
+        app_state.onboarding_source_dirs = source_dirs  # type: ignore[attr-defined]
+        app_state.onboarding_output_dir = output_dir  # type: ignore[attr-defined]
+
+        progress.status = "complete"
+        progress.phase = (
+            f"Analysis complete: {plan.total_groups} shows,"
+            f" {plan.total_files} files"
+        )
+
+        if plan.total_groups > 0:
+            await db.add_notification(
+                notification_type="success",
+                message=(
+                    f"Library scan complete — {plan.total_groups} shows,"
+                    f" {plan.total_files} files ready to organize."
+                    " Review before applying."
+                ),
+                action_url="/restructure/preview",
+                action_label="Review Plan",
+            )
+        else:
+            matched = sum(1 for s in all_shows if s.anilist_id)
+            await db.add_notification(
+                notification_type="info",
+                message=(
+                    f"Analysis complete — scanned {len(all_shows)} folders"
+                    f" ({matched} matched). No changes needed; all folders"
+                    " already match the target naming convention."
+                ),
+                action_url="/",
+                action_label="Dashboard",
+            )
+
+        logger.info(
+            "Restructure analyze (bg) complete: %d groups, %d files",
+            plan.total_groups,
+            plan.total_files,
+        )
+    except Exception as exc:
+        logger.exception("Restructure background analysis failed")
+        progress.status = "error"
+        progress.error_message = str(exc)
+
+
 async def _run_execution(app_state: object) -> None:
     """Background coroutine: execute restructuring, seed library, then hand off.
 
@@ -86,26 +226,7 @@ async def _run_execution(app_state: object) -> None:
     plan: RestructurePlan = app_state.restructure_plan  # type: ignore[attr-defined]
     source_mode: str = app_state.restructure_source_mode  # type: ignore[attr-defined]
 
-    group_builder = SeriesGroupBuilder(db, anilist_client)
-
-    # Load naming templates from settings (needed for season dir creation)
-    file_tmpl = await db.get_setting("naming.file_template") or ""
-    folder_tmpl = await db.get_setting("naming.folder_template") or ""
-    season_tmpl = await db.get_setting("naming.season_folder_template") or ""
-    movie_tmpl = await db.get_setting("naming.movie_file_template") or ""
-    title_pref = await db.get_setting("app.title_display") or "romaji"
-    illegal_char_repl = await db.get_setting("naming.illegal_char_replacement") or ""
-
-    restructurer = LibraryRestructurer(
-        db=db,
-        group_builder=group_builder,
-        file_template=file_tmpl,
-        folder_template=folder_tmpl,
-        season_folder_template=season_tmpl,
-        movie_file_template=movie_tmpl,
-        title_pref=title_pref,
-        illegal_char_replacement=illegal_char_repl,
-    )
+    restructurer = await LibraryRestructurer.from_settings(db, anilist_client)
 
     try:
         # Phase 1: Move/rename files
@@ -289,9 +410,103 @@ async def _post_restructure_refresh(
             await jellyfin_client.close()
 
 
+@router.post("/api/restructure/analyze")
+async def restructure_analyze_async(request: Request) -> JSONResponse:
+    """Start restructure analysis as a background task and return immediately.
+
+    The floating progress widget tracks progress via ``/api/progress``.
+    A notification with a link to ``/restructure/preview`` appears on completion.
+    """
+    if _is_restructure_busy(request.app.state):
+        return JSONResponse(
+            {"ok": False, "error": "A restructure operation is already running"},
+            status_code=409,
+        )
+
+    body = await request.json()
+    source_dirs: list[str] = body.get("source_dirs") or []
+    output_dir: str = (body.get("output_dir") or "").strip()
+    force_rescan: bool = bool(body.get("force_rescan", False))
+
+    _level_map = {"full": "full_restructure", "quick": "folder_file_rename"}
+    level_raw: str = body.get("level") or "full"
+    level: str = _level_map.get(level_raw, level_raw)
+
+    db = request.app.state.db
+
+    # Collect template overrides — saved to DB only on successful execution,
+    # not during analysis, so cancelling preserves the last applied settings.
+    templates_data: dict = body.get("templates") or {}
+    pending_templates: dict[str, str] = {}
+    for key, setting_key in [
+        ("episode", "naming.file_template"),
+        ("folder", "naming.folder_template"),
+        ("season", "naming.season_folder_template"),
+        ("movie", "naming.movie_file_template"),
+        ("illegal_char_replacement", "naming.illegal_char_replacement"),
+        ("title_pref", "app.title_display"),
+    ]:
+        val = (templates_data.get(key) or "").strip()
+        if val:
+            pending_templates[setting_key] = val
+
+    if not source_dirs:
+        return JSONResponse(
+            {"ok": False, "error": "At least one source directory is required"},
+            status_code=400,
+        )
+
+    # Clear previous plan / notification
+    request.app.state.restructure_plan = None
+    request.app.state.onboarding_restructure_plan = None
+    await db.dismiss_notifications_by_url("/restructure/preview")
+    await db.clear_dismissed_notifications()
+
+    # Store pending templates so they can be applied on execution
+    request.app.state.pending_naming_templates = pending_templates
+
+    # Set up progress and launch background task
+    progress = RestructureProgress(status="running")
+    request.app.state.restructure_progress = progress
+
+    spawn_background_task(
+        request.app.state,
+        _run_analysis_background(
+            request.app.state,
+            source_dirs=source_dirs,
+            output_dir=output_dir,
+            level=level,
+            force_rescan=force_rescan,
+            templates=pending_templates,
+        ),
+    )
+
+    logger.info(
+        "Restructure analyze started in background — level=%r, sources=%s",
+        level,
+        source_dirs,
+    )
+
+    # Determine redirect target
+    library_id = body.get("library_id")
+    if library_id:
+        redirect = f"/library/{library_id}"
+    else:
+        redirect = "/"
+
+    return JSONResponse({"ok": True, "redirect": redirect})
+
+
 @router.get("/restructure", response_class=HTMLResponse)
-async def restructure_wizard(request: Request) -> HTMLResponse:
+async def restructure_wizard(request: Request) -> Response:
     """Render the restructure wizard landing page."""
+    # If an analysis is already running, redirect to dashboard so the user
+    # watches progress via the floating widget instead of re-submitting.
+    if _is_restructure_busy(request.app.state):
+        return RedirectResponse(
+            url="/?message=Restructure+analysis+already+running", status_code=303
+        )
+
     db = request.app.state.db
     templates = request.app.state.templates
 
@@ -303,8 +518,6 @@ async def restructure_wizard(request: Request) -> HTMLResponse:
             library_id = int(library_id_str)
             library = await db.get_library(library_id)
             if library:
-                import json
-
                 library_context = {
                     "id": library["id"],
                     "name": library["name"],
@@ -325,10 +538,23 @@ async def restructure_wizard(request: Request) -> HTMLResponse:
     ]:
         naming_values[key] = await db.get_setting(key) or ""
 
-    # Default browse path: first library path or /media
+    # Default browse path: first library path, or saved library paths, or /media
     initial_browse_path = "/media"
+    saved_library_paths: list[str] = []
+
     if library_context and library_context["paths"]:
         initial_browse_path = library_context["paths"][0]
+    else:
+        # No explicit library context — check for any saved library
+        all_libs = await db.get_all_libraries()
+        if all_libs:
+            try:
+                paths = json.loads(all_libs[0]["paths"]) if all_libs[0]["paths"] else []
+                if paths:
+                    initial_browse_path = paths[0]
+                    saved_library_paths = paths
+            except (json.JSONDecodeError, TypeError):
+                pass
 
     return templates.TemplateResponse(
         "restructure_wizard.html",
@@ -337,6 +563,7 @@ async def restructure_wizard(request: Request) -> HTMLResponse:
             "library_context": library_context,
             "naming_values": naming_values,
             "initial_browse_path": initial_browse_path,
+            "saved_library_paths": saved_library_paths,
         },
     )
 
@@ -413,6 +640,131 @@ async def restructure_progress_api(request: Request) -> JSONResponse:
     )
 
 
+def _build_grouped_moves(
+    plan: RestructurePlan,
+) -> dict[str, list[dict]]:
+    """Pre-process file_moves into subfolder-grouped structures for preview.
+
+    Returns a dict keyed by group_key.  Each value is a list of subfolder
+    dicts::
+
+        {
+          "name": str,      # current subfolder name (or "" for root)
+          "renamed": str,   # new subfolder name (same as name if unchanged)
+          "source": str,    # source folder basename (restructure: where from)
+          "files": [FileMove, ...]
+        }
+
+    Works for all operation levels:
+    - **Rename (L1/L2)**: groups by source subdir, detects dir renames.
+    - **Full restructure**: groups by *destination* season folder, tracks
+      which source folder each file comes from.
+    """
+    result: dict[str, list[dict]] = {}
+
+    for group in plan.groups:
+        if group.operation_type in ("rename_folder", "rename_file"):
+            result[group.group_key] = _group_rename_moves(group)
+        elif group.operation_type == "move":
+            result[group.group_key] = _group_restructure_moves(group)
+        # standalones handled by _group_restructure_moves too
+        elif group.operation_type.startswith("standalone"):
+            result[group.group_key] = _group_restructure_moves(group)
+
+    return result
+
+
+def _group_rename_moves(group: object) -> list[dict]:
+    """Group file_moves for L1/L2 rename operations by source subfolder."""
+    src_root = group.source_folders[0] if group.source_folders else ""  # type: ignore[attr-defined]
+    dir_renames: dict[str, str] = {}
+    file_by_subdir: dict[str, list] = {}
+
+    for fm in group.file_moves:  # type: ignore[attr-defined]
+        if fm.is_dir:
+            dir_renames[fm.original_filename] = fm.renamed_filename
+        else:
+            # Group files by their parent subdirectory
+            rel = os.path.relpath(fm.source, src_root) if src_root else ""
+            parts = rel.replace("\\", "/").split("/")
+            subdir = parts[0] if len(parts) > 1 else ""
+            file_by_subdir.setdefault(subdir, []).append(fm)
+
+    subfolders: list[dict] = []
+    seen: set[str] = set()
+
+    for orig, renamed in sorted(dir_renames.items()):
+        files = file_by_subdir.pop(orig, [])
+        subfolders.append(
+            {"name": orig, "renamed": renamed, "source": "", "files": files}
+        )
+        seen.add(orig)
+
+    for subdir, files in sorted(file_by_subdir.items()):
+        if subdir and subdir not in seen:
+            subfolders.append(
+                {"name": subdir, "renamed": subdir, "source": "", "files": files}
+            )
+        elif not subdir and files:
+            subfolders.insert(
+                0, {"name": "", "renamed": "", "source": "", "files": files}
+            )
+
+    return subfolders
+
+
+def _group_restructure_moves(group: object) -> list[dict]:
+    """Group file_moves for full restructure by destination season folder.
+
+    Each subfolder entry shows the target season folder name and which
+    source folder(s) the files come from.
+    """
+    target = group.target_folder.rstrip("/")
+
+    # dest_subdir_name → {source_basename → [FileMove]}
+    by_dest: dict[str, dict[str, list]] = {}
+
+    for fm in group.file_moves:
+        # Extract the season folder from the destination path
+        dest_rel = os.path.relpath(fm.destination, target).replace("\\", "/")
+        parts = dest_rel.split("/")
+        season_folder = parts[0] if len(parts) > 1 else ""
+
+        # Identify which source folder this file came from
+        src_basename = ""
+        for sf in group.source_folders:
+            if fm.source.startswith(sf.rstrip("/") + "/") or fm.source.startswith(
+                sf.rstrip("/") + os.sep
+            ):
+                src_basename = os.path.basename(sf.rstrip("/"))
+                break
+
+        by_dest.setdefault(season_folder, {}).setdefault(src_basename, []).append(fm)
+
+    subfolders: list[dict] = []
+    for season_name in sorted(by_dest.keys()):
+        sources = by_dest[season_name]
+        # Merge all source files into one list, track the primary source
+        all_files: list = []
+        source_names: list[str] = []
+        for src_name, files in sorted(sources.items()):
+            all_files.extend(files)
+            if src_name:
+                source_names.append(src_name)
+
+        source_label = ", ".join(dict.fromkeys(source_names)) if source_names else ""
+        subfolders.append(
+            {
+                "name": season_name,
+                "renamed": season_name,
+                "source": source_label,
+                "files": all_files,
+            }
+        )
+
+    return subfolders
+
+
 @router.get("/restructure/preview", response_class=HTMLResponse)
 async def restructure_preview(request: Request) -> Response:
     """Render the preview page showing the restructure plan."""
@@ -424,12 +776,16 @@ async def restructure_preview(request: Request) -> Response:
             url="/restructure?error=No+analysis+results", status_code=303
         )
 
+    # Pre-process file_moves into subfolder-grouped structures for the template
+    grouped_moves = _build_grouped_moves(plan)
+
     return templates.TemplateResponse(
         "restructure_preview.html",
         {
             "request": request,
             "plan": plan,
             "operation_level": plan.operation_level,
+            "grouped_moves": grouped_moves,
         },
     )
 
@@ -446,10 +802,11 @@ async def restructure_cancel(request: Request) -> RedirectResponse:
         # Flag so _auto_scan_media_servers skips redundant local index
         request.app.state.library_already_seeded = True  # type: ignore[attr-defined]
 
-    # Clear all restructure state
+    # Clear all restructure state (including pending templates)
     request.app.state.restructure_plan = None
     request.app.state.onboarding_restructure_plan = None
     request.app.state.restructure_progress = None
+    request.app.state.pending_naming_templates = None
 
     # Dismiss the notification
     await db.dismiss_notifications_by_url("/restructure/preview")
@@ -514,6 +871,14 @@ async def restructure_execute(request: Request) -> RedirectResponse:
             url="/library?message=No+changes+applied.+Library+indexed.+Media+server+scans+started.",
             status_code=303,
         )
+
+    # Persist the pending naming templates now that the user has confirmed.
+    # This ensures cancelled analyses don't overwrite the last applied settings.
+    pending_tpl = getattr(request.app.state, "pending_naming_templates", None)
+    if pending_tpl:
+        for setting_key, val in pending_tpl.items():
+            await db.set_setting(setting_key, val)
+        request.app.state.pending_naming_templates = None
 
     request.app.state.restructure_exec_progress = RestructureProgress(
         status="running", phase="Starting restructure…"

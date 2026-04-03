@@ -1125,6 +1125,7 @@ async def onboarding_restructure_analyze(request: Request) -> JSONResponse:
         ("season", "naming.season_folder_template"),
         ("movie", "naming.movie_file_template"),
         ("illegal_char_replacement", "naming.illegal_char_replacement"),
+        ("title_pref", "app.title_display"),
     ]:
         val = (templates.get(key) or "").strip()
         if val:
@@ -1164,17 +1165,7 @@ async def onboarding_restructure_analyze(request: Request) -> JSONResponse:
         title_pref,
     )
 
-    group_builder = SeriesGroupBuilder(db, anilist_client)
-    restructurer = LibraryRestructurer(
-        db=db,
-        group_builder=group_builder,
-        file_template=file_tmpl,
-        folder_template=folder_tmpl,
-        season_folder_template=season_tmpl,
-        movie_file_template=movie_tmpl,
-        title_pref=title_pref,
-        illegal_char_replacement=illegal_char_repl,
-    )
+    restructurer = await LibraryRestructurer.from_settings(db, anilist_client)
     title_matcher = TitleMatcher(similarity_threshold=0.75)
     scanner = LocalDirectoryScanner(
         db=db, anilist_client=anilist_client, title_matcher=title_matcher
@@ -1262,7 +1253,7 @@ async def onboarding_restructure_analyze(request: Request) -> JSONResponse:
             f" {plan.total_files} files"
         )
 
-        # Create a notification only if there's a plan to review
+        # Create a notification based on results
         if plan.total_groups > 0:
             await db.add_notification(
                 notification_type="success",
@@ -1273,6 +1264,18 @@ async def onboarding_restructure_analyze(request: Request) -> JSONResponse:
                 ),
                 action_url="/restructure/preview",
                 action_label="Review Plan",
+            )
+        else:
+            matched = sum(1 for s in all_shows if s.anilist_id)
+            await db.add_notification(
+                notification_type="info",
+                message=(
+                    f"Analysis complete — scanned {len(all_shows)} folders"
+                    f" ({matched} matched). No changes needed; all folders"
+                    " already match the target naming convention."
+                ),
+                action_url="/",
+                action_label="Dashboard",
             )
         logger.info(
             "Onboarding analysis complete: %d groups, %d files, %d conflicts",
@@ -1344,24 +1347,8 @@ async def _run_onboarding_execute(
     exec_progress = RestructureProgress(status="running")
     app_state.restructure_exec_progress = exec_progress  # type: ignore[attr-defined]
 
-    file_tmpl = await db.get_setting("naming.file_template") or ""
-    folder_tmpl = await db.get_setting("naming.folder_template") or ""
-    season_tmpl = await db.get_setting("naming.season_folder_template") or ""
-    movie_tmpl = await db.get_setting("naming.movie_file_template") or ""
-    title_pref = await db.get_setting("app.title_display") or "romaji"
-    illegal_char_repl = await db.get_setting("naming.illegal_char_replacement") or ""
-
-    group_builder = SeriesGroupBuilder(db, app_state.anilist_client)  # type: ignore[attr-defined]
-    restructurer = LibraryRestructurer(
-        db=db,
-        group_builder=group_builder,
-        file_template=file_tmpl,
-        folder_template=folder_tmpl,
-        season_folder_template=season_tmpl,
-        movie_file_template=movie_tmpl,
-        title_pref=title_pref,
-        illegal_char_replacement=illegal_char_repl,
-    )
+    anilist_client = app_state.anilist_client  # type: ignore[attr-defined]
+    restructurer = await LibraryRestructurer.from_settings(db, anilist_client)
 
     enabled_groups = [g for g in plan.groups if getattr(g, "enabled", True)]
     total_files = sum(len(g.file_moves) for g in enabled_groups)
@@ -1478,25 +1465,8 @@ async def _auto_build_library(
         app_state.onboarding_library_id = library_id  # type: ignore[attr-defined]
 
         # Seed library_items from the plan (series-group-aware, post-execute)
-        file_tmpl = await db.get_setting("naming.file_template") or ""  # type: ignore[attr-defined]
-        folder_tmpl = await db.get_setting("naming.folder_template") or ""  # type: ignore[attr-defined]
-        season_tmpl = await db.get_setting("naming.season_folder_template") or ""  # type: ignore[attr-defined]
-        movie_tmpl = await db.get_setting("naming.movie_file_template") or ""  # type: ignore[attr-defined]
-        title_pref = await db.get_setting("app.title_display") or "romaji"  # type: ignore[attr-defined]
-        illegal_char_repl = (  # type: ignore[attr-defined]
-            await db.get_setting("naming.illegal_char_replacement") or ""
-        )
-        group_builder = SeriesGroupBuilder(db, app_state.anilist_client)  # type: ignore[attr-defined]
-        restructurer = LibraryRestructurer(
-            db=db,  # type: ignore[arg-type]
-            group_builder=group_builder,
-            file_template=file_tmpl,
-            folder_template=folder_tmpl,
-            season_folder_template=season_tmpl,
-            movie_file_template=movie_tmpl,
-            title_pref=title_pref,
-            illegal_char_replacement=illegal_char_repl,
-        )
+        anilist_client = app_state.anilist_client  # type: ignore[attr-defined]
+        restructurer = await LibraryRestructurer.from_settings(db, anilist_client)  # type: ignore[arg-type]
         seeded = await restructurer.seed_library_items(
             plan, library_id, from_source=False
         )

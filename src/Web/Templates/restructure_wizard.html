@@ -17,8 +17,8 @@
 <h1>Library Restructure</h1>
 
 <div class="card">
-    <p>Organize your anime library using AniList data. Select source directories to scan,
-       an output directory for the organized files, and choose your naming preferences.</p>
+    <p>Organize your anime library using AniList data. Select an operation level, choose
+       directories to process, and configure your naming preferences.</p>
 </div>
 
 {% if library_context %}
@@ -29,11 +29,33 @@
 {% endif %}
 
 <div class="card">
+    <!-- Operation Level (above directory selectors) -->
+    <div style="margin-bottom: 1.5rem">
+        <div class="section-label">Operation Level</div>
+        <div class="option-cards" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr))">
+            <div class="option-card selected" onclick="selectLevel(this, 'folder_rename')">
+                <input type="radio" name="operation_level" value="folder_rename" checked>
+                <div class="option-card-title">Folder Rename</div>
+                <div class="option-card-desc">Rename show and season folders to match AniList titles. No file changes.</div>
+            </div>
+            <div class="option-card" onclick="selectLevel(this, 'folder_file_rename')">
+                <input type="radio" name="operation_level" value="folder_file_rename">
+                <div class="option-card-title">Folder + File Rename</div>
+                <div class="option-card-desc">Rename folders and episode files to standardized format.</div>
+            </div>
+            <div class="option-card" onclick="selectLevel(this, 'full_restructure')">
+                <input type="radio" name="operation_level" value="full_restructure">
+                <div class="option-card-title">Full Restructure</div>
+                <div class="option-card-desc">Consolidate split folders into a single multi-season structure.</div>
+            </div>
+        </div>
+    </div>
+
     <!-- Source & Output directory browsers -->
-    <div class="rw-browser-grid">
+    <div class="rw-browser-grid" id="browser-grid">
         <!-- Source directories (multi-select) -->
         <div>
-            <div class="section-label">Source Directories</div>
+            <div class="section-label" id="src-label">Source Directories</div>
             <div class="file-browser" id="src-browser">
                 <div class="file-browser-toolbar">
                     <button class="btn btn-secondary btn-sm" onclick="window._fb.srcBrowseParent()">&#x2191; Parent</button>
@@ -51,8 +73,8 @@
             </div>
         </div>
 
-        <!-- Output directory (single-select) -->
-        <div>
+        <!-- Output directory (single-select, hidden for rename levels) -->
+        <div id="out-browser-section" style="display:none">
             <div class="section-label">Output Directory</div>
             <div class="file-browser" id="out-browser">
                 <div class="file-browser-toolbar">
@@ -77,28 +99,6 @@
             </div>
             <div style="margin-top: 0.25rem; font-size: 0.78rem; color: var(--text-muted)">
                 Click a folder to select it as the output. Double-click to navigate into it.
-            </div>
-        </div>
-    </div>
-
-    <!-- Operation Level -->
-    <div style="margin-bottom: 1.5rem">
-        <div class="section-label">Operation Level</div>
-        <div class="option-cards" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr))">
-            <div class="option-card selected" onclick="selectLevel(this, 'folder_rename')">
-                <input type="radio" name="operation_level" value="folder_rename" checked>
-                <div class="option-card-title">Folder Rename</div>
-                <div class="option-card-desc">Rename show folders to match AniList titles. No file changes.</div>
-            </div>
-            <div class="option-card" onclick="selectLevel(this, 'folder_file_rename')">
-                <input type="radio" name="operation_level" value="folder_file_rename">
-                <div class="option-card-title">Folder + File Rename</div>
-                <div class="option-card-desc">Rename folders and episode files to standardized format.</div>
-            </div>
-            <div class="option-card" onclick="selectLevel(this, 'full_restructure')">
-                <input type="radio" name="operation_level" value="full_restructure">
-                <div class="option-card-title">Full Restructure</div>
-                <div class="option-card-desc">Consolidate split folders into a single multi-season structure.</div>
             </div>
         </div>
     </div>
@@ -218,27 +218,46 @@
     });
     fb.init();
 
-    // Init naming templates
-    NamingTemplates.init();
+    // Init naming templates with saved title preference for chip highlighting
+    NamingTemplates.init({ savedTitlePref: '{{ naming_values.get("app.title_display", "") }}' });
 
     // Operation level cards
+    function updateBrowserLayout(level) {
+        var outSection = document.getElementById('out-browser-section');
+        var grid = document.getElementById('browser-grid');
+        var srcLabel = document.getElementById('src-label');
+        if (level === 'full_restructure') {
+            outSection.style.display = '';
+            grid.style.gridTemplateColumns = '1fr 1fr';
+            srcLabel.textContent = 'Source Directories';
+        } else {
+            outSection.style.display = 'none';
+            grid.style.gridTemplateColumns = '1fr';
+            srcLabel.textContent = 'Directories to Process';
+        }
+    }
+    // Apply default state on load
+    updateBrowserLayout(operationLevel);
+
     window.selectLevel = function (card, level) {
         document.querySelectorAll('.option-card').forEach(function (c) {
             c.classList.remove('selected');
         });
         card.classList.add('selected');
         operationLevel = level;
+        updateBrowserLayout(level);
     };
 
     // Analyze
     window.runAnalyze = async function () {
-        if (fb.state.sourceDirs.length === 0) {
+        // Use implicit selection (current browse dir) if nothing was explicitly selected
+        var effectiveSources = fb.getEffectiveSourceDirs();
+        if (effectiveSources.length === 0) {
             alert('Please add at least one source directory.');
             return;
         }
-        if (!fb.state.outputDir) {
-            fb.state.outputDir = fb.state.outBrowsePath;
-            document.getElementById('out-selected-path').textContent = fb.state.outBrowsePath;
+        if (operationLevel === 'full_restructure') {
+            fb.getEffectiveOutputDir();
         }
 
         var btn = document.getElementById('analyze-btn');
@@ -249,9 +268,10 @@
         statusEl.textContent = 'Scanning directories and matching to AniList\u2026';
         errorEl.classList.add('hidden');
 
+        var titlePref = NamingTemplates.getSelectedTitlePref();
         var payload = {
             source_dirs: fb.state.sourceDirs,
-            output_dir: fb.state.outputDir,
+            output_dir: operationLevel === 'full_restructure' ? fb.state.outputDir : '',
             level: operationLevel,
             force_rescan: document.getElementById('force-rescan').checked,
             templates: {
@@ -260,6 +280,7 @@
                 season: document.getElementById('tpl-season').value || null,
                 movie: document.getElementById('tpl-movie').value || null,
                 illegal_char_replacement: document.getElementById('tpl-illegal').value,
+                title_pref: titlePref || null,
             },
         };
 
@@ -268,7 +289,7 @@
         {% endif %}
 
         try {
-            var resp = await fetch('/onboarding/restructure/analyze', {
+            var resp = await fetch('/api/restructure/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
@@ -282,7 +303,9 @@
                 errorEl.classList.remove('hidden');
                 return;
             }
-            window.location.href = '/restructure/preview';
+            // Analysis runs in background — redirect away so the floating
+            // widget tracks progress.  A notification appears when done.
+            window.location.href = data.redirect || '/';
         } catch (e) {
             btn.disabled = false;
             btn.textContent = 'Analyze Library';
@@ -303,6 +326,18 @@
     fb.renderSourceTags();
     if (libPaths.length > 0) {
         fb.browseSrc(libPaths[0]);
+    }
+    {% elif saved_library_paths %}
+    // Pre-select saved library paths as sources
+    var savedPaths = {{ saved_library_paths | tojson }};
+    savedPaths.forEach(function (p) {
+        if (fb.state.sourceDirs.indexOf(p) === -1) {
+            fb.state.sourceDirs.push(p);
+        }
+    });
+    fb.renderSourceTags();
+    if (savedPaths.length > 0) {
+        fb.browseSrc(savedPaths[0]);
     }
     {% endif %}
 }());

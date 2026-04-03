@@ -39,6 +39,30 @@ _VIDEO_EXTS = {
 }
 _SUBTITLE_EXTS = {".srt", ".ass", ".ssa", ".sub", ".idx", ".vtt"}
 _MEDIA_EXTS = _VIDEO_EXTS | _SUBTITLE_EXTS
+# Extensions for metadata / artwork files that media servers generate.
+# These become stale after restructure/rename and should be removed so the
+# media server re-indexes cleanly.
+_SUPPORT_EXTS = {
+    ".nfo",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".tbn",
+    ".xml",
+    ".bif",
+}
+_SUPPORT_FILENAMES = {
+    "folder.jpg",
+    "poster.jpg",
+    "banner.jpg",
+    "fanart.jpg",
+    "logo.jpg",
+    "landscape.jpg",
+    "thumb.jpg",
+    "clearart.png",
+    "clearlogo.png",
+    "backdrop.jpg",
+}
 # Formats that count as numbered seasons; OVA/ONA/SPECIAL/MOVIE go to Specials
 _TV_FORMATS = {"TV", "TV_SHORT"}
 
@@ -68,6 +92,55 @@ def _find_video_subdirs(root: str) -> list[str]:
     return result
 
 
+def _is_support_file(filename: str) -> bool:
+    """Return True if *filename* is a media-server metadata/artwork file."""
+    name_lower = filename.lower()
+    if name_lower in _SUPPORT_FILENAMES:
+        return True
+    ext = os.path.splitext(name_lower)[1]
+    return ext in _SUPPORT_EXTS
+
+
+def _count_support_files(directory: str) -> int:
+    """Count metadata/artwork files in *directory* and its subdirectories."""
+    count = 0
+    try:
+        for entry in os.scandir(directory):
+            if entry.is_file() and _is_support_file(entry.name):
+                count += 1
+            elif entry.is_dir():
+                count += _count_support_files(entry.path)
+    except OSError:
+        pass
+    return count
+
+
+def _delete_support_files(directory: str) -> int:
+    """Delete metadata/artwork files from *directory* and its subdirectories.
+
+    Returns the number of files deleted.  Only deletes files matching
+    ``_SUPPORT_EXTS`` or ``_SUPPORT_FILENAMES`` — media and subtitle files
+    are never touched.
+    """
+    deleted = 0
+    try:
+        for entry in os.scandir(directory):
+            if entry.is_file() and _is_support_file(entry.name):
+                try:
+                    os.remove(entry.path)
+                    logger.info("Deleted support file: %s", entry.path)
+                    deleted += 1
+                except OSError as exc:
+                    logger.warning(
+                        "Could not delete support file %s: %s", entry.path, exc
+                    )
+            elif entry.is_dir():
+                deleted += _delete_support_files(entry.path)
+    except OSError:
+        pass
+    return deleted
+
+
 @dataclass
 class ShowInput:
     """Source-agnostic input for the restructurer.
@@ -93,6 +166,7 @@ class FileMove:
     destination: str
     original_filename: str
     renamed_filename: str
+    is_dir: bool = False  # True for season folder renames
 
 
 @dataclass
@@ -110,6 +184,7 @@ class RestructureGroup:
     current_folder: str = ""  # current folder basename (for L1/L2 preview)
     group_key: str = ""  # unique ID for form checkboxes
     anilist_id: int = 0  # AniList ID for this group (used to pre-seed library_items)
+    support_file_count: int = 0  # metadata files that will be removed
 
 
 @dataclass
@@ -439,9 +514,94 @@ class LibraryRestructurer:
         self._title_pref = title_pref
         self._repl = illegal_char_replacement or DEFAULT_ILLEGAL_CHAR_REPLACEMENT
 
+    @classmethod
+    async def from_settings(
+        cls,
+        db: "DatabaseManager",
+        anilist_client: object,
+    ) -> "LibraryRestructurer":
+        """Construct a LibraryRestructurer from DB-stored naming settings.
+
+        Centralises the repeated pattern of loading 6 naming settings then
+        building a ``LibraryRestructurer``.  Both the onboarding and tools
+        execute flows should call this instead of duplicating the logic.
+        """
+        file_tmpl = await db.get_setting("naming.file_template") or ""
+        folder_tmpl = await db.get_setting("naming.folder_template") or ""
+        season_tmpl = await db.get_setting("naming.season_folder_template") or ""
+        movie_tmpl = await db.get_setting("naming.movie_file_template") or ""
+        title_pref = await db.get_setting("app.title_display") or "romaji"
+        illegal_char_repl = (
+            await db.get_setting("naming.illegal_char_replacement") or ""
+        )
+        group_builder = SeriesGroupBuilder(db, anilist_client)
+        return cls(
+            db=db,
+            group_builder=group_builder,
+            file_template=file_tmpl,
+            folder_template=folder_tmpl,
+            season_folder_template=season_tmpl,
+            movie_file_template=movie_tmpl,
+            title_pref=title_pref,
+            illegal_char_replacement=illegal_char_repl,
+        )
+
     def _san(self, text: str) -> str:
         """Sanitize text using the configured illegal character replacement."""
         return NamingTemplate.sanitize(text, self._repl)
+
+    def _render_season_folder(
+        self,
+        season_num: int,
+        show_or_entry: ShowInput | dict | None,
+    ) -> str:
+        """Render a season folder name from a season number and show/entry data.
+
+        *show_or_entry* can be a ``ShowInput``, a series-group entry dict,
+        or ``None`` (falls back to ``Season {season_num}``).
+
+        When a dict is passed, the method respects ``self._title_pref`` if
+        the dict contains ``title_romaji`` / ``title_english`` keys (added
+        by the rename code from anilist_cache).  Falls back to
+        ``display_title`` when those aren't available.
+
+        Shared by ``_analyze_full_restructure`` and ``_analyze_rename``
+        so that season folder naming is always consistent.
+        """
+        if isinstance(show_or_entry, ShowInput):
+            season_name = _resolve_display_title(show_or_entry, self._title_pref)
+            season_year = str(show_or_entry.year) if show_or_entry.year else ""
+        elif isinstance(show_or_entry, dict):
+            # Apply title_pref if both title variants are available
+            romaji = show_or_entry.get("title_romaji", "")
+            english = show_or_entry.get("title_english", "")
+            if self._title_pref == "english" and english:
+                season_name = english
+            elif romaji:
+                season_name = romaji
+            else:
+                season_name = show_or_entry.get("display_title") or ""
+            season_year = (show_or_entry.get("start_date") or "")[:4]
+        else:
+            season_name = ""
+            season_year = ""
+
+        if season_num == 0:
+            tokens = {
+                "season": "00",
+                "season.name": self._san(season_name),
+                "year": season_year,
+            }
+            return (
+                self._season_tmpl.render(tokens) or self._san(season_name) or "Specials"
+            )
+
+        tokens = {
+            "season": f"{season_num:02d}",
+            "season.name": self._san(season_name),
+            "year": season_year,
+        }
+        return self._season_tmpl.render(tokens) or f"Season {season_num}"
 
     @staticmethod
     def _is_single_item_entry(format_str: str, video_file_count: int) -> bool:
@@ -451,6 +611,48 @@ class LibraryRestructurer:
         if format_str in ("OVA", "SPECIAL", "ONA") and video_file_count <= 1:
             return True
         return False
+
+    def _is_already_structured(
+        self,
+        source_folder: str,
+        target_folder: str,
+        expected_season_folders: list[str],
+    ) -> bool:
+        """Return True if the on-disk layout already matches the intended output.
+
+        All checks are purely filesystem-based — no DB state, no run history.
+        This supports first-time runs on pre-organised libraries as well as
+        re-runs on previously restructured content.
+
+        Args:
+            source_folder: Current folder on disk.
+            target_folder: What the restructurer would create.
+            expected_season_folders: Rendered season folder names that should
+                exist as subdirectories (e.g. ["Season 1", "Season 2"]).
+        """
+        # 1. Folder name must already match
+        if os.path.basename(source_folder) != os.path.basename(target_folder):
+            return False
+
+        # 2. Source must be a real directory
+        if not os.path.isdir(source_folder):
+            return False
+
+        # 3. Check expected season subdirectories exist on disk
+        if expected_season_folders:
+            try:
+                existing_dirs = {
+                    name
+                    for name in os.listdir(source_folder)
+                    if os.path.isdir(os.path.join(source_folder, name))
+                }
+            except OSError:
+                return False
+            for expected_name in expected_season_folders:
+                if expected_name not in existing_dirs:
+                    return False
+
+        return True
 
     async def analyze(
         self,
@@ -684,6 +886,30 @@ class LibraryRestructurer:
             source_folders = [s["local_path"] for s in shows_in_group]
             source_rating_keys = [s["source_id"] for s in shows_in_group]
 
+            # --- Early skip: check if on-disk layout already matches ---
+            # Purely filesystem-based — supports first-time runs on
+            # pre-organised libraries and re-runs alike.
+            if len(source_folders) == 1:
+                # Build expected season folder names from the group entries
+                expected_seasons: list[str] = []
+                for si_info in shows_in_group:
+                    sn = si_info["tv_season_order"]
+                    _si_obj = show_by_anilist.get(si_info["anilist_id"])
+                    expected_seasons.append(self._render_season_folder(sn, _si_obj))
+                if self._is_already_structured(
+                    source_folders[0], target_folder, expected_seasons
+                ):
+                    logger.info(
+                        "Skipping already-structured group: %s",
+                        display_title,
+                    )
+                    for si_info in shows_in_group:
+                        si_obj = show_by_anilist.get(si_info["anilist_id"])
+                        if si_obj:
+                            plan.unchanged_shows.append(si_obj)
+                            plan.unchanged_group_ids[si_obj.anilist_id] = group_id
+                    continue
+
             file_moves: list[FileMove] = []
             warnings: list[str] = []
             dest_filenames: dict[str, str] = {}
@@ -697,38 +923,16 @@ class LibraryRestructurer:
                 src_folder = show_info["local_path"]
                 group_si = show_by_anilist.get(show_info["anilist_id"])
 
-                # Render season folder name via template
+                season_folder_name = self._render_season_folder(season_num, group_si)
+                season_dir = os.path.join(target_folder, season_folder_name)
+
+                # Keep season_name/season_year for cross-season file routing below
                 season_name = (
                     _resolve_display_title(group_si, self._title_pref)
                     if group_si
                     else show_info["title"]
                 )
                 season_year = str(group_si.year) if group_si and group_si.year else ""
-                if season_num == 0:
-                    # Non-TV entry (OVA, ONA, SPECIAL, MOVIE) — use the entry's
-                    # own AniList title as {season.name} so that e.g.
-                    # "Jujutsu Kaisen 0 (2021)" gets its own named folder
-                    # rather than being lumped into a generic "Specials" folder.
-                    sp_tokens = {
-                        "season": "00",
-                        "season.name": self._san(season_name),
-                        "year": season_year,
-                    }
-                    season_folder_name = (
-                        self._season_tmpl.render(sp_tokens)
-                        or self._san(season_name)
-                        or "Specials"
-                    )
-                else:
-                    season_tokens = {
-                        "season": f"{season_num:02d}",
-                        "season.name": self._san(season_name),
-                        "year": season_year,
-                    }
-                    season_folder_name = self._season_tmpl.render(season_tokens)
-                    if not season_folder_name:
-                        season_folder_name = f"Season {season_num}"
-                season_dir = os.path.join(target_folder, season_folder_name)
 
                 if not os.path.isdir(src_folder):
                     warnings.append(f"Source folder not found: {src_folder}")
@@ -779,9 +983,10 @@ class LibraryRestructurer:
                     ext_lower = ext.lower()
 
                     if ext_lower not in _MEDIA_EXTS:
-                        # Other non-media files (e.g. extras) — move as-is
-                        renamed = filename
-                        file_dest_dir = season_dir
+                        # Non-media files (metadata, artwork) — skip them.
+                        # They'll be cleaned up when the source folder is
+                        # deleted after execution (shutil.rmtree).
+                        continue
                     elif group_si and use_movie_naming:
                         # Movies / single-item entries in series groups:
                         # use movie-style naming (no SxxExx).
@@ -890,6 +1095,9 @@ class LibraryRestructurer:
                         plan.unchanged_group_ids[si_obj.anilist_id] = group_id
                 continue
 
+            # Count support files that will be removed from source folders
+            sf_count = sum(_count_support_files(sf) for sf in source_folders)
+
             plan.groups.append(
                 RestructureGroup(
                     series_group_id=group_id,
@@ -902,6 +1110,10 @@ class LibraryRestructurer:
                     source_rating_keys=source_rating_keys,
                     group_key=str(group_id),
                     anilist_id=root_anilist_id,
+                    current_folder=", ".join(
+                        os.path.basename(s) for s in source_folders
+                    ),
+                    support_file_count=sf_count,
                 )
             )
 
@@ -1049,8 +1261,9 @@ class LibraryRestructurer:
                 ext_lower = ext.lower()
 
                 if ext_lower not in _MEDIA_EXTS:
-                    renamed = filename
-                    file_dest_dir = target_folder
+                    # Non-media files (metadata, artwork) — skip them.
+                    # Source folder cleanup will remove them.
+                    continue
                 elif use_movie_naming:
                     # Standalone movies / single-item entries:
                     # use movie-style naming (no SxxExx).
@@ -1162,11 +1375,15 @@ class LibraryRestructurer:
                     )
                 )
 
-            # Skip if nothing changes (same folder name and all files unchanged)
+            # Skip if nothing changes (same folder name and all files unchanged).
+            # Use realpath comparison so symlinks and path normalisation
+            # don't cause false positives on already-structured content.
             current_folder = os.path.basename(si.local_path)
             folder_changed = current_folder != rendered_folder
             files_changed = any(
-                fm.original_filename != fm.renamed_filename for fm in file_moves
+                fm.original_filename != fm.renamed_filename
+                and os.path.realpath(fm.source) != os.path.realpath(fm.destination)
+                for fm in file_moves
             )
             if not folder_changed and not files_changed:
                 skipped.append(
@@ -1206,6 +1423,7 @@ class LibraryRestructurer:
                     current_folder=current_folder,
                     group_key=f"standalone_{si.source_id}",
                     anilist_id=si.anilist_id,
+                    support_file_count=_count_support_files(si.local_path),
                 )
             )
 
@@ -1220,7 +1438,7 @@ class LibraryRestructurer:
         level: str,
         output_dir: str | None = None,
     ) -> None:
-        """Levels 1/2: Per-show folder rename (and optionally file rename)."""
+        """L1/L2: folder + season folder rename (optionally files)."""
         progress.phase = "Analyzing shows for renaming"
         skipped: list[tuple[str, str]] = []
         seen_targets: set[str] = set()  # guard against duplicate destinations
@@ -1237,8 +1455,8 @@ class LibraryRestructurer:
                     plan.unmatched_shows.append(si)
                 continue
 
-            # Determine the target title (AniList title)
-            anilist_title = si.anilist_title or si.title
+            # Determine the display title using the user's title preference
+            anilist_title = _resolve_display_title(si, self._title_pref)
 
             # Render folder name via template
             folder_tokens = _build_folder_tokens(si, self._title_pref, self._repl)
@@ -1247,90 +1465,277 @@ class LibraryRestructurer:
                 rendered_folder = re.sub(r'[<>:"/\\|?*]', "", anilist_title).strip()
             current_folder = os.path.basename(si.local_path)
 
-            # Determine season number for file renaming
+            # Determine season number and series group for this show
             season_num = 1
+            sg_group_id = 0
             try:
-                group_id, entries = await self._group_builder.get_or_build_group(
+                sg_group_id, entries = await self._group_builder.get_or_build_group(
                     si.anilist_id
                 )
-                if group_id and entries:
+                if sg_group_id and entries:
                     for entry in entries:
                         if entry["anilist_id"] == si.anilist_id:
                             season_num = entry["season_order"]
                             break
             except Exception:
-                pass  # season_num stays 1
+                pass  # season_num stays 1, sg_group_id stays 0
 
             # Skip if folder already matches target
             folder_needs_rename = current_folder != rendered_folder
 
-            # Build file renames for Level 2
+            # Build season folder renames (L1+L2) and file renames (L2)
             file_moves: list[FileMove] = []
             warnings: list[str] = []
+            detected_season_count = 1
 
-            if level == "folder_file_rename" and os.path.isdir(si.local_path):
-                # Collect files — may be directly in folder, inside season
-                # subdirectories (e.g. "Season 1/"), or inside a same-named
-                # nested folder (already-restructured layout).
-                rename_files: list[tuple[str, str, str]] = []  # (full, name, subdir)
+            if os.path.isdir(si.local_path):
+                # Scan subdirectories for season folder renames (L1 + L2)
+                # and collect files for renaming (L2 only).
+                #
+                # Use _find_video_subdirs to detect ALL season-like subdirs,
+                # not just those matching "Season N".  This handles folders
+                # already renamed to custom templates in prior runs.
+                rename_files: list[tuple[str, str, str, int | None]] = []
                 try:
                     top_entries = sorted(os.listdir(si.local_path))
                 except OSError:
                     warnings.append(f"Cannot read folder: {si.local_path}")
                     top_entries = []
 
-                for fs_entry in top_entries:
-                    entry_path = os.path.join(si.local_path, fs_entry)
-                    if os.path.isfile(entry_path):
-                        rename_files.append((entry_path, fs_entry, ""))
-                    elif os.path.isdir(entry_path):
-                        try:
-                            sub = sorted(os.listdir(entry_path))
-                        except OSError:
-                            continue
-                        for sf in sub:
-                            sfull = os.path.join(entry_path, sf)
-                            if os.path.isfile(sfull):
-                                rename_files.append((sfull, sf, fs_entry))
+                video_subdirs = _find_video_subdirs(si.local_path)
 
-                for full_src, filename, subdir in rename_files:
-                    _name, ext = os.path.splitext(filename)
-                    if ext.lower() not in _MEDIA_EXTS:
-                        continue
+                # Build a mapping: subdir_name → (season_number, entry_dict)
+                # using series group entries matched by name similarity.
+                subdir_season_info: dict[str, tuple[int, dict | None]] = {}
 
-                    ep_info = _extract_episode_info(filename)
-                    if ep_info is None:
-                        continue
-
-                    file_season = 0 if ep_info.source_season == 0 else season_num
-                    tokens = _build_file_tokens(
-                        si, file_season, ep_info, filename, self._title_pref, self._repl
-                    )
-                    rendered = self._file_tmpl.render(tokens)
-                    if ep_info.variant:
-                        rendered += f" ({ep_info.variant})"
-                    renamed = self._san(rendered) + ext
-
-                    if renamed == filename:
-                        continue  # No change needed
-
-                    # Destination is in the target folder (may be renamed),
-                    # preserving any subdirectory structure
-                    target_dir = (
-                        os.path.join(os.path.dirname(si.local_path), rendered_folder)
-                        if folder_needs_rename
-                        else si.local_path
-                    )
-                    if subdir:
-                        target_dir = os.path.join(target_dir, subdir)
-                    file_moves.append(
-                        FileMove(
-                            source=full_src,
-                            destination=os.path.join(target_dir, renamed),
-                            original_filename=filename,
-                            renamed_filename=renamed,
+                if len(video_subdirs) >= 2 and sg_group_id and si.anilist_id:
+                    detected_season_count = len(video_subdirs)
+                    try:
+                        _, _group_entries = (
+                            await self._group_builder.get_or_build_group(si.anilist_id)
                         )
+                        # Use ALL group entries (not just TV) — subdirs may
+                        # include movies, OVAs, specials alongside TV seasons.
+                        _all_entries = [dict(e) for e in _group_entries]
+                        # Enrich entries with romaji/english titles from
+                        # anilist_cache so _render_season_folder can apply
+                        # the user's title_pref (the DB entries only store
+                        # a single display_title).
+                        for _te in _all_entries:
+                            _aid = _te.get("anilist_id")
+                            if _aid:
+                                _cached = await self._db.get_cached_metadata(_aid)
+                                if _cached:
+                                    _te["title_romaji"] = (
+                                        _cached.get("title_romaji") or ""
+                                    )
+                                    _te["title_english"] = (
+                                        _cached.get("title_english") or ""
+                                    )
+                        if _all_entries:
+                            match_pool = list(_all_entries)
+                            for sd in sorted(video_subdirs):
+                                sd_name = os.path.basename(sd.rstrip("/"))
+                                # Try Season N regex first
+                                m = _SEASON_DIR_RE.match(sd_name)
+                                if m:
+                                    dir_sn = int(sd_name.split()[-1])
+                                    entry = (
+                                        _all_entries[dir_sn - 1]
+                                        if dir_sn <= len(_all_entries)
+                                        else None
+                                    )
+                                    if entry and entry in match_pool:
+                                        match_pool.remove(entry)
+                                else:
+                                    entry = _match_subdir_to_entry(
+                                        sd_name, match_pool, consume=True
+                                    )
+                                    dir_sn = entry["season_order"] if entry else 0
+                                if entry:
+                                    subdir_season_info[sd_name] = (
+                                        dir_sn,
+                                        entry,
+                                    )
+                    except Exception as _exc:
+                        logger.warning(
+                            "Rename: series group lookup failed for %s: %s",
+                            si.title,
+                            _exc,
+                        )
+                elif len(video_subdirs) >= 2:
+                    detected_season_count = len(video_subdirs)
+                    # No series group — assign sequential season numbers
+                    for sn_idx, sd in enumerate(sorted(video_subdirs), start=1):
+                        sd_name = os.path.basename(sd.rstrip("/"))
+                        m = _SEASON_DIR_RE.match(sd_name)
+                        dir_sn = int(sd_name.split()[-1]) if m else sn_idx
+                        subdir_season_info[sd_name] = (dir_sn, None)
+                elif len(video_subdirs) == 1:
+                    # Single season subdir — still needs to be renamed
+                    sd_name = os.path.basename(video_subdirs[0].rstrip("/"))
+                    m = _SEASON_DIR_RE.match(sd_name)
+                    dir_sn = int(sd_name.split()[-1]) if m else season_num
+                    subdir_season_info[sd_name] = (dir_sn, None)
+
+                # L2: collect files for renaming (from top level + subdirs)
+                if level == "folder_file_rename":
+                    for fs_entry in top_entries:
+                        entry_path = os.path.join(si.local_path, fs_entry)
+                        if os.path.isfile(entry_path):
+                            rename_files.append((entry_path, fs_entry, "", None))
+                        elif os.path.isdir(entry_path):
+                            dir_sn_val: int | None = None
+                            info = subdir_season_info.get(fs_entry)
+                            if info:
+                                dir_sn_val = info[0]
+                            elif _SEASON_DIR_RE.match(fs_entry):
+                                dir_sn_val = int(fs_entry.split()[-1])
+                            try:
+                                sub = sorted(os.listdir(entry_path))
+                            except OSError:
+                                continue
+                            for sf in sub:
+                                sfull = os.path.join(entry_path, sf)
+                                if os.path.isfile(sfull):
+                                    rename_files.append(
+                                        (sfull, sf, fs_entry, dir_sn_val)
+                                    )
+
+                # Build sg_season_map from subdir_season_info for file renames
+                sg_season_map: dict[int, dict] = {}
+                for _sd_name, (_sn, _ent) in subdir_season_info.items():
+                    if _ent:
+                        sg_season_map[_sn] = _ent
+
+                # Season folder renames (L1 + L2): rename ANY video-containing
+                # subdir that doesn't match the expected template name.
+                # Uses the same _render_season_folder as full restructure.
+                for sd_name, (dir_sn, entry) in subdir_season_info.items():
+                    entry_path = os.path.join(si.local_path, sd_name)
+                    expected_name = self._render_season_folder(dir_sn, entry or si)
+                    if sd_name != expected_name:
+                        base_dir = (
+                            os.path.join(
+                                os.path.dirname(si.local_path),
+                                rendered_folder,
+                            )
+                            if folder_needs_rename
+                            else si.local_path
+                        )
+                        file_moves.append(
+                            FileMove(
+                                source=entry_path,
+                                destination=os.path.join(base_dir, expected_name),
+                                original_filename=sd_name,
+                                renamed_filename=expected_name,
+                                is_dir=True,
+                            )
+                        )
+
+                # File renames (L2 only)
+                if level == "folder_file_rename" and rename_files:
+                    # Count video files for movie-style detection
+                    video_count = sum(
+                        1
+                        for _, fn, _, _ in rename_files
+                        if os.path.splitext(fn)[1].lower() in _VIDEO_EXTS
                     )
+                    use_movie_naming = self._is_single_item_entry(
+                        si.anilist_format, video_count
+                    )
+
+                    for full_src, filename, subdir, dir_season_num in rename_files:
+                        _name, ext = os.path.splitext(filename)
+                        if ext.lower() not in _MEDIA_EXTS:
+                            continue
+
+                        ep_info = _extract_episode_info(filename)
+
+                        if ep_info is not None:
+                            # Determine effective season from dir or episode info
+                            if ep_info.source_season == 0:
+                                file_season = 0
+                            elif dir_season_num is not None:
+                                file_season = dir_season_num
+                            else:
+                                file_season = season_num
+
+                            # Use per-season AniList entry data if available
+                            token_si = si
+                            if file_season in sg_season_map:
+                                sg = sg_season_map[file_season]
+                                sg_year_str = (sg.get("start_date") or "")[:4]
+                                # Prefer enriched romaji/english titles from
+                                # anilist_cache; fall back to display_title.
+                                _sg_romaji = (
+                                    sg.get("title_romaji")
+                                    or sg.get("display_title")
+                                    or si.anilist_title_romaji
+                                )
+                                _sg_english = (
+                                    sg.get("title_english") or si.anilist_title_english
+                                )
+                                _sg_display = sg.get("display_title") or si.title
+                                token_si = ShowInput(
+                                    title=_sg_display,
+                                    local_path=si.local_path,
+                                    source_id=si.source_id,
+                                    anilist_id=sg.get("anilist_id") or si.anilist_id,
+                                    anilist_title=_sg_display,
+                                    year=int(sg_year_str) if sg_year_str else si.year,
+                                    anilist_title_romaji=_sg_romaji,
+                                    anilist_title_english=_sg_english,
+                                    anilist_format=si.anilist_format,
+                                )
+
+                            tokens = _build_file_tokens(
+                                token_si,
+                                file_season,
+                                ep_info,
+                                filename,
+                                self._title_pref,
+                                self._repl,
+                            )
+                            rendered = self._file_tmpl.render(tokens)
+                            if ep_info.variant:
+                                rendered += f" ({ep_info.variant})"
+                            renamed = self._san(rendered) + ext
+                        elif use_movie_naming:
+                            # No episode pattern — use movie-style naming
+                            tokens = _build_file_tokens(
+                                si, 0, None, filename, self._title_pref, self._repl
+                            )
+                            renamed = (
+                                self._san(self._movie_file_tmpl.render(tokens)) + ext
+                            )
+                        else:
+                            # Multi-episode show but no recognisable pattern —
+                            # safest to leave the file alone.
+                            continue
+
+                        if renamed == filename:
+                            continue  # No change needed
+
+                        # Destination is in the target folder (may be renamed),
+                        # preserving any subdirectory structure
+                        target_dir = (
+                            os.path.join(
+                                os.path.dirname(si.local_path), rendered_folder
+                            )
+                            if folder_needs_rename
+                            else si.local_path
+                        )
+                        if subdir:
+                            target_dir = os.path.join(target_dir, subdir)
+                        file_moves.append(
+                            FileMove(
+                                source=full_src,
+                                destination=os.path.join(target_dir, renamed),
+                                original_filename=filename,
+                                renamed_filename=renamed,
+                            )
+                        )
 
             # Skip if nothing to do
             if not folder_needs_rename and not file_moves:
@@ -1363,18 +1768,19 @@ class LibraryRestructurer:
 
             plan.groups.append(
                 RestructureGroup(
-                    series_group_id=0,
+                    series_group_id=sg_group_id or 0,
                     display_title=anilist_title,
                     target_folder=target_folder,
                     source_folders=[si.local_path],
                     file_moves=file_moves,
-                    season_count=1,
+                    season_count=detected_season_count,
                     warnings=warnings,
                     source_rating_keys=[si.source_id],
                     operation_type=op_type,
                     current_folder=current_folder,
                     group_key=si.source_id,
                     anilist_id=si.anilist_id,
+                    support_file_count=_count_support_files(si.local_path),
                 )
             )
 
@@ -1507,34 +1913,64 @@ class LibraryRestructurer:
                         upserted += 1
             else:
                 # --- Post-execute path ---
-                # target_folder contains Season N/ subdirs for multi-season,
+                # target_folder contains season subdirs for multi-season,
                 # or holds files directly for single-season / movie groups.
+                # Season dirs may be named "Season N" (full restructure) or
+                # custom names from naming templates (L1/L2 rename).
                 if group.series_group_id and group.season_count > 1:
-                    tv_entries = await self._tv_entries_for_group(
-                        group.series_group_id, group.anilist_id
-                    )
-                    for i, entry in enumerate(tv_entries, start=1):
-                        season_path = os.path.join(group.target_folder, f"Season {i}")
-                        aid = entry["anilist_id"]
-                        cached_kw = await self._cached_metadata_kwargs(aid)
-                        # Prefer series_group_entries data over cache for
-                        # format/episodes (more specific to this entry).
-                        cached_kw["anilist_format"] = entry.get(
-                            "format", ""
-                        ) or cached_kw.get("anilist_format", "")
-                        cached_kw["anilist_episodes"] = entry.get(
-                            "episodes"
-                        ) or cached_kw.get("anilist_episodes")
+                    # Detect actual season subdirs (handles both
+                    # "Season N" and template-named season folders).
+                    season_subdirs = _find_video_subdirs(group.target_folder)
+                    if season_subdirs:
+                        all_entries = await self._db.get_series_group_entries(
+                            group.series_group_id
+                        )
+                        group_entries = [dict(e) for e in all_entries]
+                        for subdir in sorted(season_subdirs):
+                            subdir_name = os.path.basename(subdir.rstrip("/"))
+                            entry = _match_subdir_to_entry(
+                                subdir_name,
+                                group_entries,
+                                consume=True,
+                            )
+                            aid = entry["anilist_id"] if entry else group.anilist_id
+                            atitle = (
+                                entry.get("display_title", "")
+                                if entry
+                                else group.display_title
+                            )
+                            cached_kw = await self._cached_metadata_kwargs(aid)
+                            if entry:
+                                cached_kw["anilist_format"] = entry.get(
+                                    "format", ""
+                                ) or cached_kw.get("anilist_format", "")
+                                cached_kw["anilist_episodes"] = entry.get(
+                                    "episodes"
+                                ) or cached_kw.get("anilist_episodes")
+                            await self._db.upsert_library_item(
+                                library_id=library_id,
+                                folder_path=subdir,
+                                folder_name=root_name,
+                                anilist_id=aid,
+                                anilist_title=atitle,
+                                match_confidence=1.0,
+                                match_method="restructure_plan",
+                                series_group_id=group.series_group_id,
+                                **cached_kw,
+                            )
+                            upserted += 1
+                    else:
+                        # No subdirs found — single row at root
                         await self._db.upsert_library_item(
                             library_id=library_id,
-                            folder_path=season_path,
+                            folder_path=group.target_folder,
                             folder_name=root_name,
-                            anilist_id=aid,
-                            anilist_title=entry.get("display_title", ""),
+                            anilist_id=group.anilist_id,
+                            anilist_title=group.display_title,
                             match_confidence=1.0,
                             match_method="restructure_plan",
                             series_group_id=group.series_group_id,
-                            **cached_kw,
+                            **(await self._cached_metadata_kwargs(group.anilist_id)),
                         )
                         upserted += 1
                 else:
@@ -1805,23 +2241,86 @@ class LibraryRestructurer:
 
             progress.processed += 1
 
-            # Rename files (Level 2 only — file_moves is empty for Level 1)
-            for fm in group.file_moves:
+            # Rename season folders first (so file paths under them are
+            # correct), then rename individual files.
+            # Use the is_dir flag set during analysis — checking
+            # os.path.isdir(fm.source) at execution time is unreliable
+            # because the parent folder may already have been renamed.
+            dir_renames = [fm for fm in group.file_moves if fm.is_dir]
+            file_renames = [fm for fm in group.file_moves if not fm.is_dir]
+
+            # Track season folder renames so file source paths can be adjusted
+            dir_rename_map: dict[str, str] = {}
+            for fm in dir_renames:
                 try:
-                    # Adjust source path if folder was just renamed
                     actual_src = (
                         os.path.join(target_folder, fm.original_filename)
                         if folder_renamed
                         else fm.source
                     )
-                    if not os.path.isfile(actual_src):
-                        raise FileNotFoundError(f"Source file missing: {actual_src}")
-
+                    if not os.path.isdir(actual_src):
+                        raise FileNotFoundError(f"Source folder missing: {actual_src}")
                     os.rename(actual_src, fm.destination)
+                    dir_rename_map[fm.original_filename] = fm.renamed_filename
                     await self._db.log_restructure_operation(
                         group_title=group.display_title,
                         source_path=actual_src,
                         destination_path=fm.destination,
+                        operation="season_folder_rename",
+                        status="success",
+                    )
+                    stats["files_moved"] += 1
+                except Exception as exc:
+                    logger.error(
+                        "Failed to rename season folder %s: %s",
+                        fm.source,
+                        exc,
+                    )
+                    await self._db.log_restructure_operation(
+                        group_title=group.display_title,
+                        source_path=fm.source,
+                        destination_path=fm.destination,
+                        operation="season_folder_rename",
+                        status="error",
+                        error_message=str(exc),
+                    )
+                    stats["errors"] += 1
+                progress.processed += 1
+
+            for fm in file_renames:
+                try:
+                    # Adjust source path if folder was just renamed
+                    actual_src = fm.source
+                    if folder_renamed:
+                        # Replace old show folder with renamed show folder
+                        rel = os.path.relpath(fm.source, src_folder)
+                        actual_src = os.path.join(target_folder, rel)
+                    # Also adjust for season folder renames
+                    for old_dir, new_dir in dir_rename_map.items():
+                        actual_src = actual_src.replace(
+                            os.sep + old_dir + os.sep,
+                            os.sep + new_dir + os.sep,
+                        )
+                    if not os.path.isfile(actual_src):
+                        raise FileNotFoundError(f"Source file missing: {actual_src}")
+
+                    # Adjust destination for season folder renames too
+                    actual_dest = fm.destination
+                    for old_dir, new_dir in dir_rename_map.items():
+                        actual_dest = actual_dest.replace(
+                            os.sep + old_dir + os.sep,
+                            os.sep + new_dir + os.sep,
+                        )
+                    # Ensure destination directory exists
+                    dest_parent = os.path.dirname(actual_dest)
+                    if not os.path.isdir(dest_parent):
+                        os.makedirs(dest_parent, exist_ok=True)
+
+                    os.rename(actual_src, actual_dest)
+                    await self._db.log_restructure_operation(
+                        group_title=group.display_title,
+                        source_path=actual_src,
+                        destination_path=actual_dest,
                         operation="file_rename",
                         status="success",
                     )
@@ -1839,6 +2338,18 @@ class LibraryRestructurer:
                     stats["errors"] += 1
 
                 progress.processed += 1
+
+            # Delete stale metadata/artwork files only when actual changes
+            # were applied (folder renamed or files renamed).  Never delete
+            # if no renames happened for this group.
+            group_had_changes = folder_renamed or len(file_renames) > 0
+            if group_had_changes:
+                cleanup_dir = target_folder if folder_renamed else src_folder
+                deleted = _delete_support_files(cleanup_dir)
+                if deleted:
+                    logger.info(
+                        "Deleted %d support files from %s", deleted, cleanup_dir
+                    )
 
             stats["groups"] += 1
 
