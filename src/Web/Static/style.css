@@ -764,7 +764,6 @@ select:disabled {
     width: 150px;
     background: transparent;
     border: none;
-    overflow: hidden;
     cursor: default;
 }
 
@@ -775,12 +774,13 @@ select:disabled {
     background: var(--bg-card);
     border-radius: var(--radius);
     overflow: hidden;
-    border: 2px solid transparent;
-    transition: border-color 0.2s, transform 0.15s;
+    box-shadow: 0 0 0 0 transparent;
+    transition: box-shadow 0.15s, transform 0.15s;
+    will-change: transform;
 }
 
 .library-card:hover .library-card-poster {
-    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent);
     transform: scale(1.03);
 }
 
@@ -2030,12 +2030,13 @@ select:disabled {
     background: var(--bg-card);
     border-radius: var(--radius);
     overflow: hidden;
-    border: 2px solid transparent;
-    transition: border-color 0.2s, transform 0.15s;
+    box-shadow: 0 0 0 0 transparent;
+    transition: box-shadow 0.15s, transform 0.15s;
+    will-change: transform;
 }
 
 .watching-card:hover .watching-poster {
-    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent);
     transform: scale(1.03);
 }
 
@@ -2189,12 +2190,13 @@ select:disabled {
     background: var(--bg-card);
     border-radius: var(--radius);
     overflow: hidden;
-    border: 2px solid transparent;
-    transition: border-color 0.2s, transform 0.15s;
+    box-shadow: 0 0 0 0 transparent;
+    transition: box-shadow 0.15s, transform 0.15s;
+    will-change: transform;
 }
 
 .watchlist-grid-card:hover .watchlist-grid-poster {
-    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent);
     transform: scale(1.02);
 }
 

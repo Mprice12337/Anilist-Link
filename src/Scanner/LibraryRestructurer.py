@@ -185,6 +185,12 @@ class RestructureGroup:
     group_key: str = ""  # unique ID for form checkboxes
     anilist_id: int = 0  # AniList ID for this group (used to pre-seed library_items)
     support_file_count: int = 0  # metadata files that will be removed
+    # Maps renamed season subdir name → anilist_id.  Populated during
+    # L1/L2 rename analysis so post-execute library seeding can assign
+    # the correct per-season anilist_id without re-matching via fuzzy
+    # name similarity (which fails when subdirs are renamed with custom
+    # templates like romaji titles).
+    season_dir_anilist_map: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -1487,6 +1493,10 @@ class LibraryRestructurer:
             file_moves: list[FileMove] = []
             warnings: list[str] = []
             detected_season_count = 1
+            # Populated below when video subdirs are detected and matched
+            # to series group entries.  Carried on the RestructureGroup so
+            # post-execute seeding can assign per-season anilist_ids.
+            season_dir_anilist_map: dict[str, int] = {}
 
             if os.path.isdir(si.local_path):
                 # Scan subdirectories for season folder renames (L1 + L2)
@@ -1534,17 +1544,19 @@ class LibraryRestructurer:
                                     )
                         if _all_entries:
                             match_pool = list(_all_entries)
+                            # Build a lookup by season_order so "Season N"
+                            # maps to the correct entry even when non-TV
+                            # entries (OVAs, movies) are interspersed.
+                            _by_season_order = {
+                                e["season_order"]: e for e in _all_entries
+                            }
                             for sd in sorted(video_subdirs):
                                 sd_name = os.path.basename(sd.rstrip("/"))
                                 # Try Season N regex first
                                 m = _SEASON_DIR_RE.match(sd_name)
                                 if m:
                                     dir_sn = int(sd_name.split()[-1])
-                                    entry = (
-                                        _all_entries[dir_sn - 1]
-                                        if dir_sn <= len(_all_entries)
-                                        else None
-                                    )
+                                    entry = _by_season_order.get(dir_sn)
                                     if entry and entry in match_pool:
                                         match_pool.remove(entry)
                                 else:
@@ -1611,10 +1623,19 @@ class LibraryRestructurer:
                 # Season folder renames (L1 + L2): rename ANY video-containing
                 # subdir that doesn't match the expected template name.
                 # Uses the same _render_season_folder as full restructure.
+                # Build a map old_name → new_name so file destinations
+                # reference the renamed subdir path (not the stale name).
+                # Also capture renamed_subdir_name → anilist_id so post-execute
+                # library seeding can assign the correct per-season anilist_id
+                # without re-running fuzzy name matching.
+                subdir_rename_map: dict[str, str] = {}
                 for sd_name, (dir_sn, entry) in subdir_season_info.items():
                     entry_path = os.path.join(si.local_path, sd_name)
                     expected_name = self._render_season_folder(dir_sn, entry or si)
+                    if entry and entry.get("anilist_id"):
+                        season_dir_anilist_map[expected_name] = entry["anilist_id"]
                     if sd_name != expected_name:
+                        subdir_rename_map[sd_name] = expected_name
                         base_dir = (
                             os.path.join(
                                 os.path.dirname(si.local_path),
@@ -1718,7 +1739,9 @@ class LibraryRestructurer:
                             continue  # No change needed
 
                         # Destination is in the target folder (may be renamed),
-                        # preserving any subdirectory structure
+                        # preserving any subdirectory structure.
+                        # Use the renamed subdir name if it was renamed so
+                        # preview paths and execution paths are consistent.
                         target_dir = (
                             os.path.join(
                                 os.path.dirname(si.local_path), rendered_folder
@@ -1727,7 +1750,8 @@ class LibraryRestructurer:
                             else si.local_path
                         )
                         if subdir:
-                            target_dir = os.path.join(target_dir, subdir)
+                            effective_subdir = subdir_rename_map.get(subdir, subdir)
+                            target_dir = os.path.join(target_dir, effective_subdir)
                         file_moves.append(
                             FileMove(
                                 source=full_src,
@@ -1743,6 +1767,8 @@ class LibraryRestructurer:
                     (si.title, f"already matches target '{rendered_folder}'")
                 )
                 plan.unchanged_shows.append(si)
+                if sg_group_id:
+                    plan.unchanged_group_ids[si.anilist_id] = sg_group_id
                 continue
 
             parent_dir = output_dir if output_dir else os.path.dirname(si.local_path)
@@ -1781,6 +1807,7 @@ class LibraryRestructurer:
                     group_key=si.source_id,
                     anilist_id=si.anilist_id,
                     support_file_count=_count_support_files(si.local_path),
+                    season_dir_anilist_map=season_dir_anilist_map,
                 )
             )
 
@@ -1926,13 +1953,34 @@ class LibraryRestructurer:
                             group.series_group_id
                         )
                         group_entries = [dict(e) for e in all_entries]
+                        # Index by anilist_id for authoritative-map lookups
+                        entries_by_aid = {
+                            e["anilist_id"]: e for e in group_entries
+                        }
                         for subdir in sorted(season_subdirs):
                             subdir_name = os.path.basename(subdir.rstrip("/"))
-                            entry = _match_subdir_to_entry(
-                                subdir_name,
-                                group_entries,
-                                consume=True,
+                            # Prefer the authoritative map populated during
+                            # analysis — fuzzy name matching fails when
+                            # users rename subdirs to custom templates
+                            # (e.g. romaji titles that don't resemble the
+                            # English display_title stored in the DB).
+                            entry: dict | None = None
+                            mapped_aid = group.season_dir_anilist_map.get(
+                                subdir_name
                             )
+                            if mapped_aid:
+                                entry = entries_by_aid.get(mapped_aid)
+                                # Consume from the fallback pool so later
+                                # subdirs that do fall through to fuzzy
+                                # matching can't re-assign the same entry.
+                                if entry and entry in group_entries:
+                                    group_entries.remove(entry)
+                            if entry is None:
+                                entry = _match_subdir_to_entry(
+                                    subdir_name,
+                                    group_entries,
+                                    consume=True,
+                                )
                             aid = entry["anilist_id"] if entry else group.anilist_id
                             atitle = (
                                 entry.get("display_title", "")

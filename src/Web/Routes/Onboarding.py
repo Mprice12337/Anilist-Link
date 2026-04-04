@@ -269,10 +269,27 @@ async def _auto_scan_media_servers(app_state: object) -> None:
 
     if lib_scan_running:
         # Background scan from save-media-dirs is still running — wait
-        # for it instead of starting a duplicate.
+        # for it instead of starting a duplicate.  Use an inactivity
+        # timeout that resets whenever progress changes, so large
+        # libraries don't trigger a premature exit.
         logger.info("Waiting for background local scan to finish")
+        _inactivity_timeout = 120.0  # seconds without progress change
+        _last_activity = asyncio.get_event_loop().time()
+        _last_processed = getattr(lib_scan, "processed", 0)
         while getattr(lib_scan, "status", "") == "running":
             await asyncio.sleep(2)
+            _now = asyncio.get_event_loop().time()
+            _cur_processed = getattr(lib_scan, "processed", 0)
+            if _cur_processed != _last_processed:
+                _last_activity = _now
+                _last_processed = _cur_processed
+            elif _now - _last_activity > _inactivity_timeout:
+                logger.warning(
+                    "Background local scan stalled (no progress for %.0fs),"
+                    " proceeding without waiting",
+                    _inactivity_timeout,
+                )
+                break
         logger.info("Background local scan finished")
     elif not restructure_ran and not already_seeded:
         # No background scan was started — run inline now.
