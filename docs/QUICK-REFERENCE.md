@@ -173,11 +173,6 @@ environment:
   - SONARR_API_KEY=your-sonarr-api-key
   - RADARR_URL=http://192.168.1.100:7878
   - RADARR_API_KEY=your-radarr-api-key
-  - PROWLARR_URL=http://192.168.1.100:9696
-  - PROWLARR_API_KEY=your-prowlarr-api-key
-  - QBITTORRENT_URL=http://192.168.1.100:8080
-  - QBITTORRENT_USER=admin
-  - QBITTORRENT_PASS=your-password
 ```
 
 **UMASK Values:**
@@ -453,8 +448,6 @@ Always use `UPPER_SNAKE_CASE`:
 - `DEBUG`
 - `SONARR_URL`, `SONARR_API_KEY` (P4)
 - `RADARR_URL`, `RADARR_API_KEY` (P4)
-- `PROWLARR_URL`, `PROWLARR_API_KEY` (P4)
-- `QBITTORRENT_URL`, `QBITTORRENT_USER`, `QBITTORRENT_PASS` (P4)
 
 ### Docker Names
 - **Images**: `lowercase-with-dashes` (e.g., `anilist-link:latest`)

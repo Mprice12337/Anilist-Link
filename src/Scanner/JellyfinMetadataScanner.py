@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from typing import Any
 
 from src.Clients.AnilistClient import AniListClient
-from src.Clients.JellyfinClient import JellyfinClient
+from src.Clients.JellyfinClient import JellyfinClient, JellyfinSeason
 from src.Database.Connection import DatabaseManager
 from src.Matching.Normalizer import clean_title_for_search
 from src.Matching.TitleMatcher import TitleMatcher, get_primary_title
@@ -21,8 +22,90 @@ from src.Scanner.MetadataScanner import (
 )
 from src.Scanner.SeriesGroupBuilder import SeriesGroupBuilder
 from src.Utils.Config import AppConfig
+from src.Utils.PathTranslator import PathTranslator
 
 logger = logging.getLogger(__name__)
+
+_MEDIA_EXTENSIONS = {
+    ".mkv",
+    ".mp4",
+    ".avi",
+    ".m4v",
+    ".mov",
+    ".wmv",
+    ".ts",
+    ".m2ts",
+    ".webm",
+    ".flv",
+}
+
+# Folder names that are too generic to be useful as AniList search terms.
+# When a media file lives inside one of these, use the filename instead.
+_GENERIC_FOLDER_RE = re.compile(
+    r"^(specials?|extras?|ovas?|movies?|films?|bonus|featurettes?|season\s*0)"
+    r"(\s*[\(\[]\d{4}[\)\]])?$",
+    re.IGNORECASE,
+)
+
+
+def _clean_filename_for_search(name: str) -> str:
+    """Strip extension, resolution tags, and bracketed quality from a filename."""
+    # Strip extension
+    name = os.path.splitext(name)[0]
+    # Strip trailing resolution/quality tags like "- 1080p", "- 1080p (Directors Cut)"
+    name = re.sub(r"\s*[-–]\s*\d{3,4}p.*$", "", name, flags=re.IGNORECASE)
+    # Strip bracketed resolution tags like "[1080p]"
+    name = re.sub(r"\s*\[\d{3,4}p[^\]]*\]", "", name, flags=re.IGNORECASE)
+    return name.strip()
+
+
+def _derive_folder_name(show: object) -> str:  # type: ignore[type-arg]
+    """Derive the best search-friendly name for a Jellyfin item.
+
+    Priority:
+    1. Filesystem path — preferred because Jellyfin metadata agents replace
+       the display Name with scraped titles (e.g. 'Gekijouban K: Missing Kings')
+       while the path reflects the original folder/file name.
+    2. For file paths (movies/OVAs): use the parent folder name unless that
+       folder has a generic name like 'Specials (2014)', in which case fall
+       back to the cleaned filename itself.
+    3. show.name — last resort when no path is available.
+    """
+    from src.Clients.JellyfinClient import JellyfinShow  # local to avoid circular
+
+    assert isinstance(show, JellyfinShow)
+
+    path: str = show.path or ""
+    if not path:
+        logger.debug(
+            "No path for Jellyfin item '%s' (%s) — using display name",
+            show.name,
+            show.media_type,
+        )
+        return show.name
+
+    basename = os.path.basename(path)
+    _, ext = os.path.splitext(basename)
+
+    if ext.lower() in _MEDIA_EXTENSIONS:
+        # Path is a file — try parent folder first
+        parent = os.path.basename(os.path.dirname(path))
+        if parent and not _GENERIC_FOLDER_RE.match(parent.strip()):
+            return parent
+        # Parent is generic (e.g. "Specials (2021)") — use the cleaned filename
+        cleaned = _clean_filename_for_search(basename)
+        if cleaned:
+            logger.debug(
+                "Generic parent folder '%s' for '%s' — using filename '%s'",
+                parent,
+                show.name,
+                cleaned,
+            )
+            return cleaned
+        return parent or show.name
+
+    # Path is a directory
+    return basename or show.name
 
 
 class JellyfinMetadataScanner:
@@ -43,6 +126,7 @@ class JellyfinMetadataScanner:
         self._jellyfin = jellyfin_client
         self._config = config
         self._group_builder = group_builder
+        self._path_translator_ready = False
 
     async def run_scan(
         self,
@@ -162,10 +246,12 @@ class JellyfinMetadataScanner:
         progress: ScanProgress | None,
     ) -> None:
         logger.info(
-            "Scanning Jellyfin library: %s (%d shows)", library_title, len(shows)
+            "Scanning Jellyfin library: %s (%d shows)",
+            library_title,
+            len(shows),
         )
         for show in shows:
-            folder_name = os.path.basename(show.path) if show.path else show.name
+            folder_name = _derive_folder_name(show)
             # Always populate jellyfin_media so the browser can display items
             try:
                 await self._db.upsert_jellyfin_media(
@@ -256,7 +342,51 @@ class JellyfinMetadataScanner:
                 results.skipped += 1
                 return
 
-            # 3. Search AniList and match
+            # 3. Cross-source hint: check if another source (local library,
+            # Plex) already matched this folder to AniList — avoids a
+            # redundant search_anime() API call.
+            cross_match = await self._db.find_anilist_match_by_folder(
+                folder_name, exclude_source="jellyfin"
+            )
+            if cross_match and cross_match.get("anilist_id"):
+                xref_id = cross_match["anilist_id"]
+                xref_title = cross_match.get("anilist_title", "")
+                xref_conf = cross_match.get("match_confidence", 0.9)
+                logger.info(
+                    "  [cross-source] %s -> AniList %d (%s)",
+                    title,
+                    xref_id,
+                    xref_title,
+                )
+                if not preview:
+                    await self._apply_anilist_metadata(
+                        item_id,
+                        title,
+                        xref_id,
+                        xref_conf,
+                        f"cross_source:{cross_match.get('match_method', '')}",
+                        dry_run,
+                    )
+                else:
+                    results.items.append(
+                        ScanItemDetail(
+                            rating_key=item_id,
+                            plex_title=title,
+                            plex_year=year,
+                            library_title=library_title,
+                            status="matched",
+                            reason="cross-source match",
+                            anilist_id=xref_id,
+                            anilist_title=xref_title,
+                            confidence=xref_conf,
+                            match_method="cross_source",
+                            folder_name=folder_name,
+                        )
+                    )
+                results.matched += 1
+                return
+
+            # 4. Search AniList and match
             search_title = clean_title_for_search(folder_name or title)
             candidates = await self._anilist.search_anime(search_title, per_page=15)
 
@@ -277,10 +407,24 @@ class JellyfinMetadataScanner:
                 results.failed += 1
                 return
 
+            # Use folder_name as the match target so season-specific info
+            # (e.g. "ω", "S", subtitle) is preserved.  Jellyfin's display
+            # Name may have been overwritten by a metadata agent and lost the
+            # season indicator.  Also extract a year hint for disambiguation.
+            match_target = folder_name or title
+            year_hint = 0
+            year_match = re.search(r"\((\d{4})\)", folder_name or "")
+            if year_match:
+                year_hint = int(year_match.group(1))
             match_result = self._matcher.find_best_match_with_season(
-                title, candidates, target_season=1
+                match_target,
+                candidates,
+                target_season=1,
+                year_hint=year_hint,
+                include_all_formats=True,
             )
             if not match_result:
+                logger.warning("  [no match] %s (searched: '%s')", title, search_title)
                 if preview:
                     results.items.append(
                         ScanItemDetail(
@@ -313,11 +457,18 @@ class JellyfinMetadataScanner:
 
             # Build series group if available
             group_id: int | None = None
+            group_entries: list[dict] = []
+            tv_entries: list[dict] = []
             if self._group_builder:
                 try:
-                    group_id, _entries = await self._group_builder.get_or_build_group(
-                        anilist_id
+                    group_id, group_entries = (
+                        await self._group_builder.get_or_build_group(anilist_id)
                     )
+                    tv_entries = [
+                        e
+                        for e in group_entries
+                        if e.get("format", "") in ("TV", "TV_SHORT")
+                    ]
                 except Exception:
                     logger.exception("  Failed to build series group for %s", title)
                     group_id = None
@@ -367,20 +518,56 @@ class JellyfinMetadataScanner:
                     )
                 )
             else:
+                # Detect Structure B: multiple real seasons in Jellyfin
+                is_structure_b = False
+                jf_real_seasons = []
+                if group_id and len(tv_entries) > 1:
+                    try:
+                        jf_seasons = await self._jellyfin.get_show_seasons(item_id)
+                        jf_real_seasons = sorted(
+                            [s for s in jf_seasons if s.index > 0],
+                            key=lambda s: s.index,
+                        )
+                        is_structure_b = len(jf_real_seasons) > 1
+                    except Exception:
+                        logger.debug(
+                            "  Could not fetch seasons for %s, assuming Structure A",
+                            item_id,
+                            exc_info=True,
+                        )
+
+                show_anilist_id = (
+                    tv_entries[0]["anilist_id"]
+                    if (is_structure_b and tv_entries)
+                    else anilist_id
+                )
+                show_anilist_title = (
+                    tv_entries[0].get("display_title", anilist_title)
+                    if (is_structure_b and tv_entries)
+                    else anilist_title
+                )
+
                 await self._db.upsert_media_mapping(
                     source="jellyfin",
                     source_id=item_id,
                     source_title=title,
-                    anilist_id=anilist_id,
-                    anilist_title=anilist_title,
+                    anilist_id=show_anilist_id,
+                    anilist_title=show_anilist_title,
                     match_confidence=confidence,
                     match_method="fuzzy",
                     series_group_id=group_id,
                     season_number=1,
                 )
-                await self._apply_anilist_metadata(
-                    item_id, title, anilist_id, confidence, "fuzzy", dry_run
-                )
+
+                if is_structure_b:
+                    # Apply per-season posters + show-level first-entry poster
+                    await self._apply_structure_b_metadata(
+                        item_id, title, jf_real_seasons, tv_entries, confidence, dry_run
+                    )
+                else:
+                    await self._apply_anilist_metadata(
+                        item_id, title, anilist_id, confidence, "fuzzy", dry_run
+                    )
             results.matched += 1
 
         except Exception:
@@ -399,6 +586,147 @@ class JellyfinMetadataScanner:
                 )
             results.failed += 1
 
+    async def _apply_structure_b_metadata(
+        self,
+        series_id: str,
+        series_title: str,
+        real_seasons: list[JellyfinSeason],
+        tv_entries: list[dict],
+        confidence: float,
+        dry_run: bool,
+        force_refresh: bool = False,
+    ) -> None:
+        """Apply per-season posters and show-level first-entry poster for Structure B.
+
+        Mirrors Plex's ``_store_structure_b_mappings`` / ``_apply_season_metadata``.
+        Each Jellyfin Season item gets the poster for the corresponding series-group
+        entry; the parent Series item gets the first entry's poster.
+        """
+        for i, season in enumerate(real_seasons):
+            entry = tv_entries[i] if i < len(tv_entries) else tv_entries[-1]
+            entry_title = entry.get("display_title") or entry.get("title_romaji") or ""
+            await self._apply_jellyfin_season_metadata(
+                season.item_id,
+                entry["anilist_id"],
+                entry_title,
+                dry_run,
+                force_refresh=force_refresh,
+            )
+
+        # Show level = first entry
+        first_entry = tv_entries[0]
+        await self._apply_anilist_metadata(
+            series_id,
+            series_title,
+            first_entry["anilist_id"],
+            confidence,
+            "fuzzy",
+            dry_run,
+            force_refresh=force_refresh,
+        )
+        logger.info(
+            "  [structure B] Applied metadata for %d seasons of '%s'",
+            len(real_seasons),
+            series_title,
+        )
+
+    async def _apply_jellyfin_season_metadata(
+        self,
+        season_item_id: str,
+        anilist_id: int,
+        season_title: str,
+        dry_run: bool,
+        force_refresh: bool = False,
+    ) -> None:
+        """Write title and poster to a single Jellyfin Season item."""
+        try:
+            metadata = await self._get_anilist_metadata(
+                anilist_id, force_refresh=force_refresh
+            )
+
+            title_display = await self._db.get_setting("app.title_display") or "romaji"
+            resolved_title = season_title
+            cover_url = ""
+
+            if metadata:
+                title_obj = metadata.get("title", {})
+                romaji = title_obj.get("romaji") or ""
+                english = title_obj.get("english") or ""
+                if title_display in ("english", "both_english_primary"):
+                    resolved_title = english or romaji or season_title
+                else:
+                    resolved_title = romaji or english or season_title
+                cover_url = (metadata.get("coverImage") or {}).get("large") or ""
+
+            if dry_run:
+                logger.info(
+                    "  [dry-run] Would update season %s to title='%s'",
+                    season_item_id,
+                    resolved_title,
+                )
+                return
+
+            try:
+                await self._jellyfin.update_item_metadata(
+                    item_id=season_item_id,
+                    title=resolved_title,
+                )
+            except Exception:
+                logger.exception(
+                    "  Failed to update season metadata for %s", season_item_id
+                )
+                # Fall through — still attempt poster upload below
+
+            if cover_url:
+                try:
+                    await self._jellyfin.upload_poster(season_item_id, cover_url)
+                except Exception:
+                    logger.debug(
+                        "  Failed to upload poster for Jellyfin season %s",
+                        season_item_id,
+                        exc_info=True,
+                    )
+            logger.info(
+                "  [season] Updated Jellyfin season %s -> '%s'",
+                season_item_id,
+                resolved_title,
+            )
+        except Exception:
+            logger.exception(
+                "  Failed to apply season metadata for Jellyfin season %s",
+                season_item_id,
+            )
+
+    async def _ensure_path_translator(self) -> None:
+        """Build and install a PathTranslator on the Jellyfin client (once per scan)."""
+        if self._path_translator_ready:
+            return
+        try:
+            jf_libraries = await self._jellyfin.get_libraries()
+            service_locations: list[str] = [
+                loc for lib in jf_libraries for loc in lib.locations
+            ]
+            db_libraries = await self._db.get_all_libraries()
+            local_paths: list[str] = []
+            for lib in db_libraries:
+                raw = lib.get("paths") or "[]"
+                try:
+                    paths = json.loads(raw)
+                    if isinstance(paths, list):
+                        local_paths.extend(str(p) for p in paths)
+                except Exception:
+                    pass
+            translator = PathTranslator.build(
+                service_locations=service_locations,
+                local_library_paths=local_paths,
+            )
+            self._jellyfin.set_path_translator(translator)
+        except Exception:
+            logger.warning(
+                "Failed to build PathTranslator — folder.jpg writes use raw paths"
+            )
+        self._path_translator_ready = True
+
     async def _apply_anilist_metadata(
         self,
         item_id: str,
@@ -407,9 +735,13 @@ class JellyfinMetadataScanner:
         confidence: float,
         method: str,
         dry_run: bool,
+        force_refresh: bool = False,
     ) -> None:
         """Fetch AniList metadata and write it to a Jellyfin item."""
-        metadata = await self._get_anilist_metadata(anilist_id)
+        await self._ensure_path_translator()
+        metadata = await self._get_anilist_metadata(
+            anilist_id, force_refresh=force_refresh
+        )
         if not metadata:
             logger.warning("  Could not fetch AniList metadata for %d", anilist_id)
             return
@@ -463,18 +795,32 @@ class JellyfinMetadataScanner:
             logger.exception(
                 "  Failed to update Jellyfin metadata for %s", jellyfin_title
             )
-            return
+            # Fall through — still attempt poster upload below
 
         if cover_url:
             try:
                 await self._jellyfin.upload_poster(item_id, cover_url)
             except Exception:
-                logger.warning("  Failed to upload poster for %s", jellyfin_title)
+                logger.warning(
+                    "  Failed to upload poster for %s", jellyfin_title, exc_info=True
+                )
+            # Also set on the parent Folder container if this is a child item
+            # (mixed libraries show Folders in the grid, not the media items)
+            await self._jellyfin.upload_poster_to_parent_folder(item_id, cover_url)
 
         logger.info("  [applied] Jellyfin metadata written to '%s'", jellyfin_title)
 
-    async def _get_anilist_metadata(self, anilist_id: int) -> dict[str, Any] | None:
-        """Fetch metadata from cache or AniList API."""
+    async def _get_anilist_metadata(
+        self, anilist_id: int, force_refresh: bool = False
+    ) -> dict[str, Any] | None:
+        """Fetch metadata from cache or AniList API.
+
+        When *force_refresh* is True the local cache is bypassed and a fresh
+        request is made to AniList (the result is still stored in cache).
+        """
+        if force_refresh:
+            await self._db.delete_cached_metadata(anilist_id)
+
         cached = await self._db.get_cached_metadata(anilist_id)
         if cached:
             return {

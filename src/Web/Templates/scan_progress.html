@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Scanning... — Anilist-Link{% endblock %}
+{% block title %}Anilist-Link: Scanning...{% endblock %}
 
 {% block content %}
 <h1>{% if (source_label | default('Plex')) == 'Jellyfin' %}<img src="/static/img/jellyfin.png" alt="Jellyfin" class="page-service-logo">{% else %}<img src="/static/img/plex.png" alt="Plex" class="page-service-logo">{% endif %}{{ page_title | default("Scan Preview") }}</h1>

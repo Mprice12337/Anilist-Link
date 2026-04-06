@@ -166,24 +166,68 @@ FORMAT_SHORT: dict[str, str] = {
 
 NAMING_PRESETS: dict[str, dict[str, str]] = {
     "standard": {
+        "label": "Standard",
         "file": "{title} - S{season}E{episode}",
         "folder": "{title}",
         "season_folder": "Season {season}",
         "movie_file": "{title} [{year}]",
     },
     "with_year": {
+        "label": "Standard + Year",
         "file": "{title} [{year}] - S{season}E{episode}",
         "folder": "{title} [{year}]",
         "season_folder": "Season {season}",
         "movie_file": "{title} [{year}]",
     },
     "with_quality": {
+        "label": "Standard + Quality",
         "file": "{title} [{year}] - S{season}E{episode} [{quality}]",
         "folder": "{title} [{year}]",
         "season_folder": "Season {season}",
         "movie_file": "{title} [{year}] [{quality}]",
     },
+    "english": {
+        "label": "English",
+        "file": (
+            "{title.english} ({year}) - S{season}E{episode}"
+            " - {episode.title} [{quality}]"
+        ),
+        "folder": "{title.english} ({year})",
+        "season_folder": "Season {season}",
+        "movie_file": "{title.english} ({year}) [{quality}]",
+    },
+    "english_season_names": {
+        "label": "English + Season Names",
+        "file": (
+            "{title.english} ({year}) - S{season}E{episode}"
+            " - {episode.title} [{quality}]"
+        ),
+        "folder": "{title.english} ({year})",
+        "season_folder": "{season.name} ({year})",
+        "movie_file": "{title.english} ({year}) [{quality}]",
+    },
+    "romaji": {
+        "label": "Romaji",
+        "file": (
+            "{title.romaji} ({year}) - S{season}E{episode}"
+            " - {episode.title} [{quality}]"
+        ),
+        "folder": "{title.romaji} ({year})",
+        "season_folder": "Season {season}",
+        "movie_file": "{title.romaji} ({year}) [{quality}]",
+    },
+    "romaji_season_names": {
+        "label": "Romaji + Season Names",
+        "file": (
+            "{title.romaji} ({year}) - S{season}E{episode}"
+            " - {episode.title} [{quality}]"
+        ),
+        "folder": "{title.romaji} ({year})",
+        "season_folder": "{season.name} ({year})",
+        "movie_file": "{title.romaji} ({year}) [{quality}]",
+    },
     "dots": {
+        "label": "Dot Separated",
         "file": "{title}.S{season}E{episode}.{quality.resolution}",
         "folder": "{title}.({year})",
         "season_folder": "Season.{season}",

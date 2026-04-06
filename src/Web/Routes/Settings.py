@@ -66,6 +66,11 @@ FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
         [
             ("jellyfin.url", "Server URL", "url"),
             ("jellyfin.api_key", "API Key", "password"),
+            (
+                "jellyfin.anime_library_ids",
+                "Anime Libraries",
+                "jellyfin_library_select",
+            ),
         ],
     ),
     (
@@ -110,6 +115,11 @@ FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
                 "number",
             ),
             ("scheduler.scan_interval_hours", "Scan interval (hours)", "number"),
+            (
+                "scheduler.library_reindex_interval_hours",
+                "Library re-index interval (hours)",
+                "number",
+            ),
             ("app.debug", "Debug logging", "checkbox"),
             ("app.title_display", "Title display", "select"),
         ],
@@ -222,6 +232,32 @@ async def settings_page(request: Request, saved: int = 0) -> HTMLResponse:
             await plex_client.close()
         selected_library_keys = list(config.plex.anime_library_keys)
 
+    # Fetch Jellyfin libraries for the anime-library selector
+    jellyfin_libraries: list[dict[str, str]] = []
+    selected_jellyfin_ids: list[str] = []
+    if config.jellyfin.url and config.jellyfin.api_key:
+        from src.Clients.JellyfinClient import JellyfinClient
+
+        jf_client = JellyfinClient(
+            url=config.jellyfin.url, api_key=config.jellyfin.api_key
+        )
+        try:
+            jf_libs = await asyncio.wait_for(jf_client.get_libraries(), timeout=5.0)
+            jellyfin_libraries = [{"id": lib.id, "name": lib.name} for lib in jf_libs]
+        except Exception:
+            logger.warning("Could not fetch Jellyfin libraries for settings page")
+        finally:
+            await jf_client.close()
+        # Read saved selection from DB (stored as JSON list)
+        jf_sel_raw = display.get("jellyfin.anime_library_ids", "[]")
+        try:
+            parsed = json.loads(jf_sel_raw)
+            selected_jellyfin_ids = (
+                [str(v) for v in parsed] if isinstance(parsed, list) else []
+            )
+        except (json.JSONDecodeError, TypeError):
+            selected_jellyfin_ids = []
+
     return templates.TemplateResponse(
         "settings.html",
         {
@@ -237,6 +273,8 @@ async def settings_page(request: Request, saved: int = 0) -> HTMLResponse:
             "anilist_callback_url": anilist_callback_url,
             "plex_libraries": plex_libraries,
             "selected_library_keys": selected_library_keys,
+            "jellyfin_libraries": jellyfin_libraries,
+            "selected_jellyfin_ids": selected_jellyfin_ids,
             "naming_presets": NAMING_PRESETS,
             "setup": request.query_params.get("setup", ""),
         },
@@ -269,7 +307,7 @@ async def settings_save(request: Request) -> RedirectResponse:
         is_secret = key in SECRET_KEYS
         input_type = _get_input_type(key)
 
-        if input_type == "plex_library_select":
+        if input_type in ("plex_library_select", "jellyfin_library_select"):
             # Multi-valued checkboxes: serialize selected keys as JSON list
             selected = form.getlist(key)
             value = json.dumps([str(v) for v in selected])

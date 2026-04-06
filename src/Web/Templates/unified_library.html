@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Library — Anilist-Link{% endblock %}
+{% block title %}Anilist-Link: Library{% endblock %}
 {% block container_class %}container-wide{% endblock %}
 
 {% block content %}
@@ -27,6 +27,10 @@
     <a href="/library?source=jellyfin" class="filter-chip {% if source == 'jellyfin' %}active{% endif %}"><img src="/static/img/jellyfin.png" alt="" class="chip-service-logo">Jellyfin</a>
     {% endif %}
     <span style="flex:1"></span>
+    <button class="btn btn-sm btn-secondary" id="reindexBtn" onclick="reindexAll()"
+            title="Re-scan local folders and update series-group-aware index">
+        Re-index Local
+    </button>
     <span class="text-muted" style="font-size:0.82rem;white-space:nowrap">{{ matched_count }}/{{ item_count }}</span>
     <div class="view-toggle">
         <button class="view-btn active" id="gridViewBtn" onclick="setView('grid')" title="Grid view">&#8862;</button>
@@ -54,10 +58,10 @@
             {% else %}
             <div class="library-card-poster-empty"><span>?</span></div>
             {% endif %}
-            <!-- Source badges (may be multiple for aggregated items) -->
+            <!-- Source dots (one per source, horizontal row) -->
             <div class="lib-source-badges">
                 {% for s in item.sources %}
-                <span class="source-badge source-badge-{{ s }}">{{ s | title }}</span>
+                <span class="source-dot source-dot-{{ s }}" title="{{ s | title }}"></span>
                 {% endfor %}
             </div>
             <!-- Edit overlay button (shows on hover) -->
@@ -434,6 +438,29 @@ function escHtml(s) {
 }
 function escJs(s) {
     return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+}
+
+async function reindexAll() {
+    var btn = document.getElementById('reindexBtn');
+    var origText = btn.textContent;
+    btn.textContent = 'Indexing...';
+    btn.disabled = true;
+    try {
+        var resp = await fetch('/api/library/reindex-all', {method: 'POST'});
+        var data = await resp.json();
+        if (data.ok) {
+            btn.textContent = 'Done (' + data.seeded + ')';
+            setTimeout(function() { window.location.reload(); }, 1200);
+        } else {
+            alert('Re-index failed: ' + (data.error || 'unknown'));
+            btn.textContent = origText;
+            btn.disabled = false;
+        }
+    } catch(err) {
+        alert('Re-index failed.');
+        btn.textContent = origText;
+        btn.disabled = false;
+    }
 }
 
 // Scroll-on-hover for titles

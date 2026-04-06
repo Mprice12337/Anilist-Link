@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 
@@ -19,6 +18,7 @@ from src.Scanner.MetadataScanner import (
     ScanResults,
 )
 from src.Scanner.SeriesGroupBuilder import SeriesGroupBuilder
+from src.Web.App import spawn_background_task
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +88,7 @@ async def plex_scan_preview(request: Request) -> RedirectResponse:
     request.app.state.plex_scan_results = None
 
     # Launch background task
-    asyncio.create_task(_run_preview_scan(request.app.state))
+    spawn_background_task(request.app.state, _run_preview_scan(request.app.state))
 
     return RedirectResponse(url="/scan/plex/progress", status_code=303)
 
@@ -257,6 +257,10 @@ async def plex_scan_apply(request: Request) -> RedirectResponse:
         errors += 1
     finally:
         await plex_client.close()
+
+    # Auto-dismiss the scan notification now that results have been applied
+    await db.dismiss_notifications_by_url("/scan/plex/results")
+    await db.clear_dismissed_notifications()
 
     msg = f"Applied+metadata+to+{applied}+shows"
     if errors:

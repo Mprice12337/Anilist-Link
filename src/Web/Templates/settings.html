@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Settings — Anilist-Link{% endblock %}
+{% block title %}Anilist-Link: Settings{% endblock %}
 
 {% block content %}
 <h1>Settings</h1>
@@ -81,6 +81,21 @@
                 </div>
                 {% else %}
                 <span class="text-muted" style="font-size:0.85rem">Save a Plex URL and Token first, then reload to see libraries.</span>
+                {% endif %}
+
+                {% elif input_type == "jellyfin_library_select" %}
+                {% if jellyfin_libraries %}
+                <div class="library-checkboxes">
+                    {% for lib in jellyfin_libraries %}
+                    <label class="toggle">
+                        <input type="checkbox" name="{{ key }}" value="{{ lib.id }}"
+                               {% if lib.id in selected_jellyfin_ids %}checked{% endif %}>
+                        <span class="toggle-label">{{ lib.name }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <span class="text-muted" style="font-size:0.85rem">Save a Jellyfin URL and API Key first, then reload to see libraries.</span>
                 {% endif %}
 
                 {% elif input_type == "select" %}

@@ -11,7 +11,7 @@ Anilist-Link is a self-hosted Docker container that serves as a centralized brid
 | **P2 — File Organization** | Rename/restructure anime files using AniList series data | ✅ Complete |
 | **P3 — Metadata** | Write AniList metadata to Plex and Jellyfin libraries | ✅ Complete |
 | **P1 — Watch Sync** | Sync Crunchyroll watch progress to AniList | ✅ Crunchyroll done; Plex/Jellyfin planned |
-| **P4 — Downloads** | Add anime to Sonarr/Radarr via AniList alt titles + Prowlarr | 🔧 Partially implemented |
+| **P4 — Downloads** | Add anime to Sonarr/Radarr via AniList alt titles | 🔧 Partially implemented |
 
 ## Architecture
 
@@ -34,10 +34,9 @@ Anilist-Link is a self-hosted Docker container that serves as a centralized brid
 │  │   Client    │  │ Client │  │   Client    │  │     Client       │  │
 │  └─────────────┘  └────────┘  └─────────────┘  └──────────────────┘  │
 │                                                                      │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐  │
-│  │  Sonarr  │  │  Radarr  │  │ Prowlarr │  │    qBittorrent       │  │
-│  │  Client  │  │  Client  │  │  Client  │  │      Client          │  │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────────────────┘  │
+│  ┌──────────────────────────┐  ┌──────────────────────────────────┐  │
+│  │      Sonarr Client       │  │         Radarr Client            │  │
+│  └──────────────────────────┘  └──────────────────────────────────┘  │
 │                                                                      │
 │  ┌────────────────────────────────────┐  ┌──────────────────────┐    │
 │  │         SQLite Database (v17)      │  │   Sync Scheduler     │    │
@@ -63,9 +62,6 @@ Reverse-engineered auth and watch history retrieval using Selenium/undetected-ch
 
 ### Sonarr / Radarr Clients (`src/Clients/SonarrClient.py`, `RadarrClient.py`)
 Sonarr API v3 and Radarr API v3 integration for series/movie lookup, add requests, and monitoring. P4 download management.
-
-### Prowlarr Client (`src/Clients/ProwlarrClient.py`)
-Indexer search across configured Prowlarr indexers for manual grab workflow.
 
 ### Title Matching Engine (`src/Matching/`)
 rapidfuzz-based multi-algorithm fuzzy matching: ratio, partial ratio, token sort ratio, token set ratio — configurable weights. Anime-specific normalization (season number stripping, Unicode transliteration, punctuation removal, bracket tag removal). Multi-pass search with configurable confidence thresholds. Manual override system for entries that can't be auto-matched.

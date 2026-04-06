@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 
@@ -15,6 +14,7 @@ from src.Matching.TitleMatcher import TitleMatcher
 from src.Scanner.JellyfinMetadataScanner import JellyfinMetadataScanner
 from src.Scanner.MetadataScanner import ScanProgress, ScanResults
 from src.Scanner.SeriesGroupBuilder import SeriesGroupBuilder
+from src.Web.App import spawn_background_task
 from src.Web.Routes.JellyfinScan import (
     _run_jellyfin_live_scan,
     _run_jellyfin_preview_scan,
@@ -201,12 +201,46 @@ async def jellyfin_remove_library(request: Request) -> RedirectResponse:
     )
 
 
+@router.post("/jellyfin/clear-all")
+async def jellyfin_clear_all(request: Request) -> RedirectResponse:
+    """Remove ALL Jellyfin data from the database (all libraries)."""
+    db = request.app.state.db
+    total = 0
+    rows = await db.fetch_all(
+        "SELECT DISTINCT library_id FROM jellyfin_media WHERE library_id IS NOT NULL"
+    )
+    for row in rows:
+        total += await db.delete_jellyfin_library_data(row["library_id"])
+    # Clear any orphaned rows
+    orphans = await db.fetch_one("SELECT COUNT(*) AS cnt FROM jellyfin_media")
+    orphan_count = orphans["cnt"] if orphans else 0
+    if orphan_count > 0:
+        await db.execute("DELETE FROM media_mappings WHERE source='jellyfin'")
+        await db.execute("DELETE FROM jellyfin_media")
+        total += orphan_count
+    logger.info("Cleared all Jellyfin data: %d items deleted", total)
+    return RedirectResponse(
+        url=f"/jellyfin?message=Cleared+all+Jellyfin+data+({total}+items)",
+        status_code=303,
+    )
+
+
 @router.post("/jellyfin/apply-all")
 async def jellyfin_apply_all(request: Request) -> RedirectResponse:
-    """Apply AniList metadata to all matched Jellyfin items."""
+    """Apply AniList metadata to all matched Jellyfin items.
+
+    Builds the series group, detects Structure B, and writes both show-level
+    and per-season metadata for multi-season shows.
+
+    When the form includes ``force_refresh=1`` the AniList metadata cache is
+    bypassed so fresh data is fetched from AniList for every item.
+    """
     config = request.app.state.config
     db = request.app.state.db
     anilist_client = request.app.state.anilist_client
+
+    form = await request.form()
+    force_refresh = form.get("force_refresh") == "1"
 
     if not config.jellyfin.url or not config.jellyfin.api_key:
         return RedirectResponse(
@@ -236,14 +270,78 @@ async def jellyfin_apply_all(request: Request) -> RedirectResponse:
     try:
         for item in matched:
             try:
-                await scanner._apply_anilist_metadata(
-                    item["item_id"],
-                    item["jellyfin_title"],
-                    item["anilist_id"],
-                    item.get("match_confidence") or 1.0,
-                    item.get("match_method") or "manual",
-                    False,
-                )
+                item_id = item["item_id"]
+                jellyfin_title = item["jellyfin_title"]
+                anilist_id = item["anilist_id"]
+                confidence = item.get("match_confidence") or 1.0
+
+                # Build series group and detect Structure B
+                group_id = None
+                tv_entries: list[dict] = []
+                is_structure_b = False
+                jf_real_seasons = []
+                try:
+                    group_id, group_entries = await group_builder.get_or_build_group(
+                        anilist_id
+                    )
+                    tv_entries = [
+                        e
+                        for e in group_entries
+                        if e.get("format", "") in ("TV", "TV_SHORT")
+                    ]
+                except Exception:
+                    logger.debug(
+                        "Could not build series group for %s",
+                        jellyfin_title,
+                        exc_info=True,
+                    )
+
+                if group_id and len(tv_entries) > 1:
+                    try:
+                        jf_seasons = await jellyfin_client.get_show_seasons(item_id)
+                        jf_real_seasons = sorted(
+                            [s for s in jf_seasons if s.index > 0],
+                            key=lambda s: s.index,
+                        )
+                        is_structure_b = len(jf_real_seasons) > 1
+                    except Exception:
+                        logger.debug(
+                            "Could not fetch seasons for '%s' (%s),"
+                            " treating as Structure A",
+                            jellyfin_title,
+                            item_id,
+                            exc_info=True,
+                        )
+
+                if is_structure_b and tv_entries:
+                    logger.info(
+                        "  [structure B] '%s': %d seasons, %d group entries",
+                        jellyfin_title,
+                        len(jf_real_seasons),
+                        len(tv_entries),
+                    )
+                    await scanner._apply_structure_b_metadata(
+                        item_id,
+                        jellyfin_title,
+                        jf_real_seasons,
+                        tv_entries,
+                        confidence,
+                        False,
+                        force_refresh=force_refresh,
+                    )
+                else:
+                    logger.info(
+                        "  [structure A] '%s': single entry apply", jellyfin_title
+                    )
+                    await scanner._apply_anilist_metadata(
+                        item_id,
+                        jellyfin_title,
+                        anilist_id,
+                        confidence,
+                        item.get("match_method") or "manual",
+                        False,
+                        force_refresh=force_refresh,
+                    )
                 applied += 1
             except Exception:
                 logger.exception(
@@ -292,14 +390,49 @@ async def jellyfin_apply_single(request: Request) -> JSONResponse:
     )
 
     try:
-        await scanner._apply_anilist_metadata(
-            item_id,
-            jellyfin_title,
-            anilist_id,
-            confidence,
-            mapping.get("match_method") or "manual",
-            False,
-        )
+        # Detect Structure B (multi-season) before applying
+        group_id = None
+        tv_entries: list[dict] = []
+        is_structure_b = False
+        jf_real_seasons = []
+        try:
+            group_id, group_entries = await group_builder.get_or_build_group(anilist_id)
+            tv_entries = [
+                e for e in group_entries if e.get("format", "") in ("TV", "TV_SHORT")
+            ]
+        except Exception:
+            logger.debug(
+                "Could not build series group for %s", jellyfin_title, exc_info=True
+            )
+
+        if group_id and len(tv_entries) > 1:
+            try:
+                jf_seasons = await jellyfin_client.get_show_seasons(item_id)
+                jf_real_seasons = sorted(
+                    [s for s in jf_seasons if s.index > 0],
+                    key=lambda s: s.index,
+                )
+                is_structure_b = len(jf_real_seasons) > 1
+            except Exception:
+                logger.debug(
+                    "Could not fetch seasons for '%s', treating as Structure A",
+                    jellyfin_title,
+                    exc_info=True,
+                )
+
+        if is_structure_b and tv_entries:
+            await scanner._apply_structure_b_metadata(
+                item_id, jellyfin_title, jf_real_seasons, tv_entries, confidence, False
+            )
+        else:
+            await scanner._apply_anilist_metadata(
+                item_id,
+                jellyfin_title,
+                anilist_id,
+                confidence,
+                mapping.get("match_method") or "manual",
+                False,
+            )
     except Exception:
         logger.exception("Failed to apply metadata for item_id=%s", item_id)
         await jellyfin_client.close()
@@ -333,7 +466,9 @@ async def jellyfin_scan_preview(request: Request) -> RedirectResponse:
     request.app.state.jellyfin_scan_results = None
     request.app.state.jellyfin_scan_return_to = "/jellyfin"
 
-    asyncio.create_task(_run_jellyfin_preview_scan(request.app.state))
+    spawn_background_task(
+        request.app.state, _run_jellyfin_preview_scan(request.app.state)
+    )
 
     return RedirectResponse(url="/jellyfin/scan/progress", status_code=303)
 
@@ -357,7 +492,7 @@ async def jellyfin_scan_live(request: Request) -> RedirectResponse:
     request.app.state.jellyfin_scan_results = None
     request.app.state.jellyfin_scan_return_to = "/jellyfin"
 
-    asyncio.create_task(_run_jellyfin_live_scan(request.app.state))
+    spawn_background_task(request.app.state, _run_jellyfin_live_scan(request.app.state))
 
     return RedirectResponse(url="/jellyfin/scan/progress", status_code=303)
 
@@ -371,6 +506,7 @@ async def jellyfin_scan_progress_page(request: Request) -> HTMLResponse:
         {
             "request": request,
             "page_title": "Jellyfin Scan",
+            "source_label": "Jellyfin",
             "scan_label": "Scanning Jellyfin library...",
             "progress_api_url": "/api/scan/jellyfin/progress",
             "results_url": "/jellyfin/scan/results",

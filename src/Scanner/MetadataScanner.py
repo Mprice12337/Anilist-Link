@@ -58,6 +58,7 @@ class ScanItemDetail:
     match_method: str | None = None
     changes: dict[str, str] = field(default_factory=dict)
     folder_name: str = ""
+    location: str = ""
     anilist_year: int | None = None
     anilist_season: str | None = None
     anilist_format: str | None = None
@@ -194,7 +195,9 @@ class MetadataScanner:
             progress.current_title = "Counting shows..."
         for library in show_libraries:
             try:
-                shows = await self._plex.get_library_shows(library.key)
+                shows = await self._plex.get_library_shows(
+                    library.key, library_type=library.type
+                )
                 library_shows[library.key] = shows
             except Exception:
                 logger.exception("Failed to get shows from library %s", library.title)
@@ -244,16 +247,16 @@ class MetadataScanner:
 
         for show in shows:
             folder_name = getattr(show, "folder_name", "") or ""
-            # The bulk /all endpoint omits Location data, so folder_name
-            # defaults to the Plex title.  Fetch the real filesystem path
-            # when it's missing so we can distinguish same-titled shows.
-            if folder_name == show.title and hasattr(self._plex, "get_show_locations"):
+            # The bulk /all endpoint omits Location data.  Always fetch
+            # the real filesystem path so we can show it in the UI and
+            # distinguish same-titled shows.
+            if hasattr(self._plex, "get_show_locations"):
                 locs = await self._plex.get_show_locations(show.rating_key)
                 if locs:
                     real_name = os.path.basename(locs[0])
                     if real_name:
                         folder_name = real_name
-                        show.locations = locs
+                    show.locations = locs
             if progress:
                 progress.current_title = folder_name or show.title
             # Persist show to plex_media for library browser
@@ -267,6 +270,9 @@ class MetadataScanner:
                 library_title=library_title,
                 folder_name=folder_name,
             )
+            show_location = ""
+            if hasattr(show, "locations") and show.locations:
+                show_location = show.locations[0]
             await self._process_show(
                 show.rating_key,
                 show.title,
@@ -276,6 +282,7 @@ class MetadataScanner:
                 library_title,
                 show.year,
                 folder_name=folder_name,
+                location=show_location,
             )
             if progress:
                 progress.scanned += 1
@@ -294,6 +301,7 @@ class MetadataScanner:
         library_title: str = "",
         year: int | None = None,
         folder_name: str = "",
+        location: str = "",
     ) -> None:
         """Process a single Plex show: match to AniList and apply metadata."""
         try:
@@ -324,6 +332,7 @@ class MetadataScanner:
                             confidence=1.0,
                             match_method="manual_override",
                             folder_name=folder_name,
+                            location=location,
                         )
                     )
                 results.matched += 1
@@ -347,12 +356,58 @@ class MetadataScanner:
                             anilist_id=existing["anilist_id"],
                             anilist_title=existing.get("anilist_title"),
                             folder_name=folder_name,
+                            location=location,
                         )
                     )
                 results.skipped += 1
                 return
 
-            # 3. Search AniList and match — prefer folder name over Plex title
+            # 3. Cross-source hint: check if another source (local library,
+            # Jellyfin) already matched this folder to AniList — avoids a
+            # redundant search_anime() API call.
+            cross_match = await self._db.find_anilist_match_by_folder(
+                folder_name, exclude_source="plex"
+            )
+            if cross_match and cross_match.get("anilist_id"):
+                xref_id = cross_match["anilist_id"]
+                xref_title = cross_match.get("anilist_title", "")
+                xref_conf = cross_match.get("match_confidence", 0.9)
+                logger.info(
+                    "  [cross-source] %s -> AniList %d (%s)",
+                    title,
+                    xref_id,
+                    xref_title,
+                )
+                if not preview:
+                    await self._apply_anilist_metadata(
+                        rating_key,
+                        title,
+                        xref_id,
+                        xref_conf,
+                        f"cross_source:{cross_match.get('match_method', '')}",
+                        dry_run,
+                    )
+                else:
+                    results.items.append(
+                        ScanItemDetail(
+                            rating_key=rating_key,
+                            plex_title=title,
+                            plex_year=year,
+                            library_title=library_title,
+                            status="matched",
+                            reason="cross-source match",
+                            anilist_id=xref_id,
+                            anilist_title=xref_title,
+                            confidence=xref_conf,
+                            match_method="cross_source",
+                            folder_name=folder_name,
+                            location=location,
+                        )
+                    )
+                results.matched += 1
+                return
+
+            # 4. Search AniList and match — prefer folder name over Plex title
             search_title = clean_title_for_search(folder_name or title)
             candidates = await self._anilist.search_anime(search_title, per_page=15)
 
@@ -368,6 +423,7 @@ class MetadataScanner:
                             status="failed",
                             reason="no AniList results found",
                             folder_name=folder_name,
+                            location=location,
                         )
                     )
                 results.failed += 1
@@ -389,6 +445,7 @@ class MetadataScanner:
                             status="failed",
                             reason="no confident match found",
                             folder_name=folder_name,
+                            location=location,
                         )
                     )
                 results.failed += 1
@@ -479,6 +536,7 @@ class MetadataScanner:
                         match_method="fuzzy",
                         changes=changes,
                         folder_name=folder_name,
+                        location=location,
                         anilist_year=al_year,
                         anilist_season=al_season,
                         anilist_format=al_format,
@@ -526,6 +584,7 @@ class MetadataScanner:
                         status="failed",
                         reason="unexpected error",
                         folder_name=folder_name,
+                        location=location,
                     )
                 )
             results.failed += 1
@@ -582,6 +641,7 @@ class MetadataScanner:
         tv_entries: list[dict[str, Any]],
         confidence: float,
         dry_run: bool,
+        force_refresh: bool = False,
     ) -> None:
         """Create one mapping per Plex season for Structure B shows.
 
@@ -629,7 +689,11 @@ class MetadataScanner:
             # Write season title and poster to Plex
             if not dry_run and entry_title:
                 await self._apply_season_metadata(
-                    season.rating_key, entry_anilist_id, entry_title, dry_run
+                    season.rating_key,
+                    entry_anilist_id,
+                    entry_title,
+                    dry_run,
+                    force_refresh=force_refresh,
                 )
 
         # Also store the show-level mapping pointing to the first entry
@@ -655,6 +719,7 @@ class MetadataScanner:
                 confidence,
                 "fuzzy",
                 dry_run,
+                force_refresh=force_refresh,
             )
 
         logger.info(
@@ -669,6 +734,7 @@ class MetadataScanner:
         anilist_id: int,
         season_title: str,
         dry_run: bool,
+        force_refresh: bool = False,
     ) -> None:
         """Write title and poster to a single Plex season.
 
@@ -677,7 +743,9 @@ class MetadataScanner:
         english), resolved from the AniList metadata for this entry.
         """
         try:
-            metadata = await self._get_anilist_metadata(anilist_id)
+            metadata = await self._get_anilist_metadata(
+                anilist_id, force_refresh=force_refresh
+            )
 
             # Resolve title using the same preference as show-level
             resolved_title = season_title
@@ -747,10 +815,13 @@ class MetadataScanner:
         confidence: float,
         method: str,
         dry_run: bool,
+        force_refresh: bool = False,
     ) -> None:
         """Fetch AniList metadata and write it to Plex."""
         # Try cache first
-        metadata = await self._get_anilist_metadata(anilist_id)
+        metadata = await self._get_anilist_metadata(
+            anilist_id, force_refresh=force_refresh
+        )
         if not metadata:
             logger.warning("  Could not fetch AniList metadata for %d", anilist_id)
             return
@@ -817,8 +888,17 @@ class MetadataScanner:
 
         logger.info("  [applied] Metadata written to '%s'", plex_title)
 
-    async def _get_anilist_metadata(self, anilist_id: int) -> dict[str, Any] | None:
-        """Fetch metadata from cache or AniList API."""
+    async def _get_anilist_metadata(
+        self, anilist_id: int, force_refresh: bool = False
+    ) -> dict[str, Any] | None:
+        """Fetch metadata from cache or AniList API.
+
+        When *force_refresh* is True the local cache is bypassed and a fresh
+        request is made to AniList (the result is still stored in cache).
+        """
+        if force_refresh:
+            await self._db.delete_cached_metadata(anilist_id)
+
         # Check DB cache
         cached = await self._db.get_cached_metadata(anilist_id)
         if cached:

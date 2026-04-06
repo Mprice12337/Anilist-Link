@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ page_title | default("Plex Scan Preview") }} — Anilist-Link{% endblock %}
+{% block title %}Anilist-Link: {{ page_title | default("Plex Scan Preview") }}{% endblock %}
 
 {% block content %}
 <h1>{% if (source_label | default('Plex')) == 'Jellyfin' %}<img src="/static/img/jellyfin.png" alt="Jellyfin" class="page-service-logo">{% else %}<img src="/static/img/plex.png" alt="Plex" class="page-service-logo">{% endif %}{{ page_title | default("Plex Scan Preview") }}</h1>
@@ -26,7 +26,7 @@
 <section class="card">
     <h2>Matched Shows</h2>
     <p class="text-muted hint">These shows will have their metadata updated from AniList.</p>
-    <form method="post" action="{{ apply_url | default('/scan/plex/apply') }}">
+    <form method="post" action="{{ apply_url | default('/scan/plex/apply') }}" data-processing="Applying metadata…">
         <table class="table">
             <thead>
                 <tr>
@@ -47,7 +47,9 @@
                     </td>
                     <td>
                         <span class="folder-name">{{ item.folder_name or item.plex_title }}</span>
-                        {% if item.folder_name and item.folder_name != item.plex_title %}
+                        {% if item.location %}
+                        <br><span class="text-muted" style="font-size:0.78rem;word-break:break-all">{{ item.location }}</span>
+                        {% elif item.folder_name and item.folder_name != item.plex_title %}
                         <br><span class="text-muted" style="font-size:0.8rem">{{ source_label | default("Plex") }}: {{ item.plex_title }}</span>
                         {% endif %}
                     </td>
@@ -88,7 +90,7 @@
                     </td>
                     <td>
                         <button type="button" class="btn btn-secondary btn-sm"
-                                onclick="openFixMatch('{{ item.rating_key }}', '{{ (item.folder_name or item.plex_title) | e }}', '{{ item.plex_title | e }}', '{{ item.plex_year or '' }}', '{{ item.library_title | e }}')">
+                                onclick="openFixMatch('{{ item.rating_key }}', '{{ (item.folder_name or item.plex_title) | e }}', '{{ item.plex_title | e }}', '{{ item.plex_year or '' }}', '{{ item.library_title | e }}', '{{ item.location | e }}')">
                             Fix Match
                         </button>
                     </td>
@@ -120,14 +122,12 @@
             <tr>
                 <td>
                     <span class="folder-name">{{ item.folder_name or item.plex_title }}</span>
-                    {% if item.folder_name and item.folder_name != item.plex_title %}
-                    <br><span class="text-muted" style="font-size:0.8rem">{{ source_label | default("Plex") }}: {{ item.plex_title }}</span>
-                    {% endif %}
+                    <br><span class="text-muted" style="font-size:0.78rem;word-break:break-all">{% if item.location %}{{ item.location }}{% else %}{{ item.library_title }}{% if item.folder_name %} / {{ item.folder_name }}{% endif %}{% if item.plex_year %} ({{ item.plex_year }}){% endif %}{% endif %}</span>
                 </td>
                 <td class="text-muted">{{ item.reason }}</td>
                 <td>
                     <button type="button" class="btn btn-secondary btn-sm"
-                            onclick="openFixMatch('{{ item.rating_key }}', '{{ (item.folder_name or item.plex_title) | e }}', '{{ item.plex_title | e }}', '{{ item.plex_year or '' }}', '{{ item.library_title | e }}')">
+                            onclick="openFixMatch('{{ item.rating_key }}', '{{ (item.folder_name or item.plex_title) | e }}', '{{ item.plex_title | e }}', '{{ item.plex_year or '' }}', '{{ item.library_title | e }}', '{{ item.location | e }}')">
                         Fix Match
                     </button>
                 </td>
@@ -195,6 +195,7 @@
     <div class="modal-content">
         <div class="modal-header">
             <h3>Fix Match: <span id="modal-source-title"></span></h3>
+            <div id="modal-path-info" style="font-size:0.8rem;color:var(--text-muted);margin-top:0.25rem"></div>
             <button class="modal-close" onclick="closeFixMatch()">&times;</button>
         </div>
         <div class="modal-body">
@@ -229,9 +230,19 @@ var _fixMatchState = {};
 var _searchUrl = {{ search_url | default("/api/scan/plex/search") | tojson }};
 var _rematchUrl = {{ rematch_url | default("/scan/plex/rematch") | tojson }};
 
-function openFixMatch(ratingKey, folderName, sourceTitle, sourceYear, libraryTitle) {
+function openFixMatch(ratingKey, folderName, sourceTitle, sourceYear, libraryTitle, location) {
     _fixMatchState = { ratingKey: ratingKey, folderName: folderName, plexTitle: sourceTitle, plexYear: sourceYear, libraryTitle: libraryTitle };
-    document.getElementById('modal-source-title').textContent = folderName;
+    document.getElementById('modal-source-title').textContent = folderName || sourceTitle;
+    var pathInfo = document.getElementById('modal-path-info');
+    var pathStr = location || '';
+    if (!pathStr) {
+        // Fallback: construct from available data
+        if (libraryTitle) pathStr += libraryTitle;
+        if (folderName) pathStr += (pathStr ? ' / ' : '') + folderName;
+        if (sourceTitle && sourceTitle !== folderName) pathStr += (pathStr ? ' / ' : '') + sourceTitle;
+        if (sourceYear) pathStr += ' (' + sourceYear + ')';
+    }
+    pathInfo.textContent = pathStr;
     var input = document.getElementById('modal-search-input');
     input.value = folderName;
     document.getElementById('modal-results').innerHTML = '';

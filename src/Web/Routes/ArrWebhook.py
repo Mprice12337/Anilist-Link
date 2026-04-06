@@ -11,7 +11,6 @@ Webhook URLs to register in Sonarr/Radarr:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
@@ -19,6 +18,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from src.Download.ArrPostProcessor import ArrPostProcessor
+from src.Web.App import spawn_background_task
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ async def sonarr_webhook(request: Request) -> JSONResponse:
     processor = ArrPostProcessor(db=db, config=config)
 
     # Fire-and-forget — respond immediately so Sonarr doesn't time out
-    asyncio.create_task(processor.process_sonarr_download(payload))
+    spawn_background_task(request.app.state, processor.process_sonarr_download(payload))
     return JSONResponse({"ok": True})
 
 
@@ -64,7 +64,7 @@ async def radarr_webhook(request: Request) -> JSONResponse:
     db = request.app.state.db
     processor = ArrPostProcessor(db=db, config=config)
 
-    asyncio.create_task(processor.process_radarr_download(payload))
+    spawn_background_task(request.app.state, processor.process_radarr_download(payload))
     return JSONResponse({"ok": True})
 
 

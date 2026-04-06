@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -57,6 +58,7 @@ def create_app(
     app.state.anilist_client = anilist_client
     app.state.scheduler = scheduler
     app.state.templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+    app.state.background_tasks: set = set()  # prevent GC of fire-and-forget tasks
 
     # Static files
     STATIC_DIR.mkdir(parents=True, exist_ok=True)
@@ -106,3 +108,16 @@ def create_app(
     app.include_router(watchlist_library_router)
 
     return app
+
+
+def spawn_background_task(app_state: object, coro) -> asyncio.Task:  # type: ignore[type-arg]
+    """Create a background task that is prevented from being garbage-collected.
+
+    The task automatically removes itself from the tracking set on completion.
+    Use this instead of bare ``asyncio.create_task()`` in route handlers.
+    """
+    task = asyncio.create_task(coro)
+    tasks: set = app_state.background_tasks  # type: ignore[attr-defined]
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+    return task

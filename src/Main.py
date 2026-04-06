@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import uvicorn
 from dotenv import load_dotenv
@@ -176,6 +177,65 @@ async def plex_metadata_scan_task(
         await plex_client.close()
 
 
+async def library_reindex_task(
+    db: DatabaseManager,
+    anilist_client: AniListClient,
+) -> None:
+    """Re-index all local libraries so the app stays in sync with on-disk changes."""
+    from src.Scanner.LibraryRestructurer import LibraryRestructurer, RestructureProgress
+    from src.Scanner.LocalDirectoryScanner import LocalDirectoryScanner
+
+    logger.info("Starting scheduled library re-index")
+    title_matcher = TitleMatcher(similarity_threshold=0.75)
+    group_builder = SeriesGroupBuilder(db, anilist_client)
+    restructurer = LibraryRestructurer(db=db, group_builder=group_builder)
+    dir_scanner = LocalDirectoryScanner(
+        db=db, anilist_client=anilist_client, title_matcher=title_matcher
+    )
+
+    libraries = await db.get_all_libraries()
+    if not libraries:
+        logger.debug("Library re-index skipped — no libraries configured")
+        return
+
+    total_seeded = 0
+    try:
+        for library in libraries:
+            raw = library.get("paths") or "[]"
+            try:
+                library_paths: list[str] = json.loads(raw)
+            except Exception:
+                continue
+            if not library_paths:
+                continue
+
+            all_shows = []
+            scan_progress = RestructureProgress(status="running")
+            for path in library_paths:
+                shows = await dir_scanner.scan_directory(path, scan_progress)
+                all_shows.extend(shows)
+
+            if not all_shows:
+                continue
+
+            progress = RestructureProgress(status="running")
+            plan = await restructurer.analyze(
+                all_shows, progress, level="full_restructure"
+            )
+
+            await db.execute(
+                "DELETE FROM library_items WHERE library_id = ?", (library["id"],)
+            )
+            seeded = await restructurer.seed_library_items(
+                plan, library["id"], from_source=True
+            )
+            total_seeded += seeded
+
+        logger.info("Scheduled library re-index complete — %d items", total_seeded)
+    except Exception:
+        logger.exception("Scheduled library re-index failed")
+
+
 async def main() -> None:
     """Application startup sequence."""
     load_dotenv()
@@ -225,11 +285,15 @@ async def main() -> None:
     async def _download_sync() -> None:
         await download_sync_task(app.state.config, db, app.state.anilist_client)
 
+    async def _library_reindex() -> None:
+        await library_reindex_task(db, app.state.anilist_client)
+
     scheduler.register_jobs(
         crunchyroll_sync_func=_cr_sync,
         plex_scan_func=_plex_scan,
         download_sync_func=_download_sync,
         download_sync_interval_minutes=config.download_sync.sync_interval_minutes,
+        library_reindex_func=_library_reindex,
     )
 
     # Expose callables for ad-hoc triggering (used by manual-run endpoints)

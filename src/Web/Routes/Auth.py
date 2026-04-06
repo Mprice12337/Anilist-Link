@@ -8,6 +8,8 @@ import urllib.parse
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from src.Web.App import spawn_background_task
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -69,6 +71,11 @@ async def anilist_callback(
         )
         access_token = token_data["access_token"]
         token_type = token_data.get("token_type", "Bearer")
+        logger.info(
+            "AniList token exchange succeeded (token_type=%s, token_len=%d)",
+            token_type,
+            len(access_token),
+        )
 
         # Fetch the authenticated user's profile
         viewer = await client.get_viewer(access_token)
@@ -87,6 +94,15 @@ async def anilist_callback(
         )
 
         logger.info("Linked AniList account: %s (ID: %d)", username, anilist_id)
+
+        # Kick off an initial watchlist pull in the background so
+        # the dashboard has data immediately after onboarding.
+        spawn_background_task(
+            request.app.state,
+            _initial_watchlist_pull(
+                request.app.state.anilist_client, db, user_id, anilist_id, access_token
+            ),
+        )
     except Exception as exc:
         logger.exception("Failed to link AniList account")
         import urllib.parse as _up
@@ -180,6 +196,24 @@ async def anilist_done(
 </script>
 </body>
 </html>""")
+
+
+async def _initial_watchlist_pull(
+    anilist_client: object,
+    db: object,
+    user_id: str,
+    anilist_id: int,
+    access_token: str,
+) -> None:
+    """Background task: fetch the user's full AniList list into user_watchlist."""
+    try:
+        entries = await anilist_client.get_user_watchlist(  # type: ignore[attr-defined]
+            anilist_id, access_token or None
+        )
+        count = await db.bulk_upsert_watchlist(user_id, entries)  # type: ignore[attr-defined]
+        logger.info("Initial watchlist pull for %s: %d entries synced", user_id, count)
+    except Exception:
+        logger.warning("Initial watchlist pull failed for %s", user_id, exc_info=True)
 
 
 @router.post("/anilist/unlink/{user_id}")

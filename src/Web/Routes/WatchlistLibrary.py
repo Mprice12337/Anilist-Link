@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
@@ -18,6 +17,7 @@ from src.Utils.NamingTranslator import (
     collect_series_chain,
     is_movie_format,
 )
+from src.Web.App import spawn_background_task
 
 logger = logging.getLogger(__name__)
 
@@ -629,7 +629,8 @@ async def add_to_arr(request: Request) -> JSONResponse:
             and result.external_id
             and result.service == "sonarr"
         ):
-            asyncio.create_task(
+            spawn_background_task(
+                request.app.state,
                 _auto_link_sonarr_siblings(
                     db=db,
                     anilist_client=anilist_client,
@@ -638,7 +639,7 @@ async def add_to_arr(request: Request) -> JSONResponse:
                     sonarr_id=result.arr_id,
                     sonarr_url=config.sonarr.url,
                     sonarr_api_key=config.sonarr.api_key,
-                )
+                ),
             )
 
         # Push all AniList title variants to Sonarr so it can find releases

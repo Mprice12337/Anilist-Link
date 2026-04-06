@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Plex Library — Anilist-Link{% endblock %}
+{% block title %}Anilist-Link: Plex Library{% endblock %}
 {% block container_class %}container-wide{% endblock %}
 
 {# ── Title rendering macro ── #}
@@ -63,11 +63,26 @@
     </div>
     <div class="action-bar-row">
         <span class="action-bar-label">Apply to Plex</span>
-        <form method="post" action="/plex/apply-all" style="display:inline">
+        <form method="post" action="/plex/apply-all" style="display:inline" data-processing="Applying metadata to Plex…">
             <button type="submit" class="btn btn-primary btn-sm"
                     {% if not plex_configured or matched_count == 0 %}disabled{% endif %}>
                 Apply All Matched ({{ matched_count }} item{{ "s" if matched_count != 1 else "" }})
             </button>
+        </form>
+        <form method="post" action="/plex/apply-all" style="display:inline" data-processing="Refreshing metadata from AniList…">
+            <input type="hidden" name="force_refresh" value="1">
+            <button type="submit" class="btn btn-sm btn-secondary"
+                    {% if not plex_configured or matched_count == 0 %}disabled{% endif %}
+                    title="Re-fetch metadata from AniList (bypasses 7-day cache) and re-apply to all matched items">
+                Refresh From AniList
+            </button>
+        </form>
+    </div>
+    <div class="action-bar-row">
+        <span class="action-bar-label">Manage</span>
+        <form method="post" action="/plex/clear-all" style="display:inline"
+              onsubmit="return confirm('Clear ALL Plex data from the database?\n\nThis removes all scanned items and their AniList mappings across all Plex libraries. You can re-scan afterwards.')">
+            <button type="submit" class="btn btn-sm btn-danger">Clear All Plex Data</button>
         </form>
     </div>
     {% if not plex_configured %}

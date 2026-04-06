@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ library.name }} — Anilist-Link{% endblock %}
+{% block title %}Anilist-Link: {{ library.name }}{% endblock %}
 {% block container_class %}container-wide{% endblock %}
 
 {# ── Title rendering macro ── #}
@@ -39,9 +39,7 @@
 <!-- Change detection banner (hidden by default, shown by JS) -->
 <div class="change-banner" id="changeBanner" style="display:none">
     <span id="changeBannerText"></span>
-    <form method="post" action="/library/{{ library.id }}/scan" style="display:inline">
-        <button type="submit" class="btn btn-sm btn-primary">Scan Now</button>
-    </form>
+    <button class="btn btn-sm btn-primary" onclick="reindexLibrary()">Re-index Now</button>
 </div>
 
 {# ── Action Bar ── #}
@@ -57,6 +55,10 @@
             <input type="hidden" name="force_rescan" value="on">
             <button type="submit" class="btn btn-sm btn-secondary" {% if scan_running %}disabled{% endif %}>Force Re-scan</button>
         </form>
+        <button class="btn btn-sm btn-secondary" id="reindexBtn" onclick="reindexLibrary()"
+                title="Re-index using series-group-aware detection — picks up new/changed folders and per-season structure">
+            Re-index
+        </button>
         {% if scan_running %}
         <a href="/library/{{ library.id }}/scan/progress" class="btn btn-sm btn-secondary">View Progress</a>
         {% endif %}
@@ -561,6 +563,26 @@ async function syncToPlex(itemId, btn) {
         alert('Sync failed.');
         btn.textContent = origText;
         btn.disabled = false;
+    }
+}
+
+async function reindexLibrary() {
+    var btn = document.getElementById('reindexBtn');
+    var origText = btn ? btn.textContent : '';
+    if (btn) { btn.textContent = 'Indexing...'; btn.disabled = true; }
+    try {
+        var resp = await fetch('/api/library/' + libraryId + '/reindex', {method: 'POST'});
+        var data = await resp.json();
+        if (data.ok) {
+            if (btn) { btn.textContent = 'Done (' + data.seeded + ')'; }
+            setTimeout(function() { window.location.reload(); }, 1200);
+        } else {
+            alert('Re-index failed: ' + (data.error || 'unknown'));
+            if (btn) { btn.textContent = origText; btn.disabled = false; }
+        }
+    } catch(err) {
+        alert('Re-index failed.');
+        if (btn) { btn.textContent = origText; btn.disabled = false; }
     }
 }
 </script>

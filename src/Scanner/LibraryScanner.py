@@ -98,6 +98,29 @@ class LibraryScanner:
                     matched += 1
                     continue
 
+            # Cross-source hint: check if Plex/Jellyfin already matched this folder
+            cross_match = await self._db.find_anilist_match_by_folder(folder_name)
+            if cross_match and cross_match.get("anilist_id"):
+                xref_id = cross_match["anilist_id"]
+                logger.info("  [cross-source] %s -> AniList %d", folder_name, xref_id)
+                cached = await self._db.get_cached_metadata(xref_id)
+                await self._db.upsert_library_item(
+                    library_id=library_id,
+                    folder_path=folder_path,
+                    folder_name=folder_name,
+                    anilist_id=xref_id,
+                    anilist_title=cross_match.get("anilist_title", ""),
+                    match_confidence=cross_match.get("match_confidence", 0.9),
+                    match_method=f"cross_source:{cross_match.get('match_method', '')}",
+                    anilist_format=(cached or {}).get("format", ""),
+                    anilist_episodes=(cached or {}).get("episodes"),
+                    year=(cached or {}).get("year", 0),
+                    cover_image=(cached or {}).get("cover_image", ""),
+                    series_group_id=cross_match.get("series_group_id"),
+                )
+                matched += 1
+                continue
+
             # Two-pass AniList search + fuzzy match
             folder_year = extract_year_from_name(folder_name)
             match_result = await self._search_and_match(folder_name, folder_year)

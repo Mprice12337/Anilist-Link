@@ -22,7 +22,7 @@ def normalize_title(title: str) -> str:
         r"\s*\(dub\)\s*",
         r"\s*\(sub\)\s*",
         r"\s*\(\d{4}\)\s*$",
-        r"[^\w\s\-:!?]",
+        r"[^\w\s\-!?]",  # Strip non-word chars (colons removed here too)
     ]
 
     for pattern in patterns_to_remove:

@@ -288,6 +288,8 @@ TABLES: dict[str, str] = {
             match_confidence REAL NOT NULL DEFAULT 0.0,
             match_method TEXT NOT NULL DEFAULT '',
             media_type TEXT NOT NULL DEFAULT 'ANIME',
+            series_group_id INTEGER,
+            season_number INTEGER,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now')),
             UNIQUE(source, source_id)
@@ -620,17 +622,77 @@ TABLES: dict[str, str] = {
             UNIQUE(user_id, anilist_id)
         )
     """,
+    "anilist_sonarr_season_mapping": """
+        CREATE TABLE IF NOT EXISTS anilist_sonarr_season_mapping (
+            sonarr_id     INTEGER NOT NULL,
+            season_number INTEGER NOT NULL,
+            anilist_id    INTEGER NOT NULL,
+            created_at    TEXT DEFAULT (datetime('now')),
+            PRIMARY KEY (sonarr_id, season_number)
+        )
+    """,
+    "anilist_arr_skip": """
+        CREATE TABLE IF NOT EXISTS anilist_arr_skip (
+            anilist_id   INTEGER PRIMARY KEY,
+            reason       TEXT NOT NULL,
+            skipped_at   TEXT DEFAULT (datetime('now'))
+        )
+    """,
 }
 
 INDEXES: list[str] = [
+    # sync_state
     "CREATE INDEX IF NOT EXISTS idx_sync_state_user_media"
     " ON sync_state(user_id, media_mapping_id)",
+    # anilist_cache
     "CREATE INDEX IF NOT EXISTS idx_anilist_cache_expires"
     " ON anilist_cache(expires_at)",
+    # media_mappings
     "CREATE INDEX IF NOT EXISTS idx_media_mappings_anilist"
     " ON media_mappings(anilist_id)",
+    "CREATE INDEX IF NOT EXISTS idx_media_mappings_group"
+    " ON media_mappings(series_group_id)",
+    # users
     "CREATE INDEX IF NOT EXISTS idx_users_service ON users(service)",
-    "CREATE INDEX IF NOT EXISTS idx_plex_media_library" " ON plex_media(library_key)",
+    # plex_media
+    "CREATE INDEX IF NOT EXISTS idx_plex_media_library ON plex_media(library_key)",
+    # jellyfin_media
     "CREATE INDEX IF NOT EXISTS idx_jellyfin_media_library"
     " ON jellyfin_media(library_id)",
+    # series_groups / series_group_entries
+    "CREATE INDEX IF NOT EXISTS idx_series_groups_root"
+    " ON series_groups(root_anilist_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sge_anilist_id"
+    " ON series_group_entries(anilist_id)",
+    # library_items
+    "CREATE INDEX IF NOT EXISTS idx_library_items_library"
+    " ON library_items(library_id)",
+    "CREATE INDEX IF NOT EXISTS idx_library_items_anilist"
+    " ON library_items(anilist_id)",
+    # cr_sync
+    "CREATE INDEX IF NOT EXISTS idx_cr_sync_preview_run" " ON cr_sync_preview(run_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cr_sync_log_anilist" " ON cr_sync_log(anilist_id)",
+    # download_requests
+    "CREATE INDEX IF NOT EXISTS idx_download_requests_anilist"
+    " ON download_requests(anilist_id)",
+    "CREATE INDEX IF NOT EXISTS idx_download_requests_status"
+    " ON download_requests(status)",
+    # sonarr/radarr mapping + cache
+    "CREATE INDEX IF NOT EXISTS idx_sonarr_mapping_tvdb"
+    " ON anilist_sonarr_mapping(tvdb_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sonarr_mapping_group"
+    " ON anilist_sonarr_mapping(series_group_id)",
+    "CREATE INDEX IF NOT EXISTS idx_radarr_mapping_tmdb"
+    " ON anilist_radarr_mapping(tmdb_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sonarr_cache_sonarr_id"
+    " ON sonarr_series_cache(sonarr_id)",
+    "CREATE INDEX IF NOT EXISTS idx_radarr_cache_radarr_id"
+    " ON radarr_movie_cache(radarr_id)",
+    # user_watchlist
+    "CREATE INDEX IF NOT EXISTS idx_watchlist_user_status"
+    " ON user_watchlist(user_id, list_status)",
+    "CREATE INDEX IF NOT EXISTS idx_watchlist_anilist" " ON user_watchlist(anilist_id)",
+    # anilist_sonarr_season_mapping
+    "CREATE INDEX IF NOT EXISTS idx_assm_sonarr"
+    " ON anilist_sonarr_season_mapping(sonarr_id)",
 ]

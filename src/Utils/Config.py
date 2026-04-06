@@ -37,6 +37,7 @@ class PlexConfig:
 class JellyfinConfig:
     url: str = ""
     api_key: str = ""
+    anime_library_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,7 @@ class SchedulerConfig:
     cr_sync_time: str = (
         "02:00"  # "HH:MM" for daily at a fixed time; empty = use interval
     )
+    library_reindex_interval_hours: int = 6
 
 
 @dataclass(frozen=True)
@@ -134,8 +136,8 @@ def _resolve_db_path() -> Path:
 def _resolve_log_path() -> Path | None:
     config_dir = Path("/config")
     if config_dir.exists() and config_dir.is_dir():
-        return config_dir / "anilist_link.log"
-    log_dir = _project_root() / "data"
+        return config_dir / "logs" / "anilist_link.log"
+    log_dir = _project_root() / "data" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir / "anilist_link.log"
 
@@ -196,6 +198,9 @@ def load_config() -> AppConfig:
         jellyfin=JellyfinConfig(
             url=_env("JELLYFIN_URL"),
             api_key=_env("JELLYFIN_API_KEY"),
+            anime_library_ids=_parse_json_list(
+                _env("JELLYFIN_ANIME_LIBRARY_IDS", "[]")
+            ),
         ),
         sonarr=SonarrConfig(
             url=_env("SONARR_URL"),
@@ -210,6 +215,7 @@ def load_config() -> AppConfig:
             scan_interval_hours=_env_int("SCAN_INTERVAL", 24),
             sync_interval_minutes=_env_int("SYNC_INTERVAL", 15),
             cr_sync_time=_env("CR_SYNC_TIME", ""),
+            library_reindex_interval_hours=_env_int("LIBRARY_REINDEX_INTERVAL", 6),
         ),
         download_sync=DownloadSyncConfig(
             auto_statuses=tuple(
@@ -244,6 +250,7 @@ SETTINGS_MAP: dict[str, tuple[str, str]] = {
     "plex.anime_library_keys": ("PLEX_ANIME_LIBRARIES", "[]"),
     "jellyfin.url": ("JELLYFIN_URL", ""),
     "jellyfin.api_key": ("JELLYFIN_API_KEY", ""),
+    "jellyfin.anime_library_ids": ("JELLYFIN_ANIME_LIBRARY_IDS", "[]"),
     "sonarr.url": ("SONARR_URL", ""),
     "sonarr.api_key": ("SONARR_API_KEY", ""),
     "sonarr.anime_root_folder": ("SONARR_ANIME_ROOT_FOLDER", ""),
@@ -258,6 +265,7 @@ SETTINGS_MAP: dict[str, tuple[str, str]] = {
     "scheduler.sync_interval_minutes": ("SYNC_INTERVAL", "15"),
     "scheduler.scan_interval_hours": ("SCAN_INTERVAL", "24"),
     "scheduler.cr_sync_time": ("CR_SYNC_TIME", "02:00"),
+    "scheduler.library_reindex_interval_hours": ("LIBRARY_REINDEX_INTERVAL", "6"),
     "app.debug": ("DEBUG", "false"),
     "app.title_display": ("TITLE_DISPLAY", "romaji"),
     "restructure.plex_path_prefix": ("RESTRUCTURE_PLEX_PREFIX", ""),
@@ -362,6 +370,7 @@ def load_config_from_db_settings(
         jellyfin=JellyfinConfig(
             url=r("jellyfin.url"),
             api_key=r("jellyfin.api_key"),
+            anime_library_ids=_parse_json_list(r("jellyfin.anime_library_ids")),
         ),
         sonarr=SonarrConfig(
             url=r("sonarr.url"),
@@ -382,6 +391,9 @@ def load_config_from_db_settings(
             scan_interval_hours=int(r("scheduler.scan_interval_hours") or "24"),
             sync_interval_minutes=int(r("scheduler.sync_interval_minutes") or "15"),
             cr_sync_time=r("scheduler.cr_sync_time"),
+            library_reindex_interval_hours=int(
+                r("scheduler.library_reindex_interval_hours") or "6"
+            ),
         ),
         download_sync=DownloadSyncConfig(
             auto_statuses=tuple(

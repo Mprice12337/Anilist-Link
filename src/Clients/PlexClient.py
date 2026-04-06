@@ -120,28 +120,51 @@ class PlexClient:
             )
         return libraries
 
-    async def get_library_shows(self, library_key: str) -> list[PlexShow]:
-        """Get all shows in a library section."""
-        resp = await self._http.get(f"/library/sections/{library_key}/all")
-        resp.raise_for_status()
-        container = resp.json().get("MediaContainer", {})
-        metadata = container.get("Metadata", [])
+    async def get_library_shows(
+        self, library_key: str, library_type: str = "show"
+    ) -> list[PlexShow]:
+        """Get all shows and movies in a library section.
+
+        Uses Plex ``type`` filters to avoid returning episodes/seasons:
+        type=1 → movies, type=2 → TV shows.  For "show" libraries we
+        fetch both types so anime movies in a TV library are included.
+        """
+        # Determine which Plex types to fetch
+        if library_type == "movie":
+            plex_types = ["1"]
+        else:
+            # Show libraries: fetch TV shows + movies (anime libs often mix both)
+            plex_types = ["2", "1"]
+
         shows: list[PlexShow] = []
-        for m in metadata:
-            locations = [
-                loc["path"] for loc in m.get("Location", []) if loc.get("path")
-            ]
-            shows.append(
-                PlexShow(
-                    rating_key=str(m["ratingKey"]),
-                    title=m.get("title", ""),
-                    year=m.get("year"),
-                    thumb=m.get("thumb", ""),
-                    summary=m.get("summary", ""),
-                    library_key=library_key,
-                    locations=locations,
-                )
+        seen_keys: set[str] = set()
+        for plex_type in plex_types:
+            resp = await self._http.get(
+                f"/library/sections/{library_key}/all",
+                params={"type": plex_type},
             )
+            resp.raise_for_status()
+            container = resp.json().get("MediaContainer", {})
+            metadata = container.get("Metadata", [])
+            for m in metadata:
+                rk = str(m["ratingKey"])
+                if rk in seen_keys:
+                    continue
+                seen_keys.add(rk)
+                locations = [
+                    loc["path"] for loc in m.get("Location", []) if loc.get("path")
+                ]
+                shows.append(
+                    PlexShow(
+                        rating_key=rk,
+                        title=m.get("title", ""),
+                        year=m.get("year"),
+                        thumb=m.get("thumb", ""),
+                        summary=m.get("summary", ""),
+                        library_key=library_key,
+                        locations=locations,
+                    )
+                )
         return shows
 
     async def get_show_locations(self, rating_key: str) -> list[str]:
@@ -255,18 +278,20 @@ class PlexClient:
         self,
         library_key: str,
         poll_interval: float = 2.0,
-        timeout: float = 120.0,
+        max_timeout: float = 600.0,
     ) -> bool:
         """Trigger a library refresh and wait for it to complete.
 
         Returns True if the scan completed, False if it timed out.
+        Uses a generous max timeout (default 10 min) as a safety net;
+        Plex doesn't report granular progress, so we rely on the
+        scanning/not-scanning state transition.
         """
         await self.refresh_library(library_key)
-        # Brief pause to let Plex register the scan
         await asyncio.sleep(1.0)
 
         elapsed = 0.0
-        while elapsed < timeout:
+        while elapsed < max_timeout:
             if not await self.is_library_scanning(library_key):
                 logger.info("Plex library %s scan complete", library_key)
                 return True
@@ -274,7 +299,7 @@ class PlexClient:
             elapsed += poll_interval
 
         logger.warning(
-            "Plex library %s scan timed out after %.0fs", library_key, timeout
+            "Plex library %s scan timed out after %.0fs", library_key, max_timeout
         )
         return False
 

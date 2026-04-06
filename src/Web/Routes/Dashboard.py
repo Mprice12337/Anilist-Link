@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from fastapi import APIRouter, Request
@@ -10,6 +9,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.responses import Response
 
 from src.Scheduler.Jobs import JOB_CRUNCHYROLL_SYNC
+from src.Web.App import spawn_background_task
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +48,9 @@ async def dashboard(
     anilist_user = next((u for u in users if u["service"] == "anilist"), None)
     if anilist_user:
         try:
-            watching_entries = await db.get_watchlist(
+            currently_watching = await db.get_watchlist(
                 anilist_user["user_id"], list_statuses=["CURRENT"]
             )
-            currently_watching = watching_entries[:20]
         except Exception:
             logger.warning("Could not fetch currently-watching list")
 
@@ -143,7 +142,7 @@ async def trigger_dry_run_sync(request: Request) -> Response:
             status_code=404,
         )
 
-    asyncio.create_task(sync_fn(dry_run=True))
+    spawn_background_task(request.app.state, sync_fn(dry_run=True))
     logger.info("Dry-run Crunchyroll sync triggered")
     if is_browser:
         return RedirectResponse(
@@ -171,7 +170,9 @@ async def trigger_plex_scan(request: Request) -> Response:
     selected_keys = form.getlist("library_key")
     library_keys = [str(k) for k in selected_keys] if selected_keys else None
 
-    asyncio.create_task(scan_fn(dry_run=False, library_keys=library_keys))
+    spawn_background_task(
+        request.app.state, scan_fn(dry_run=False, library_keys=library_keys)
+    )
     logger.info("Manual Plex metadata scan triggered")
     if is_browser:
         return RedirectResponse(
@@ -199,7 +200,9 @@ async def trigger_plex_dry_run(request: Request) -> Response:
     selected_keys = form.getlist("library_key")
     library_keys = [str(k) for k in selected_keys] if selected_keys else None
 
-    asyncio.create_task(scan_fn(dry_run=True, library_keys=library_keys))
+    spawn_background_task(
+        request.app.state, scan_fn(dry_run=True, library_keys=library_keys)
+    )
     logger.info("Dry-run Plex metadata scan triggered")
     if is_browser:
         return RedirectResponse(

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from fastapi import APIRouter, Request
@@ -15,6 +14,7 @@ from src.Sync.CrunchyrollPreviewRunner import (
     CrunchyrollPreviewRunner,
 )
 from src.Utils.Config import load_config_from_db_settings
+from src.Web.App import spawn_background_task
 
 logger = logging.getLogger(__name__)
 
@@ -165,10 +165,10 @@ async def manual_cr_sync(request: Request) -> JSONResponse:
         )
 
     if config.crunchyroll.auto_approve:
-        asyncio.create_task(app_state.cr_sync_task())
+        spawn_background_task(app_state, app_state.cr_sync_task())
         return JSONResponse({"ok": True, "mode": "apply"})
     else:
-        asyncio.create_task(app_state.cr_preview_task())
+        spawn_background_task(app_state, app_state.cr_preview_task())
         return JSONResponse({"ok": True, "mode": "preview"})
 
 
@@ -239,7 +239,7 @@ async def start_preview_scan(request: Request) -> JSONResponse:
         db, app_state.anilist_client, title_matcher, cr_client, config, progress
     )
 
-    asyncio.create_task(runner.run_preview(user))
+    spawn_background_task(app_state, runner.run_preview(user))
     return JSONResponse({"ok": True, "running": True})
 
 

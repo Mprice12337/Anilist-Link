@@ -20,6 +20,7 @@ JOB_METADATA_SCAN = "metadata_scan"
 JOB_PLEX_METADATA_SCAN = "plex_metadata_scan"
 JOB_WATCH_SYNC = "watch_sync"
 JOB_DOWNLOAD_SYNC = "download_sync"
+JOB_LIBRARY_REINDEX = "library_reindex"
 
 
 def _cr_trigger(config: SchedulerConfig) -> CronTrigger | IntervalTrigger:
@@ -62,6 +63,7 @@ class JobScheduler:
         plex_scan_func: Callable[[], Awaitable[None]] | None = None,
         download_sync_func: Callable[[], Awaitable[None]] | None = None,
         download_sync_interval_minutes: int = 60,
+        library_reindex_func: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """Register job callables with configured intervals."""
         if crunchyroll_sync_func:
@@ -129,6 +131,22 @@ class JobScheduler:
                 download_sync_interval_minutes,
             )
 
+        if library_reindex_func:
+            self._scheduler.add_job(
+                library_reindex_func,
+                trigger=IntervalTrigger(
+                    hours=self._config.library_reindex_interval_hours
+                ),
+                id=JOB_LIBRARY_REINDEX,
+                name="Library Re-Index",
+                replace_existing=True,
+            )
+            logger.info(
+                "Registered %s job (every %d hr)",
+                JOB_LIBRARY_REINDEX,
+                self._config.library_reindex_interval_hours,
+            )
+
     def start(self) -> None:
         if not self._scheduler.running:
             self._scheduler.start()
@@ -183,6 +201,23 @@ class JobScheduler:
                         job_id,
                         new_config.scan_interval_hours,
                     )
+
+        if (
+            new_config.library_reindex_interval_hours
+            != old.library_reindex_interval_hours
+        ):
+            job = self._scheduler.get_job(JOB_LIBRARY_REINDEX)
+            if job:
+                job.reschedule(
+                    trigger=IntervalTrigger(
+                        hours=new_config.library_reindex_interval_hours
+                    )
+                )
+                logger.info(
+                    "Rescheduled %s to every %d hr",
+                    JOB_LIBRARY_REINDEX,
+                    new_config.library_reindex_interval_hours,
+                )
 
     def trigger_job(self, job_id: str) -> bool:
         """Manually trigger a job by ID. Returns True if the job exists."""

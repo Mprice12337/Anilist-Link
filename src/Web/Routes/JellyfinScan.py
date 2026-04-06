@@ -42,6 +42,8 @@ async def _run_jellyfin_preview_scan(app_state: object) -> None:
     )
 
     library_ids = getattr(app_state, "jellyfin_scan_library_ids", None)
+    if not library_ids and config.jellyfin.anime_library_ids:
+        library_ids = list(config.jellyfin.anime_library_ids)
 
     try:
         results = await scanner.run_scan(
@@ -73,6 +75,8 @@ async def _run_jellyfin_live_scan(app_state: object) -> None:
     )
 
     library_ids = getattr(app_state, "jellyfin_scan_library_ids", None)
+    if not library_ids and config.jellyfin.anime_library_ids:
+        library_ids = list(config.jellyfin.anime_library_ids)
 
     try:
         results = await scanner.run_scan(
@@ -221,6 +225,10 @@ async def jellyfin_scan_apply(request: Request) -> RedirectResponse:
         errors += 1
     finally:
         await jellyfin_client.close()
+
+    # Auto-dismiss the scan notification now that results have been applied
+    await db.dismiss_notifications_by_url("/jellyfin/scan/results")
+    await db.clear_dismissed_notifications()
 
     msg = f"Applied+metadata+to+{applied}+shows"
     if errors:

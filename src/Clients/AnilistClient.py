@@ -19,7 +19,7 @@ OAUTH_TOKEN_URL = "https://anilist.co/api/v2/oauth/token"
 MAX_RETRIES = 3  # retries for 5xx / transport errors only
 MAX_RATE_LIMIT_WAITS = 10  # separate budget for 429s (not counted as errors)
 BACKOFF_BASE = 2.0
-SCAN_RESERVE = 10  # requests kept back for auth/test; scan tasks pause below this
+SCAN_RESERVE_TOKENS = 3  # tokens reserved for auth/high-priority calls
 
 # ---------------------------------------------------------------------------
 # GraphQL query / mutation strings
@@ -76,22 +76,30 @@ GET_ANIME_RELATIONS_QUERY = """
 query ($id: Int) {
   Media(id: $id, type: ANIME) {
     id
-    title { romaji english }
+    title { romaji english native }
     format
     episodes
     status
+    seasonYear
     startDate { year month day }
+    coverImage { large }
+    description(asHtml: false)
+    genres
     relations {
       edges {
         relationType(version: 2)
         node {
           id
-          title { romaji english }
+          title { romaji english native }
           type
           format
           status
           episodes
+          seasonYear
           startDate { year month day }
+          coverImage { large }
+          description(asHtml: false)
+          genres
         }
       }
     }
@@ -207,123 +215,98 @@ mutation ($mediaId: Int, $progress: Int, $status: MediaListStatus, $repeat: Int)
 
 
 # ---------------------------------------------------------------------------
-# Token bucket rate limiter
+# Token-bucket rate limiter (adapted from original Phase 1 implementation)
 # ---------------------------------------------------------------------------
 
 
 class RateLimiter:
-    """Header-aware rate limiter for AniList API.
+    """Token-bucket rate limiter for the AniList GraphQL API.
 
-    Reads ``X-RateLimit-Limit``, ``X-RateLimit-Remaining``, and
-    ``X-RateLimit-Reset`` from every response to adapt to whatever limit
-    AniList is currently enforcing (90/min normally, 30/min when degraded).
+    Uses a classic token bucket that naturally refills over time.
+    Adapts capacity/refill to whatever limit AniList reports via
+    ``X-RateLimit-Limit`` (90/min normally, 30/min when degraded).
 
-    Paces requests with a dynamic gap computed from the actual limit and
-    proactively sleeps when the remaining budget is nearly exhausted.
+    This approach is self-healing: it doesn't depend on window-reset
+    headers, which are unreliable during AniList degraded mode.
+
+    Scan (low-priority) calls pause when only a few tokens remain,
+    leaving headroom for auth/OAuth (high-priority) calls.
     """
 
-    def __init__(self) -> None:
-        self._limit: int = 90  # AniList normal limit; first response will confirm
-        self._remaining: int = 90  # start optimistic so "only go down" rule works
-        self._reset_at: float = 0.0  # monotonic time when window resets
-        self._last_response: float = 0.0  # monotonic time of last response
+    def __init__(self, capacity: float = 90.0) -> None:
+        self._limit: int = int(capacity)
+        self._capacity: float = capacity
+        self._tokens: float = capacity
+        self._refill_rate: float = capacity / 60.0  # tokens per second
+        self._last_refill: float = time.monotonic()
         self._lock = asyncio.Lock()
-
-    @property
-    def _min_gap(self) -> float:
-        """Dynamic gap: 60s / limit with 10% headroom."""
-        return 60.0 / max(1, self._limit) * 1.1
+        # Exposed for external reads (e.g. rate_limit_remaining property)
+        self._remaining: int = int(capacity)
 
     def update_from_headers(self, headers: httpx.Headers) -> None:
-        """Feed response headers back into the limiter.
-
-        Must be called after every response.  The authoritative ``remaining``
-        value from the server corrects our optimistic local counter.
-        """
+        """Adapt capacity/refill when AniList changes its rate limit."""
         raw_limit = headers.get("X-RateLimit-Limit")
         if raw_limit is not None:
-            self._limit = int(raw_limit)
+            new_limit = int(raw_limit)
+            if new_limit != self._limit:
+                logger.info(
+                    "AniList rate limit changed: %d -> %d", self._limit, new_limit
+                )
+                self._limit = new_limit
+                self._capacity = float(new_limit)
+                self._refill_rate = new_limit / 60.0
+                self._tokens = min(self._tokens, self._capacity)
 
         raw_remaining = headers.get("X-RateLimit-Remaining")
         if raw_remaining is not None:
-            # Trust the server: it knows the true remaining count.
-            # Only update if the server value is *lower* than our local
-            # counter to avoid re-inflating the budget when concurrent
-            # requests' responses arrive out of order.
-            server_remaining = int(raw_remaining)
-            if server_remaining < self._remaining:
-                self._remaining = server_remaining
-
-        raw_reset = headers.get("X-RateLimit-Reset")
-        if raw_reset is not None:
-            reset_epoch = int(raw_reset)
-            wall_now = time.time()
-            mono_now = time.monotonic()
-            new_reset = mono_now + max(0, reset_epoch - wall_now)
-            # Only advance reset_at, never move it backwards
-            if new_reset > self._reset_at:
-                self._reset_at = new_reset
-
-        self._last_response = time.monotonic()
+            self._remaining = int(raw_remaining)
 
         logger.debug(
-            "Rate headers: limit=%d, remaining=%d, reset_in=%.0fs, gap=%.1fs",
+            "Rate headers: limit=%d, remaining=%d, tokens=%.1f, refill=%.2f/s",
             self._limit,
             self._remaining,
-            max(0, self._reset_at - time.monotonic()),
-            self._min_gap,
+            self._tokens,
+            self._refill_rate,
         )
 
     async def acquire(self, high_priority: bool = False) -> None:
         """Wait if necessary before making a request.
 
-        high_priority=True  — used for auth/test calls: only blocks when
-                               1 or fewer requests remain in the window.
-        high_priority=False — used for scan/bulk calls: pauses when
-                               SCAN_RESERVE or fewer requests remain,
-                               leaving headroom for auth and OAuth.
-
-        Long waits (window reset) are performed **outside** the lock so
-        high-priority requests can still proceed while a scan is paused.
+        high_priority=True  — auth/OAuth calls: only need 1 token.
+        high_priority=False — scan calls: need reserve+1 tokens so that
+                               a few tokens remain for high-priority calls.
         """
-        threshold = 1 if high_priority else SCAN_RESERVE
+        min_tokens = 1.0 if high_priority else float(SCAN_RESERVE_TOKENS + 1)
 
-        # --- Phase 1: budget check + optimistic decrement ---
-        # Runs outside the gap-enforcement lock so high-priority calls are
-        # never blocked by a scan sleeping in Phase 2.
-        while True:
-            async with self._lock:
-                now = time.monotonic()
-                window_reset = self._reset_at > 0 and self._reset_at <= now
-                if window_reset:
-                    # Rate window has rolled over — restore full budget
-                    self._remaining = self._limit
-                    self._reset_at = 0.0
-                if self._remaining > threshold:
-                    # Optimistically claim one slot before releasing the lock.
-                    # update_from_headers() will correct this with the real
-                    # server value once the response arrives.
-                    self._remaining = max(0, self._remaining - 1)
-                    break
-                wait = max(self._reset_at - now, 0.5)
-
-            logger.info(
-                "Rate limiter: %s paused (%d/%d remaining, reserve=%d), "
-                "waiting %.1fs for window reset",
-                "auth" if high_priority else "scan",
-                self._remaining,
-                self._limit,
-                threshold,
-                wait,
-            )
-            await asyncio.sleep(min(wait, 5.0))
-
-        # --- Phase 2: enforce minimum inter-request gap ---
         async with self._lock:
-            now = time.monotonic()
-            since_last = now - self._last_response
-            if since_last < self._min_gap:
-                await asyncio.sleep(self._min_gap - since_last)
+            self._refill()
+
+            if self._tokens < min_tokens:
+                deficit = min_tokens - self._tokens
+                wait = deficit / self._refill_rate
+                logger.info(
+                    "Rate limiter: %s waiting %.1fs "
+                    "(tokens=%.1f, need=%.0f, refill=%.2f/s)",
+                    "auth" if high_priority else "scan",
+                    wait,
+                    self._tokens,
+                    min_tokens,
+                    self._refill_rate,
+                )
+                await asyncio.sleep(wait)
+                self._refill()
+
+            self._tokens -= 1.0
+
+    def _refill(self) -> None:
+        """Add tokens based on elapsed time since last refill."""
+        now = time.monotonic()
+        elapsed = now - self._last_refill
+        self._tokens = min(
+            self._capacity,
+            self._tokens + elapsed * self._refill_rate,
+        )
+        self._last_refill = now
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +326,13 @@ class AniListClient:
         self._client_id = client_id
         self._client_secret = client_secret
         self._redirect_uri = redirect_uri
-        self._http = httpx.AsyncClient(timeout=30.0)
+        self._http = httpx.AsyncClient(
+            timeout=30.0,
+            headers={
+                "User-Agent": "AnilistLink/1.0 (https://github.com/Mprice12337/Anilist-Link)",
+                "Accept": "application/json",
+            },
+        )
         self._limiter = RateLimiter()
         self.on_rate_limit_wait: Callable[[int], None] | None = None
 
@@ -394,6 +383,13 @@ class AniListClient:
                 )
                 await asyncio.sleep(wait)
                 continue
+            if resp.status_code >= 400:
+                body_snippet = resp.text[:300] if resp.text else "(empty)"
+                logger.error(
+                    "OAuth token exchange HTTP %d. Body: %s",
+                    resp.status_code,
+                    body_snippet,
+                )
             resp.raise_for_status()
             return resp.json()
         raise RuntimeError(
@@ -523,6 +519,7 @@ class AniListClient:
             USER_WATCHLIST_QUERY,
             {"userId": anilist_user_id},
             access_token,
+            high_priority=True,
         )
         collection = data.get("MediaListCollection", {})
         lists = collection.get("lists", [])
@@ -623,12 +620,35 @@ class AniListClient:
                 )
                 self._limiter.update_from_headers(resp.headers)
 
+                if resp.status_code == 403:
+                    error_retries += 1
+                    body_snippet = resp.text[:300] if resp.text else "(empty)"
+                    if error_retries > MAX_RETRIES:
+                        logger.error(
+                            "AniList 403 Forbidden — exceeded %d retries. " "Body: %s",
+                            MAX_RETRIES,
+                            body_snippet,
+                        )
+                        resp.raise_for_status()
+                    wait = BACKOFF_BASE**error_retries
+                    logger.warning(
+                        "AniList 403 (attempt %d/%d), retrying in %.1fs. " "Body: %s",
+                        error_retries,
+                        MAX_RETRIES,
+                        wait,
+                        body_snippet,
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+
                 if resp.status_code == 429:
                     rate_limit_waits += 1
+                    body_snippet = resp.text[:300] if resp.text else "(empty)"
                     if rate_limit_waits > MAX_RATE_LIMIT_WAITS:
                         logger.error(
-                            "Exceeded %d rate-limit waits, giving up",
+                            "Exceeded %d rate-limit waits, giving up. " "Body: %s",
                             MAX_RATE_LIMIT_WAITS,
+                            body_snippet,
                         )
                         return {}
 
@@ -636,38 +656,53 @@ class AniListClient:
                     retry_after = max(retry_after, 5)
                     logger.warning(
                         "Rate limited (wait %d/%d). Sleeping %ds. "
-                        "Headers: remaining=%s, limit=%s, reset=%s",
+                        "Headers: remaining=%s, limit=%s, reset=%s. "
+                        "Body: %s",
                         rate_limit_waits,
                         MAX_RATE_LIMIT_WAITS,
                         retry_after,
                         resp.headers.get("X-RateLimit-Remaining", "?"),
                         resp.headers.get("X-RateLimit-Limit", "?"),
                         resp.headers.get("X-RateLimit-Reset", "?"),
+                        body_snippet,
                     )
                     if self.on_rate_limit_wait:
                         self.on_rate_limit_wait(retry_after)
                     await asyncio.sleep(retry_after)
-                    # After sleeping, assume the window has refreshed so
-                    # acquire() doesn't double-wait.
-                    self._limiter._remaining = self._limiter._limit
-                    self._limiter._reset_at = 0.0
-                    self._limiter._last_response = time.monotonic()
+                    # After sleeping, restore token bucket so acquire()
+                    # doesn't double-wait.
+                    self._limiter._tokens = self._limiter._capacity
+                    self._limiter._last_refill = time.monotonic()
                     continue
 
                 if resp.status_code >= 500:
                     error_retries += 1
+                    body_snippet = resp.text[:300] if resp.text else "(empty)"
                     if error_retries > MAX_RETRIES:
-                        logger.error("Exceeded %d server-error retries", MAX_RETRIES)
+                        logger.error(
+                            "Exceeded %d server-error retries (last %d). " "Body: %s",
+                            MAX_RETRIES,
+                            resp.status_code,
+                            body_snippet,
+                        )
                         return {}
                     wait = BACKOFF_BASE**error_retries
                     logger.warning(
-                        "Server error %d, retrying in %.1fs",
+                        "Server error %d, retrying in %.1fs. Body: %s",
                         resp.status_code,
                         wait,
+                        body_snippet,
                     )
                     await asyncio.sleep(wait)
                     continue
 
+                if resp.status_code >= 400:
+                    body_snippet = resp.text[:300] if resp.text else "(empty)"
+                    logger.error(
+                        "AniList HTTP %d for query. Body: %s",
+                        resp.status_code,
+                        body_snippet,
+                    )
                 resp.raise_for_status()
                 body = resp.json()
 

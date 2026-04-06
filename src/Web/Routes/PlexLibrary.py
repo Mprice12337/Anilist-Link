@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 
@@ -14,6 +13,7 @@ from src.Clients.PlexClient import PlexClient
 from src.Matching.TitleMatcher import TitleMatcher
 from src.Scanner.MetadataScanner import MetadataScanner, ScanProgress
 from src.Scanner.SeriesGroupBuilder import SeriesGroupBuilder
+from src.Web.App import spawn_background_task
 from src.Web.Routes.PlexScan import _run_preview_scan
 
 logger = logging.getLogger(__name__)
@@ -181,6 +181,30 @@ async def plex_remove_library(request: Request) -> RedirectResponse:
     )
 
 
+@router.post("/plex/clear-all")
+async def plex_clear_all(request: Request) -> RedirectResponse:
+    """Remove ALL Plex data from the database (all libraries)."""
+    db = request.app.state.db
+    total = 0
+    # Get all distinct library keys in plex_media
+    rows = await db.fetch_all(
+        "SELECT DISTINCT library_key FROM plex_media WHERE library_key IS NOT NULL"
+    )
+    for row in rows:
+        total += await db.delete_plex_library_data(row["library_key"])
+    # Also clear any orphaned plex_media without a library_key
+    orphans = await db.fetch_one("SELECT COUNT(*) AS cnt FROM plex_media")
+    orphan_count = orphans["cnt"] if orphans else 0
+    if orphan_count > 0:
+        await db.execute("DELETE FROM media_mappings WHERE source='plex'")
+        await db.execute("DELETE FROM plex_media")
+        total += orphan_count
+    logger.info("Cleared all Plex data: %d items deleted", total)
+    return RedirectResponse(
+        url=f"/plex?message=Cleared+all+Plex+data+({total}+items)", status_code=303
+    )
+
+
 @router.post("/plex/remove-match")
 async def plex_remove_match(request: Request) -> JSONResponse:
     """Remove the AniList match for a Plex item."""
@@ -217,7 +241,7 @@ async def plex_scan_preview(request: Request) -> RedirectResponse:
     request.app.state.plex_scan_results = None
     request.app.state.plex_scan_return_to = "/plex"
 
-    asyncio.create_task(_run_preview_scan(request.app.state))
+    spawn_background_task(request.app.state, _run_preview_scan(request.app.state))
 
     return RedirectResponse(url="/plex/scan/progress", status_code=303)
 
@@ -238,7 +262,9 @@ async def plex_scan_live(request: Request) -> RedirectResponse:
     request.app.state.plex_scan_results = None
     request.app.state.plex_scan_return_to = "/plex"
 
-    asyncio.create_task(_run_live_scan(request.app.state, library_keys, progress))
+    spawn_background_task(
+        request.app.state, _run_live_scan(request.app.state, library_keys, progress)
+    )
 
     return RedirectResponse(url="/plex/scan/progress", status_code=303)
 
@@ -335,10 +361,16 @@ async def plex_apply_all(request: Request) -> RedirectResponse:
 
     For each item, builds the series group, detects structure, and writes
     both show-level and per-season metadata for Structure B shows.
+
+    When the form includes ``force_refresh=1`` the AniList metadata cache is
+    bypassed so fresh data is fetched from AniList for every item.
     """
     config = request.app.state.config
     db = request.app.state.db
     anilist_client = request.app.state.anilist_client
+
+    form = await request.form()
+    force_refresh = form.get("force_refresh") == "1"
 
     if not config.plex.url or not config.plex.token:
         return RedirectResponse(url="/plex?error=Plex+not+configured", status_code=303)
@@ -402,6 +434,7 @@ async def plex_apply_all(request: Request) -> RedirectResponse:
                         tv_entries,
                         confidence,
                         False,
+                        force_refresh=force_refresh,
                     )
                 else:
                     await scanner._apply_anilist_metadata(
@@ -411,6 +444,7 @@ async def plex_apply_all(request: Request) -> RedirectResponse:
                         confidence,
                         item.get("match_method") or "manual",
                         False,
+                        force_refresh=force_refresh,
                     )
                 applied += 1
             except Exception:
