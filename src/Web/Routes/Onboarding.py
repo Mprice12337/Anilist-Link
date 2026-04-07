@@ -528,7 +528,9 @@ async def _auto_index_local_libraries(app_state: object) -> None:
                 continue
             seen_groups.add(show.anilist_id)
             try:
-                group_id, _entries = await group_builder.build_group(show.anilist_id)
+                group_id, _entries = await group_builder.get_or_build_group(
+                    show.anilist_id
+                )
                 if group_id:
                     entries = await db.get_series_group_entries(group_id)
                     for entry in entries:
@@ -945,7 +947,7 @@ async def skip_scan_commit(request: Request) -> JSONResponse:
             continue
         seen_groups.add(aid)
         try:
-            group_id, _entries = await group_builder.build_group(aid)
+            group_id, _entries = await group_builder.get_or_build_group(aid)
             if group_id:
                 entries = await db.get_series_group_entries(group_id)
                 for entry in entries:
@@ -1065,7 +1067,7 @@ async def library_scan_confirm(request: Request):
             continue
         seen_groups.add(aid)
         try:
-            group_id, _entries = await group_builder.build_group(aid)
+            group_id, _entries = await group_builder.get_or_build_group(aid)
             if group_id:
                 entries = await db.get_series_group_entries(group_id)
                 for entry in entries:

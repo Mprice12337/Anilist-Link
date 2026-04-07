@@ -60,6 +60,15 @@ warn_unused_configs = true
 
 [[tool.mypy.overrides]]
 module = [
+    "src.Scanner.LibraryRestructurer",
+    "src.Web.Routes.Restructure",
+]
+# Heavy use of dynamic dicts and app.state attributes — would need
+# significant refactoring to fully type. Suppress until addressed.
+disable_error_code = ["arg-type", "assignment", "no-redef", "attr-defined"]
+
+[[tool.mypy.overrides]]
+module = [
     "apscheduler.*",
     "undetected_chromedriver.*",
 ]

@@ -44,12 +44,12 @@ async def _register_arr_webhooks(config: AppConfig) -> None:
 
     if config.radarr.url and config.radarr.api_key:
         try:
-            client = RadarrClient(url=config.radarr.url, api_key=config.radarr.api_key)
-            await client.register_webhook(
+            radarr = RadarrClient(url=config.radarr.url, api_key=config.radarr.api_key)
+            await radarr.register_webhook(
                 "Anilist-Link", f"{base_url}/api/webhook/radarr"
             )
             logger.info("Auto-registered Radarr webhook at startup")
-            await client.close()
+            await radarr.close()
         except Exception as exc:
             logger.warning("Failed to register Radarr webhook at startup: %s", exc)
 
@@ -92,7 +92,7 @@ def create_app(
     app.state.anilist_client = anilist_client
     app.state.scheduler = scheduler
     app.state.templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
-    app.state.background_tasks: set = set()  # prevent GC of fire-and-forget tasks
+    app.state.background_tasks = set()  # prevent GC of fire-and-forget tasks
 
     # Static files
     STATIC_DIR.mkdir(parents=True, exist_ok=True)

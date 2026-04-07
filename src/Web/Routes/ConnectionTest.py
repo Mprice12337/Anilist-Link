@@ -232,6 +232,7 @@ async def get_progress(request: Request) -> JSONResponse:
     )
     if skip_scan_active:
         total = getattr(skip_scan, "total", 0)
+        assert skip_scan is not None  # guarded by skip_scan_active check above
         done = min(getattr(skip_scan, "processed", 0), total) if total else 0
         pct = int(done / total * 100) if total else 0
         pct = min(pct, 99)  # Don't show 100% until truly complete
