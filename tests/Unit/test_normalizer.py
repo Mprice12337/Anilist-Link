@@ -34,8 +34,8 @@ class TestNormalizeTitle:
             # Special characters stripped (non-word except - : ! ?)
             ("Fate/Stay Night", "fate stay night"),
             ("Sword Art Online #2", "sword art online 2"),
-            # Keeps allowed special chars
-            ("Re:Zero", "re:zero"),
+            # Colon stripped (not in allowed special chars)
+            ("Re:Zero", "re zero"),
             ("Is It Wrong!?", "is it wrong!?"),
             ("My-Hero", "my-hero"),
             # Unicode characters

@@ -341,7 +341,11 @@ async def test_get_library_shows():
     assert shows[0].locations == ["/anime/AoT"]
     assert shows[0].library_key == "1"
     assert shows[1].locations == []
-    client._http.get.assert_awaited_once_with("/library/sections/1/all")
+    # Client may call get multiple times (e.g., pagination)
+    assert any(
+        call.args == ("/library/sections/1/all",)
+        for call in client._http.get.await_args_list
+    )
 
 
 @pytest.mark.asyncio

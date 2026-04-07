@@ -1,4 +1,4 @@
-"""Tests for the RateLimiter class in AnilistClient."""
+"""Tests for the token-bucket RateLimiter class in AnilistClient."""
 
 import asyncio
 import time
@@ -7,7 +7,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from src.Clients.AnilistClient import RateLimiter, SCAN_RESERVE
+from src.Clients.AnilistClient import RateLimiter, SCAN_RESERVE_TOKENS
 
 
 # ---------------------------------------------------------------------------
@@ -31,62 +31,72 @@ class TestRateLimiterInitialState:
         rl = RateLimiter()
         assert rl._limit == 90
 
-    async def test_initial_remaining(self) -> None:
+    async def test_initial_tokens(self) -> None:
         rl = RateLimiter()
-        assert rl._remaining == 90
+        assert rl._tokens == 90.0
 
-    async def test_initial_reset_at(self) -> None:
+    async def test_initial_capacity(self) -> None:
         rl = RateLimiter()
-        assert rl._reset_at == 0.0
+        assert rl._capacity == 90.0
+
+    async def test_initial_refill_rate(self) -> None:
+        rl = RateLimiter()
+        assert rl._refill_rate == pytest.approx(90.0 / 60.0)
+
+    async def test_custom_capacity(self) -> None:
+        rl = RateLimiter(capacity=30.0)
+        assert rl._limit == 30
+        assert rl._tokens == 30.0
+        assert rl._refill_rate == pytest.approx(30.0 / 60.0)
 
 
 @pytest.mark.asyncio
 class TestAcquire:
-    async def test_acquire_decrements_remaining(self) -> None:
+    async def test_acquire_decrements_tokens(self) -> None:
         rl = RateLimiter()
-        # Set last_response to now so gap enforcement doesn't sleep
-        rl._last_response = time.monotonic() - 10
         await rl.acquire()
-        assert rl._remaining == 89
+        assert rl._tokens == pytest.approx(89.0, abs=0.5)
 
     async def test_acquire_multiple_decrements(self) -> None:
         rl = RateLimiter()
-        rl._last_response = time.monotonic() - 10
         for _ in range(5):
             await rl.acquire()
-        assert rl._remaining == 85
+        assert rl._tokens == pytest.approx(85.0, abs=0.5)
 
-    async def test_acquire_high_priority_respects_lower_threshold(self) -> None:
-        """High-priority requests only block when remaining <= 1."""
+    async def test_acquire_high_priority_proceeds_with_low_tokens(self) -> None:
+        """High-priority requests only need 1 token."""
         rl = RateLimiter()
-        rl._last_response = time.monotonic() - 10
-        # Set remaining to just above the high-priority threshold (1)
-        rl._remaining = 3
-        await rl.acquire(high_priority=True)
-        assert rl._remaining == 2
+        rl._tokens = 2.0
+        rl._last_refill = time.monotonic()
+        await asyncio.wait_for(rl.acquire(high_priority=True), timeout=2.0)
+        assert rl._tokens < 2.0
 
     async def test_acquire_normal_pauses_at_scan_reserve(self) -> None:
-        """Normal (non-high-priority) requests pause at SCAN_RESERVE."""
+        """Normal requests need SCAN_RESERVE_TOKENS + 1 tokens."""
         rl = RateLimiter()
-        rl._last_response = time.monotonic() - 10
-        # Set remaining to exactly at SCAN_RESERVE — should block
-        rl._remaining = SCAN_RESERVE
-        # Set reset_at in the near past so the window resets immediately
-        rl._reset_at = time.monotonic() - 0.01
+        # Set tokens below the reserve threshold
+        rl._tokens = float(SCAN_RESERVE_TOKENS)
+        rl._last_refill = time.monotonic()
 
-        # This should succeed because the window reset restores budget
-        await asyncio.wait_for(rl.acquire(), timeout=3.0)
-        # After window reset, remaining should be limit - 1
-        assert rl._remaining == rl._limit - 1
+        sleep_durations: list[float] = []
+
+        async def fake_sleep(duration: float) -> None:
+            sleep_durations.append(duration)
+            # Simulate time passing so refill works
+            rl._tokens += duration * rl._refill_rate
+
+        with patch("asyncio.sleep", side_effect=fake_sleep):
+            await asyncio.wait_for(rl.acquire(), timeout=3.0)
+            # Should have slept to refill tokens above threshold
+            assert len(sleep_durations) > 0
 
     async def test_acquire_high_priority_can_use_scan_reserve(self) -> None:
-        """High-priority requests can use capacity within the SCAN_RESERVE zone."""
+        """High-priority requests can use tokens within the reserve zone."""
         rl = RateLimiter()
-        rl._last_response = time.monotonic() - 10
-        rl._remaining = SCAN_RESERVE  # 10
-        # High priority threshold is 1, so 10 > 1 => should proceed
+        rl._tokens = float(SCAN_RESERVE_TOKENS)
+        rl._last_refill = time.monotonic()
+        # SCAN_RESERVE_TOKENS > 1, so high priority should proceed immediately
         await asyncio.wait_for(rl.acquire(high_priority=True), timeout=2.0)
-        assert rl._remaining == SCAN_RESERVE - 1
 
 
 @pytest.mark.asyncio
@@ -96,98 +106,62 @@ class TestUpdateFromHeaders:
         headers = _make_headers(**{"X-RateLimit-Limit": "30"})
         rl.update_from_headers(headers)
         assert rl._limit == 30
+        assert rl._capacity == 30.0
+        assert rl._refill_rate == pytest.approx(30.0 / 60.0)
 
-    async def test_updates_remaining_only_if_lower(self) -> None:
+    async def test_updates_remaining(self) -> None:
         rl = RateLimiter()
-        rl._remaining = 50
-        # Server says 40 — lower, so should update
         headers = _make_headers(**{"X-RateLimit-Remaining": "40"})
         rl.update_from_headers(headers)
         assert rl._remaining == 40
-
-    async def test_does_not_inflate_remaining(self) -> None:
-        rl = RateLimiter()
-        rl._remaining = 30
-        # Server says 50 — higher, so should NOT update
-        headers = _make_headers(**{"X-RateLimit-Remaining": "50"})
-        rl.update_from_headers(headers)
-        assert rl._remaining == 30
-
-    async def test_updates_reset_at(self) -> None:
-        rl = RateLimiter()
-        # Set reset_at to a future epoch time
-        future_epoch = int(time.time()) + 60
-        headers = _make_headers(**{"X-RateLimit-Reset": str(future_epoch)})
-        rl.update_from_headers(headers)
-        assert rl._reset_at > 0
-
-    async def test_reset_at_never_moves_backwards(self) -> None:
-        rl = RateLimiter()
-        # Set to a far future reset
-        far_future = int(time.time()) + 600
-        headers1 = _make_headers(**{"X-RateLimit-Reset": str(far_future)})
-        rl.update_from_headers(headers1)
-        saved_reset = rl._reset_at
-
-        # Try to set to an earlier reset
-        near_future = int(time.time()) + 10
-        headers2 = _make_headers(**{"X-RateLimit-Reset": str(near_future)})
-        rl.update_from_headers(headers2)
-        assert rl._reset_at == saved_reset
-
-    async def test_updates_last_response_time(self) -> None:
-        rl = RateLimiter()
-        before = time.monotonic()
-        headers = _make_headers()
-        rl.update_from_headers(headers)
-        after = time.monotonic()
-        assert before <= rl._last_response <= after
 
     async def test_no_headers_is_safe(self) -> None:
         """Calling update_from_headers with empty headers should not crash."""
         rl = RateLimiter()
         rl.update_from_headers(_make_headers())
-        # Should still have initial values
         assert rl._limit == 90
-        assert rl._remaining == 90
 
 
 @pytest.mark.asyncio
 class TestRefillOverTime:
-    async def test_window_reset_restores_budget(self) -> None:
-        """When the rate window expires, remaining is restored to limit."""
+    async def test_refill_adds_tokens_over_time(self) -> None:
         rl = RateLimiter()
-        rl._last_response = time.monotonic() - 10
-        rl._remaining = 5
-        # Set reset_at to the past so the window is expired
-        rl._reset_at = time.monotonic() - 1.0
+        rl._tokens = 0.0
+        # Pretend last refill was 1 second ago
+        rl._last_refill = time.monotonic() - 1.0
+        rl._refill()
+        # Should have ~1.5 tokens (90/60 = 1.5/sec)
+        assert rl._tokens == pytest.approx(1.5, abs=0.2)
 
-        await rl.acquire()
-        # After window reset, remaining = limit - 1 (one consumed by acquire)
-        assert rl._remaining == rl._limit - 1
-
-    async def test_min_gap_scales_with_limit(self) -> None:
+    async def test_refill_caps_at_capacity(self) -> None:
         rl = RateLimiter()
-        assert rl._min_gap == pytest.approx(60.0 / 90 * 1.1, abs=0.01)
-        rl._limit = 30
-        assert rl._min_gap == pytest.approx(60.0 / 30 * 1.1, abs=0.01)
+        rl._tokens = 89.0
+        rl._last_refill = time.monotonic() - 60.0  # long time ago
+        rl._refill()
+        assert rl._tokens == 90.0  # capped at capacity
+
+    async def test_limit_change_adjusts_refill_rate(self) -> None:
+        rl = RateLimiter()
+        headers = _make_headers(**{"X-RateLimit-Limit": "30"})
+        rl.update_from_headers(headers)
+        assert rl._refill_rate == pytest.approx(30.0 / 60.0)
 
 
 @pytest.mark.asyncio
-class TestMinGapEnforcement:
-    async def test_gap_enforcement_sleeps_when_too_fast(self) -> None:
-        """Phase 2 of acquire() sleeps if called faster than min_gap."""
+class TestSleepOnLowTokens:
+    async def test_sleeps_when_tokens_exhausted(self) -> None:
+        """acquire() sleeps to wait for token refill when empty."""
         rl = RateLimiter()
-        rl._remaining = 90
-        rl._last_response = time.monotonic()  # "just responded"
+        rl._tokens = 0.0
+        rl._last_refill = time.monotonic()
 
         sleep_durations: list[float] = []
 
         async def fake_sleep(duration: float) -> None:
             sleep_durations.append(duration)
+            rl._tokens += duration * rl._refill_rate
 
         with patch("asyncio.sleep", side_effect=fake_sleep):
-            await rl.acquire()
-            # Should have slept for the gap enforcement
+            await rl.acquire(high_priority=True)
             assert len(sleep_durations) > 0
-            assert sleep_durations[-1] > 0
+            assert sleep_durations[0] > 0
