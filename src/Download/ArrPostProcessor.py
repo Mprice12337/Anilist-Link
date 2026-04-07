@@ -50,6 +50,7 @@ class ArrPostProcessor:
         current_path: str = episode_file.get("path", "")
         series_path: str = series.get("path", "")
         season_number: int = episodes[0].get("seasonNumber", 1) if episodes else 1
+        episode_number: int = episodes[0].get("episodeNumber", 0) if episodes else 0
 
         if not all([sonarr_id, file_id, current_path, series_path]):
             logger.warning(
@@ -71,7 +72,10 @@ class ArrPostProcessor:
             logger.warning("No AniList title for anilist_id=%d — skipping", anilist_id)
             return
 
-        filename = Path(current_path).name
+        original_name = Path(current_path).name
+        filename = await self._get_file_name(
+            original_name, season_info, season_number, episode_number
+        )
         safe_dir = await self._get_folder_name(show_info)
         season_dir = await self._get_season_folder_name(season_number, season_info)
 
@@ -93,15 +97,24 @@ class ArrPostProcessor:
         if not self._move_file(local_current, local_target):
             return
 
-        arr_target = self._to_arr(local_target, arr_prefix, local_prefix)
+        # Update series path and trigger rescan so Sonarr discovers the moved file
+        local_series = str(Path(local_root) / safe_dir)
+        arr_series_path = self._to_arr(local_series, arr_prefix, local_prefix)
+
         sonarr = SonarrClient(
             url=self._config.sonarr.url, api_key=self._config.sonarr.api_key
         )
         try:
-            await sonarr.update_episode_file(file_id, filename, arr_target)
-            logger.info("Sonarr file id=%d updated → %s", file_id, arr_target)
+            await sonarr.update_series_path(sonarr_id, arr_series_path)
+            logger.info(
+                "Sonarr series id=%d path updated → %s", sonarr_id, arr_series_path
+            )
+            await sonarr.rescan_series(sonarr_id)
+            logger.info("Sonarr rescan triggered for series id=%d", sonarr_id)
         except Exception as exc:
-            logger.error("Failed to update Sonarr file record id=%d: %s", file_id, exc)
+            logger.error(
+                "Failed to update Sonarr after move for id=%d: %s", sonarr_id, exc
+            )
         finally:
             await sonarr.close()
 
@@ -144,7 +157,8 @@ class ArrPostProcessor:
             logger.warning("No AniList title for anilist_id=%d — skipping", anilist_id)
             return
 
-        filename = Path(current_path).name
+        original_name = Path(current_path).name
+        filename = await self._get_movie_file_name(original_name, title_info)
         safe_dir = await self._get_folder_name(title_info)
 
         # Use library output path as target root; fall back to Radarr movie root
@@ -174,15 +188,23 @@ class ArrPostProcessor:
         if not self._move_file(local_current, local_target):
             return
 
-        arr_target = self._to_arr(local_target, arr_prefix, local_prefix)
+        arr_movie_path = self._to_arr(
+            str(local_root / safe_dir), arr_prefix, local_prefix
+        )
         radarr = RadarrClient(
             url=self._config.radarr.url, api_key=self._config.radarr.api_key
         )
         try:
-            await radarr.update_movie_file(file_id, filename, arr_target)
-            logger.info("Radarr file id=%d updated → %s", file_id, arr_target)
+            await radarr.update_movie_path(radarr_id, arr_movie_path)
+            logger.info(
+                "Radarr movie id=%d path updated → %s", radarr_id, arr_movie_path
+            )
+            await radarr.rescan_movie(radarr_id)
+            logger.info("Radarr rescan triggered for movie id=%d", radarr_id)
         except Exception as exc:
-            logger.error("Failed to update Radarr file record id=%d: %s", file_id, exc)
+            logger.error(
+                "Failed to update Radarr after move for id=%d: %s", radarr_id, exc
+            )
         finally:
             await radarr.close()
 
@@ -234,13 +256,15 @@ class ArrPostProcessor:
             target_root = library_path or series_path
             local_target_root = self._to_local(target_root, arr_prefix, local_prefix)
 
-            # Build episodeFileId → seasonNumber map
+            # Build episodeFileId → (seasonNumber, episodeNumber) map
             episodes = await sonarr.get_episodes(sonarr_id)
             file_season: dict[int, int] = {}
+            file_episode: dict[int, int] = {}
             for ep in episodes:
                 fid = ep.get("episodeFileId", 0)
                 if fid:
                     file_season[fid] = ep.get("seasonNumber", 1)
+                    file_episode[fid] = ep.get("episodeNumber", 0)
 
             episode_files = await sonarr.get_episode_files(sonarr_id)
 
@@ -253,6 +277,7 @@ class ArrPostProcessor:
                         continue
 
                     season_number = file_season.get(file_id, 1)
+                    episode_number = file_episode.get(file_id, 0)
                     anilist_id = await self._resolve_sonarr_anilist_id(
                         sonarr_id, season_number
                     )
@@ -265,7 +290,10 @@ class ArrPostProcessor:
                     if not season_info["title"]:
                         continue
 
-                    filename = Path(arr_current_path).name
+                    original_name = Path(arr_current_path).name
+                    filename = await self._get_file_name(
+                        original_name, season_info, season_number, episode_number
+                    )
                     safe_dir = await self._get_folder_name(show_info)
                     season_dir = await self._get_season_folder_name(
                         season_number, season_info
@@ -305,6 +333,47 @@ class ArrPostProcessor:
 
             moved = skipped = errors = 0
 
+            # Update series path in Sonarr to the library show folder.
+            # Do this once before processing files so Sonarr tracks the
+            # new location even if all files are already at target.
+            if episode_files:
+                # Resolve show folder from the first mappable file
+                for _probe in episode_files:
+                    _probe_fid = _probe.get("id", 0)
+                    _probe_sn = file_season.get(_probe_fid, 1)
+                    _probe_aid = await self._resolve_sonarr_anilist_id(
+                        sonarr_id, _probe_sn
+                    )
+                    if _probe_aid:
+                        _probe_show, _ = await self._get_show_and_season_info(
+                            _probe_aid
+                        )
+                        if _probe_show["title"]:
+                            _probe_dir = await self._get_folder_name(_probe_show)
+                            arr_series_path = self._to_arr(
+                                str(Path(local_target_root) / _probe_dir),
+                                arr_prefix,
+                                local_prefix,
+                            )
+                            try:
+                                await sonarr.update_series_path(
+                                    sonarr_id, arr_series_path
+                                )
+                                series_path = arr_series_path
+                                logger.info(
+                                    "Sonarr series id=%d path → %s",
+                                    sonarr_id,
+                                    arr_series_path,
+                                )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Failed to update series path for id=%d: %s",
+                                    sonarr_id,
+                                    exc,
+                                )
+                            break
+                    break
+
             for ef in episode_files:
                 file_id = ef.get("id", 0)
                 arr_current_path = ef.get("path", "")
@@ -312,6 +381,7 @@ class ArrPostProcessor:
                     continue
 
                 season_number = file_season.get(file_id, 1)
+                episode_number = file_episode.get(file_id, 0)
                 anilist_id = await self._resolve_sonarr_anilist_id(
                     sonarr_id, season_number
                 )
@@ -337,7 +407,10 @@ class ArrPostProcessor:
                     skipped += 1
                     continue
 
-                filename = Path(arr_current_path).name
+                original_name = Path(arr_current_path).name
+                filename = await self._get_file_name(
+                    original_name, season_info, season_number, episode_number
+                )
                 safe_dir = await self._get_folder_name(show_info)
                 season_dir = await self._get_season_folder_name(
                     season_number, season_info
@@ -355,21 +428,26 @@ class ArrPostProcessor:
                     skipped += 1
                     continue
 
+                # Source gone but target exists = already moved previously
+                if not Path(local_current).exists() and Path(local_target).exists():
+                    skipped += 1
+                    continue
+
                 if not self._move_file(local_current, local_target):
                     errors += 1
                     continue
+                moved += 1
 
-                # Report back to Sonarr using its own path scheme
-                arr_target = self._to_arr(local_target, arr_prefix, local_prefix)
-                relative_path = str(Path(arr_target).relative_to(series_path))
-                try:
-                    await sonarr.update_episode_file(file_id, relative_path, arr_target)
-                    moved += 1
-                except Exception as exc:
-                    logger.error(
-                        "Failed to update Sonarr file record id=%d: %s", file_id, exc
-                    )
-                    errors += 1
+            # Always rescan so Sonarr discovers files at their current paths
+            try:
+                await sonarr.rescan_series(sonarr_id)
+                logger.info("Sonarr rescan triggered for series id=%d", sonarr_id)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to trigger Sonarr rescan for id=%d: %s",
+                    sonarr_id,
+                    exc,
+                )
 
             return {"ok": True, "moved": moved, "skipped": skipped, "errors": errors}
         finally:
@@ -440,7 +518,10 @@ class ArrPostProcessor:
                     if not file_id or not arr_current:
                         continue
 
-                    filename = Path(arr_current).name
+                    original_name = Path(arr_current).name
+                    filename = await self._get_movie_file_name(
+                        original_name, title_info
+                    )
                     local_current = self._to_local(
                         arr_current, arr_prefix, local_prefix
                     )
@@ -466,6 +547,7 @@ class ArrPostProcessor:
                 return {"ok": True, "dry_run": True, "files": plan}
 
             moved = skipped = errors = 0
+            movie_path_updated = False
 
             for mf in movie_files:
                 file_id = mf.get("id", 0)
@@ -473,7 +555,8 @@ class ArrPostProcessor:
                 if not file_id or not arr_current:
                     continue
 
-                filename = Path(arr_current).name
+                original_name = Path(arr_current).name
+                filename = await self._get_movie_file_name(original_name, title_info)
                 local_current = self._to_local(arr_current, arr_prefix, local_prefix)
                 local_target = str(local_root / safe_dir / filename)
 
@@ -481,19 +564,45 @@ class ArrPostProcessor:
                     skipped += 1
                     continue
 
+                if not Path(local_current).exists() and Path(local_target).exists():
+                    skipped += 1
+                    continue
+
                 if not self._move_file(local_current, local_target):
                     errors += 1
                     continue
 
-                arr_target = self._to_arr(local_target, arr_prefix, local_prefix)
-                try:
-                    await radarr.update_movie_file(file_id, filename, arr_target)
-                    moved += 1
-                except Exception as exc:
-                    logger.error(
-                        "Failed to update Radarr file record id=%d: %s", file_id, exc
+                # Update movie path in Radarr once
+                if not movie_path_updated:
+                    arr_movie_path = self._to_arr(
+                        str(local_root / safe_dir), arr_prefix, local_prefix
                     )
-                    errors += 1
+                    try:
+                        await radarr.update_movie_path(radarr_id, arr_movie_path)
+                        logger.info(
+                            "Radarr movie id=%d path → %s",
+                            radarr_id,
+                            arr_movie_path,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to update movie path for id=%d: %s",
+                            radarr_id,
+                            exc,
+                        )
+                    movie_path_updated = True
+                moved += 1
+
+            # Always rescan so Radarr discovers files at their current paths
+            try:
+                await radarr.rescan_movie(radarr_id)
+                logger.info("Radarr rescan triggered for movie id=%d", radarr_id)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to trigger Radarr rescan for id=%d: %s",
+                    radarr_id,
+                    exc,
+                )
 
             return {"ok": True, "moved": moved, "skipped": skipped, "errors": errors}
         finally:
@@ -666,3 +775,95 @@ class ArrPostProcessor:
         return NamingTemplate.sanitize(
             rendered, illegal_repl or DEFAULT_ILLEGAL_CHAR_REPLACEMENT
         ) or NamingTemplate.sanitize(title_info["title"])
+
+    async def _get_file_name(
+        self,
+        original_filename: str,
+        title_info: dict,
+        season_number: int,
+        episode_number: int,
+    ) -> str:
+        """Render the episode file name using the user's file template.
+
+        Returns the original filename unchanged if no file template is set.
+        """
+        import os
+
+        from src.Utils.NamingTemplate import (
+            DEFAULT_FILE_TEMPLATE,
+            DEFAULT_ILLEGAL_CHAR_REPLACEMENT,
+            NamingTemplate,
+            parse_quality,
+        )
+
+        tmpl_str = await self._db.get_setting("naming.file_template") or ""
+        if not tmpl_str:
+            return original_filename  # No template configured — keep original
+
+        illegal_repl = (
+            await self._db.get_setting("naming.illegal_char_replacement") or ""
+        )
+        _name, ext = os.path.splitext(original_filename)
+        quality = parse_quality(original_filename)
+        year = title_info["year"]
+
+        tokens = {
+            "title": title_info["title"],
+            "title.romaji": title_info["title_romaji"] or title_info["title"],
+            "title.english": title_info["title_english"] or title_info["title"],
+            "year": str(year) if year else "",
+            "season": f"{season_number:02d}",
+            "episode": f"{episode_number:02d}",
+            "quality": quality.full,
+            "quality.resolution": quality.resolution,
+            "quality.source": quality.source,
+        }
+        tmpl = NamingTemplate(tmpl_str or DEFAULT_FILE_TEMPLATE)
+        rendered = tmpl.render(tokens)
+        sanitized = NamingTemplate.sanitize(
+            rendered, illegal_repl or DEFAULT_ILLEGAL_CHAR_REPLACEMENT
+        )
+        return (sanitized + ext) if sanitized else original_filename
+
+    async def _get_movie_file_name(
+        self, original_filename: str, title_info: dict
+    ) -> str:
+        """Render the movie file name using the user's movie file template.
+
+        Returns the original filename unchanged if no template is set.
+        """
+        import os
+
+        from src.Utils.NamingTemplate import (
+            DEFAULT_ILLEGAL_CHAR_REPLACEMENT,
+            DEFAULT_MOVIE_FILE_TEMPLATE,
+            NamingTemplate,
+            parse_quality,
+        )
+
+        tmpl_str = await self._db.get_setting("naming.movie_file_template") or ""
+        if not tmpl_str:
+            return original_filename
+
+        illegal_repl = (
+            await self._db.get_setting("naming.illegal_char_replacement") or ""
+        )
+        _name, ext = os.path.splitext(original_filename)
+        quality = parse_quality(original_filename)
+        year = title_info["year"]
+
+        tokens = {
+            "title": title_info["title"],
+            "title.romaji": title_info["title_romaji"] or title_info["title"],
+            "title.english": title_info["title_english"] or title_info["title"],
+            "year": str(year) if year else "",
+            "quality": quality.full,
+            "quality.resolution": quality.resolution,
+            "quality.source": quality.source,
+        }
+        tmpl = NamingTemplate(tmpl_str or DEFAULT_MOVIE_FILE_TEMPLATE)
+        rendered = tmpl.render(tokens)
+        sanitized = NamingTemplate.sanitize(
+            rendered, illegal_repl or DEFAULT_ILLEGAL_CHAR_REPLACEMENT
+        )
+        return (sanitized + ext) if sanitized else original_filename

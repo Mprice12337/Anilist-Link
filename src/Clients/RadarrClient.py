@@ -77,6 +77,23 @@ class RadarrClient:
                 return None
             raise
 
+    async def update_movie_path(self, movie_id: int, new_path: str) -> dict[str, Any]:
+        """Update the folder path for a movie in Radarr."""
+        movie = await self.get_movie_by_id(movie_id)
+        if not movie:
+            raise ValueError(f"Movie {movie_id} not found in Radarr")
+        movie["path"] = new_path
+        resp = await self._http.put(self._endpoint(f"movie/{movie_id}"), json=movie)
+        resp.raise_for_status()
+        return resp.json()
+
+    async def rescan_movie(self, movie_id: int) -> dict[str, Any]:
+        """Trigger a disk rescan for a movie so Radarr discovers moved files."""
+        payload = {"name": "RescanMovie", "movieId": movie_id}
+        resp = await self._http.post(self._endpoint("command"), json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
     async def get_movie_by_tmdb_id(self, tmdb_id: int) -> dict[str, Any] | None:
         """Find a movie in Radarr by TMDB ID."""
         all_movies = await self.get_all_movies()
@@ -309,29 +326,67 @@ class RadarrClient:
         for n in await self.get_notifications():
             if n.get("name") == name:
                 return n
-        payload: dict[str, Any] = {
-            "onGrab": False,
-            "onDownload": on_download,
-            "onUpgrade": on_upgrade,
-            "onMovieAdded": False,
-            "onMovieDelete": False,
-            "onMovieFileDelete": False,
-            "onMovieFileDeleteForUpgrade": False,
-            "onHealthIssue": False,
-            "onApplicationUpdate": False,
-            "name": name,
-            "fields": [
-                {"name": "Url", "value": url},
-                {"name": "Method", "value": 1},
-                {"name": "Username", "value": ""},
-                {"name": "Password", "value": ""},
-            ],
-            "implementationName": "Webhook",
-            "implementation": "Webhook",
-            "configContract": "WebhookSettings",
-            "infoLink": "https://wiki.servarr.com/radarr/supported#webhook",
-            "tags": [],
-        }
+
+        # Use schema endpoint to get all required fields for this Radarr version
+        schema: dict[str, Any] = {}
+        try:
+            resp = await self._http.get(
+                self._endpoint("notification/schema"),
+            )
+            resp.raise_for_status()
+            schemas = resp.json()
+            for s in schemas:
+                if s.get("implementation") == "Webhook":
+                    schema = s
+                    break
+        except Exception:
+            pass
+
+        if schema:
+            schema.pop("id", None)  # read-only on POST
+            schema["name"] = name
+            schema["onGrab"] = False
+            schema["onDownload"] = on_download
+            schema["onUpgrade"] = on_upgrade
+            for f in schema.get("fields", []):
+                fname = (f.get("name") or "").lower()
+                if fname == "url":
+                    f["value"] = url
+                elif fname == "method":
+                    f["value"] = 1  # POST
+            payload = schema
+        else:
+            payload = {
+                "onGrab": False,
+                "onDownload": on_download,
+                "onUpgrade": on_upgrade,
+                "onMovieAdded": False,
+                "onMovieDelete": False,
+                "onMovieFileDelete": False,
+                "onMovieFileDeleteForUpgrade": False,
+                "onHealthIssue": False,
+                "onApplicationUpdate": False,
+                "onManualInteractionRequired": False,
+                "name": name,
+                "fields": [
+                    {"name": "Url", "value": url},
+                    {"name": "Method", "value": 1},
+                    {"name": "Username", "value": ""},
+                    {"name": "Password", "value": ""},
+                ],
+                "implementationName": "Webhook",
+                "implementation": "Webhook",
+                "configContract": "WebhookSettings",
+                "infoLink": "https://wiki.servarr.com/radarr/supported#webhook",
+                "tags": [],
+            }
+
         resp = await self._http.post(self._endpoint("notification"), json=payload)
+        if resp.status_code >= 400:
+            logger.warning(
+                "Radarr webhook registration failed (%d): %s",
+                resp.status_code,
+                resp.text[:500],
+            )
         resp.raise_for_status()
         return resp.json()

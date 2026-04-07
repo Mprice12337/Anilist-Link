@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from starlette.responses import StreamingResponse
 
 from src.Clients.RadarrClient import RadarrClient
 from src.Clients.SonarrClient import SonarrClient
 from src.Download.MappingResolver import MappingResolver
+from src.Scanner.SeriesGroupBuilder import SeriesGroupBuilder
 from src.Utils.NamingTranslator import (
     GET_FULL_MEDIA_QUERY,
     build_title_chain,
@@ -360,6 +363,18 @@ async def _auto_link_sonarr_siblings(
         chain = await collect_series_chain(root_anilist_id, tvdb_id, anilist_client)
         siblings = [aid for aid in chain if aid != root_anilist_id]
 
+        # Build series group so post-processor can resolve root entry for folder naming
+        try:
+            builder = SeriesGroupBuilder(db=db, anilist_client=anilist_client)
+            await builder.get_or_build_group(root_anilist_id)
+            logger.info("Built series group for anilist_id=%d", root_anilist_id)
+        except Exception as exc:
+            logger.warning(
+                "Failed to build series group for anilist_id=%d: %s",
+                root_anilist_id,
+                exc,
+            )
+
         # Load watchlist for title lookups
         users = await db.get_users_by_service("anilist")
         if not users:
@@ -529,6 +544,25 @@ async def _auto_link_sonarr_siblings(
                 sibling_season,
                 tvdb_id,
                 root_anilist_id,
+            )
+
+        # Populate anilist_sonarr_season_mapping for the post-processor
+        mapped_count = 0
+        for aid in chain:
+            s_num = season_map.get(aid)
+            if s_num is not None:
+                await db.execute(
+                    """INSERT OR IGNORE INTO anilist_sonarr_season_mapping
+                       (sonarr_id, season_number, anilist_id)
+                       VALUES (?, ?, ?)""",
+                    (sonarr_id, s_num, aid),
+                )
+                mapped_count += 1
+        if mapped_count:
+            logger.info(
+                "Populated %d season mappings for sonarr_id=%d",
+                mapped_count,
+                sonarr_id,
             )
     except Exception as exc:
         logger.warning(
@@ -1151,6 +1185,250 @@ async def resolve_arr_match(request: Request) -> JSONResponse:
         )
     finally:
         await client_s.close()
+
+
+@router.get("/api/watchlist/resolve-stream")
+async def resolve_arr_match_stream(request: Request) -> StreamingResponse:
+    """SSE version of resolve — streams progress events to the UI.
+
+    Events:
+      event: status   data: {"text": "..."}       — progress update
+      event: result   data: {<full JSON result>}  — final result
+      event: error    data: {"error": "..."}       — error
+    """
+    db = request.app.state.db
+    config = request.app.state.config
+    anilist_client = request.app.state.anilist_client
+
+    anilist_id_str = request.query_params.get("anilist_id", "")
+    if not anilist_id_str:
+
+        async def _err():
+            yield _sse("error", {"error": "anilist_id required"})
+
+        return StreamingResponse(_err(), media_type="text/event-stream")
+
+    anilist_id = int(anilist_id_str)
+
+    async def _generate():
+        try:
+            anilist_format, anilist_title = await _get_entry_info(db, anilist_id)
+            is_movie = is_movie_format(anilist_format)
+
+            if is_movie:
+                yield _sse("status", {"text": "Resolving TMDB ID\u2026"})
+                if not config.radarr.url or not config.radarr.api_key:
+                    yield _sse("error", {"error": "Radarr not configured"})
+                    return
+
+                from src.Utils.NamingTranslator import resolve_tmdb_id
+
+                tmdb_id = await resolve_tmdb_id(anilist_id, anilist_client)
+                if not tmdb_id:
+                    yield _sse(
+                        "result",
+                        {
+                            "resolved": False,
+                            "error": f"Could not resolve TMDB ID for {anilist_title!r}",
+                        },
+                    )
+                    return
+
+                yield _sse("status", {"text": "Looking up in Radarr\u2026"})
+                client_r = RadarrClient(
+                    url=config.radarr.url, api_key=config.radarr.api_key
+                )
+                try:
+                    result = await client_r.lookup_movie_by_tmdb(tmdb_id)
+                    if not result:
+                        yield _sse(
+                            "result",
+                            {
+                                "resolved": False,
+                                "error": f"TMDB ID {tmdb_id} not found in Radarr",
+                            },
+                        )
+                        return
+                    existing = await db.fetch_one(
+                        "SELECT radarr_id FROM anilist_radarr_mapping"
+                        " WHERE anilist_id=? AND in_radarr=1",
+                        (anilist_id,),
+                    )
+                    poster = result.get("remotePoster", "")
+                    if not poster:
+                        for img in result.get("images", []):
+                            if img.get("coverType") == "poster":
+                                poster = img.get("remoteUrl", "")
+                                break
+                    yield _sse(
+                        "result",
+                        {
+                            "resolved": True,
+                            "service": "radarr",
+                            "tmdb_id": tmdb_id,
+                            "arr_title": result.get("title", ""),
+                            "arr_year": result.get("year"),
+                            "overview": (result.get("overview") or "")[:300],
+                            "poster": poster,
+                            "already_in_arr": bool(existing),
+                            "siblings": [],
+                            "suggested_season": None,
+                        },
+                    )
+                finally:
+                    await client_r.close()
+                return
+
+            # Sonarr path
+            if not config.sonarr.url or not config.sonarr.api_key:
+                yield _sse("error", {"error": "Sonarr not configured"})
+                return
+
+            from src.Utils.NamingTranslator import (
+                resolve_tvdb_id,
+                resolve_tvdb_via_prequel_chain,
+                resolve_tvdb_via_title_chain,
+            )
+
+            yield _sse("status", {"text": "Checking AniList for TVDB link\u2026"})
+            client_s = SonarrClient(
+                url=config.sonarr.url, api_key=config.sonarr.api_key
+            )
+            try:
+                tvdb_id = await resolve_tvdb_id(anilist_id, anilist_client)
+                candidates: list[dict] = []
+
+                if not tvdb_id:
+                    yield _sse(
+                        "status",
+                        {
+                            "text": "Walking prequel chain for TVDB ID\u2026",
+                        },
+                    )
+                    tvdb_id, _root_id = await resolve_tvdb_via_prequel_chain(
+                        anilist_id, anilist_client
+                    )
+
+                if not tvdb_id:
+                    yield _sse(
+                        "status",
+                        {
+                            "text": "Searching Sonarr by title variants\u2026",
+                        },
+                    )
+                    tvdb_id, candidates = await resolve_tvdb_via_title_chain(
+                        anilist_id, anilist_client, client_s
+                    )
+
+                if not tvdb_id:
+                    yield _sse(
+                        "result",
+                        {
+                            "resolved": False,
+                            "needs_disambiguation": True,
+                            "service": "sonarr",
+                            "candidates": candidates,
+                        },
+                    )
+                    return
+
+                yield _sse("status", {"text": "Fetching series details\u2026"})
+                result = await client_s.lookup_series_by_tvdb(tvdb_id)
+                if not result:
+                    yield _sse(
+                        "result",
+                        {
+                            "resolved": False,
+                            "needs_disambiguation": True,
+                            "service": "sonarr",
+                            "candidates": candidates,
+                            "error": f"TVDB {tvdb_id} not found in Sonarr",
+                        },
+                    )
+                    return
+
+                existing = await db.fetch_one(
+                    "SELECT sonarr_id FROM anilist_sonarr_mapping"
+                    " WHERE anilist_id=? AND in_sonarr=1",
+                    (anilist_id,),
+                )
+                sonarr_id: int | None = result.get("id")
+
+                siblings: list[dict] = []
+                if sonarr_id:
+                    sib_rows = await db.fetch_all(
+                        """SELECT m.anilist_id, m.sonarr_season, w.anilist_title
+                           FROM anilist_sonarr_mapping m
+                           LEFT JOIN user_watchlist w
+                               ON w.anilist_id = m.anilist_id
+                           WHERE m.sonarr_id = ? AND m.anilist_id != ?
+                               AND m.in_sonarr = 1""",
+                        (sonarr_id, anilist_id),
+                    )
+                else:
+                    sib_rows = await db.fetch_all(
+                        """SELECT m.anilist_id, m.sonarr_season, w.anilist_title
+                           FROM anilist_sonarr_mapping m
+                           LEFT JOIN user_watchlist w
+                               ON w.anilist_id = m.anilist_id
+                           WHERE m.tvdb_id = ? AND m.anilist_id != ?
+                               AND m.in_sonarr = 1""",
+                        (tvdb_id, anilist_id),
+                    )
+                for sib in sib_rows:
+                    siblings.append(
+                        {
+                            "anilist_id": sib["anilist_id"],
+                            "anilist_title": sib["anilist_title"] or "",
+                            "sonarr_season": sib["sonarr_season"],
+                        }
+                    )
+
+                suggested_season: int | None = None
+                if siblings:
+                    max_season = max((s["sonarr_season"] or 1) for s in siblings)
+                    suggested_season = max_season + 1
+
+                poster = result.get("remotePoster", "")
+                if not poster:
+                    for img in result.get("images", []):
+                        if img.get("coverType") == "poster":
+                            poster = img.get("remoteUrl", "") or img.get("url", "")
+                            break
+
+                seasons = result.get("seasons", [])
+                season_count = len([s for s in seasons if s.get("seasonNumber", 0) > 0])
+
+                yield _sse(
+                    "result",
+                    {
+                        "resolved": True,
+                        "service": "sonarr",
+                        "tvdb_id": tvdb_id,
+                        "sonarr_id": sonarr_id,
+                        "arr_title": result.get("title", ""),
+                        "arr_year": result.get("year"),
+                        "season_count": season_count,
+                        "overview": (result.get("overview") or "")[:300],
+                        "poster": poster,
+                        "already_in_arr": bool(existing),
+                        "in_sonarr": sonarr_id is not None,
+                        "siblings": siblings,
+                        "suggested_season": suggested_season,
+                    },
+                )
+            finally:
+                await client_s.close()
+        except Exception as exc:
+            logger.error("resolve-stream error: %s", exc, exc_info=True)
+            yield _sse("error", {"error": str(exc)})
+
+    return StreamingResponse(_generate(), media_type="text/event-stream")
+
+
+def _sse(event: str, data: dict) -> str:
+    """Format a single SSE message."""
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
 @router.post("/api/watchlist/update-monitor")

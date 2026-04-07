@@ -3,6 +3,11 @@ services:
     image: dogberttech/anilist-link:latest
     # To build locally instead: comment out image above and uncomment below
     # build: .
+    # To build dev variant (includes /config/dev-tools/ scripts):
+    # build:
+    #   context: .
+    #   args:
+    #     BUILD_VARIANT: dev
     container_name: AnilistLink
     restart: unless-stopped
     shm_size: "2g"

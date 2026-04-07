@@ -924,7 +924,50 @@ var arr_enabled = {{ 'true' if arr_enabled else 'false' }};
 
   function onAddSuccess(anilistId, service, btn) {
     showToast('Added to ' + service + ' successfully', 'success');
-    window.location.reload();
+
+    // Update the row in-place instead of reloading
+    // Find table row by scanning for the add button's anilist_id
+    var rows = document.querySelectorAll('#tableBody tr');
+    rows.forEach(function(row) {
+      var addBtn = row.querySelector('button[onclick*="previewAdd(' + anilistId + ',"]');
+      if (!addBtn) return;
+
+      // Update data attributes
+      row.setAttribute('data-local', 'arr');
+      row.setAttribute('data-arr', 'monitored');
+
+      // Update the local status cell (second-to-last data cell)
+      var cells = row.querySelectorAll('td');
+      // Local status cell (index 8)
+      var localCell = cells[8];
+      if (localCell) {
+        localCell.innerHTML = '<span class="local-have" title="In ' + service.charAt(0).toUpperCase() + service.slice(1) + '">via ' + service.charAt(0).toUpperCase() + service.slice(1) + '</span>';
+      }
+
+      // Arr status + actions cell (index 9) — show monitoring badge
+      var arrCell = cells[9];
+      if (arrCell) {
+        var svcTitle = service.charAt(0).toUpperCase() + service.slice(1);
+        arrCell.innerHTML = '<span class="badge arr-monitored arr-' + service + ' arr-toggle" style="cursor:pointer;">' + svcTitle + ' ●</span>';
+      }
+
+      // Actions cell (index 10) — replace Add button with placeholder
+      var actCell = cells[10];
+      if (actCell) {
+        actCell.innerHTML = '<div class="action-btns"><span style="color:var(--text-muted);font-size:0.82rem">Added</span></div>';
+      }
+    });
+
+    // Also update grid cards
+    document.querySelectorAll('#gridView .watchlist-grid-card').forEach(function(card) {
+      var addBtn = card.querySelector('button[onclick*="previewAdd(' + anilistId + ',"]');
+      if (!addBtn) return;
+      card.setAttribute('data-local', 'arr');
+      addBtn.textContent = 'Added';
+      addBtn.disabled = true;
+      addBtn.classList.remove('btn-secondary');
+      addBtn.classList.add('btn-primary');
+    });
   }
 
   // Step 1: resolve the match (no add yet)
@@ -940,42 +983,50 @@ var arr_enabled = {{ 'true' if arr_enabled else 'false' }};
     loadingStatus.textContent = 'Checking AniList for TVDB link\u2026';
     loadingModal.classList.remove('hidden');
 
-    // Cycle through status messages to show progress
-    var statusMessages = [
-      { delay: 2000, text: 'Walking prequel chain for TVDB ID\u2026' },
-      { delay: 5000, text: 'Searching Sonarr by title variants\u2026' },
-      { delay: 12000, text: 'Trying alternate titles\u2026' },
-      { delay: 25000, text: 'Still searching \u2014 checking synonyms\u2026' },
-    ];
-    var statusTimers = statusMessages.map(function(msg) {
-      return setTimeout(function() { loadingStatus.textContent = msg.text; }, msg.delay);
-    });
-
     function clearLoadingState() {
       loadingModal.classList.add('hidden');
-      statusTimers.forEach(clearTimeout);
     }
 
-    fetch('/api/watchlist/resolve?anilist_id=' + anilistId)
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        clearLoadingState();
-        if (!data.resolved && data.needs_disambiguation) {
-          openDisambig(anilistId, btn, title, data.service || 'sonarr', data.candidates || []);
-        } else if (!data.resolved) {
-          showToast('Could not resolve: ' + (data.error || 'unknown'), 'error');
-          btn.disabled = false;
-          btn.textContent = '+ Add';
-        } else {
-          openMatchPreview(anilistId, btn, title, data);
-        }
-      })
-      .catch(function(e) {
-        clearLoadingState();
-        showToast('Request failed: ' + e.message, 'error');
+    // Use SSE for live progress updates from the backend
+    var es = new EventSource('/api/watchlist/resolve-stream?anilist_id=' + anilistId);
+
+    es.addEventListener('status', function(e) {
+      var msg = JSON.parse(e.data);
+      loadingStatus.textContent = msg.text || '';
+    });
+
+    es.addEventListener('result', function(e) {
+      es.close();
+      clearLoadingState();
+      var data = JSON.parse(e.data);
+      if (!data.resolved && data.needs_disambiguation) {
+        openDisambig(anilistId, btn, title, data.service || 'sonarr', data.candidates || []);
+      } else if (!data.resolved) {
+        showToast('Could not resolve: ' + (data.error || 'unknown'), 'error');
         btn.disabled = false;
         btn.textContent = '+ Add';
-      });
+      } else {
+        openMatchPreview(anilistId, btn, title, data);
+      }
+    });
+
+    es.addEventListener('error', function(e) {
+      es.close();
+      clearLoadingState();
+      var msg = '';
+      try { msg = JSON.parse(e.data).error; } catch(_) {}
+      showToast('Request failed: ' + (msg || 'connection error'), 'error');
+      btn.disabled = false;
+      btn.textContent = '+ Add';
+    });
+
+    es.onerror = function() {
+      es.close();
+      clearLoadingState();
+      showToast('Connection lost during resolve', 'error');
+      btn.disabled = false;
+      btn.textContent = '+ Add';
+    };
   };
 
   // Step 2: show match preview modal
@@ -1427,6 +1478,7 @@ var arr_enabled = {{ 'true' if arr_enabled else 'false' }};
       el.style.removeProperty('--scroll-dist');
     });
   });
+
 })();
 </script>
 {% endblock %}

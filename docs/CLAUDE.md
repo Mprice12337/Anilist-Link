@@ -21,7 +21,7 @@ Implementation order: **P2 → P3 → P1 → P4**
 - **P2 — File Organization**: Library restructure wizard (analyze → preview → execute), series group-aware file renaming
 - **P3 — Metadata**: Full scan/match/apply pipeline for Plex, library browser with mapping management, AniList metadata writing (titles, summaries, posters, genres, ratings)
 - **P1 — Watch Sync**: Crunchyroll→AniList sync with smart pagination and status transitions (Plex/Jellyfin sync planned)
-- **P4 — Downloads**: Sonarr/Radarr integration for add requests with AniList alt titles (planned)
+- **P4 — Downloads**: Sonarr/Radarr integration with add requests, alt titles, post-download file organization, series path sync, and webhook automation
 - **Shared**: AniList OAuth2 account linking, series group builder, fuzzy title matching, web dashboard with GUI settings
 
 ### Project Context
@@ -691,9 +691,11 @@ alias alstop='docker-compose down'           # Stop Anilist-Link
 - AniList backfill syncer (AniList→media server) not yet implemented
 - AniList token auto-refresh not yet wired up
 
-**P4 — Downloads**: ✅ Core implemented
+**P4 — Downloads**: ✅ Complete
 - SonarrClient, RadarrClient, DownloadManager, MappingResolver, ArrPostProcessor, DownloadSyncer all implemented
 - Download management UI, manual grab, watchlist browser, Sonarr sync, webhook receiver all working
+- Post-processor: naming templates, series groups, season mappings, file renaming, Sonarr path sync + rescan
+- Webhook auto-registration (schema-based), SSE resolve with live progress, S1 title variants for sequel search
 - Full automation (auto-search on new CURRENT status) partial — DownloadSyncer exists
 
 **General**:

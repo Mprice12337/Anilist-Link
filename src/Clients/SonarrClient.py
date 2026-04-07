@@ -86,10 +86,14 @@ class SonarrClient:
                 return s
         return None
 
-    async def lookup_series(self, term: str) -> list[dict[str, Any]]:
+    async def lookup_series(
+        self, term: str, *, timeout: float | None = 10.0
+    ) -> list[dict[str, Any]]:
         """Search for a series by title via Sonarr lookup."""
         resp = await self._http.get(
-            self._endpoint("series/lookup"), params={"term": term}
+            self._endpoint("series/lookup"),
+            params={"term": term},
+            timeout=timeout,
         )
         resp.raise_for_status()
         return resp.json()
@@ -331,6 +335,23 @@ class SonarrClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def update_series_path(self, series_id: int, new_path: str) -> dict[str, Any]:
+        """Update the root path for a series in Sonarr."""
+        series = await self.get_series_by_id(series_id)
+        if not series:
+            raise ValueError(f"Series {series_id} not found in Sonarr")
+        series["path"] = new_path
+        resp = await self._http.put(self._endpoint(f"series/{series_id}"), json=series)
+        resp.raise_for_status()
+        return resp.json()
+
+    async def rescan_series(self, series_id: int) -> dict[str, Any]:
+        """Trigger a disk rescan for a series so Sonarr discovers moved files."""
+        payload = {"name": "RescanSeries", "seriesId": series_id}
+        resp = await self._http.post(self._endpoint("command"), json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
     async def update_series_monitor(
         self, series_id: int, monitored: bool
     ) -> dict[str, Any]:
@@ -459,29 +480,72 @@ class SonarrClient:
         for n in await self.get_notifications():
             if n.get("name") == name:
                 return n
-        payload: dict[str, Any] = {
-            "onGrab": False,
-            "onDownload": on_download,
-            "onUpgrade": on_upgrade,
-            "onRename": False,
-            "onSeriesDelete": False,
-            "onEpisodeFileDelete": False,
-            "onEpisodeFileDeleteForUpgrade": False,
-            "onHealthIssue": False,
-            "onApplicationUpdate": False,
-            "name": name,
-            "fields": [
-                {"name": "Url", "value": url},
-                {"name": "Method", "value": 1},
-                {"name": "Username", "value": ""},
-                {"name": "Password", "value": ""},
-            ],
-            "implementationName": "Webhook",
-            "implementation": "Webhook",
-            "configContract": "WebhookSettings",
-            "infoLink": "https://wiki.servarr.com/sonarr/supported#webhook",
-            "tags": [],
-        }
+
+        # Build payload by cloning an existing webhook's schema if possible,
+        # otherwise fall back to a known-good structure.
+        # Use GET to discover required fields for this Sonarr version.
+        schema: dict[str, Any] = {}
+        try:
+            resp = await self._http.get(
+                self._endpoint("notification/schema"),
+            )
+            resp.raise_for_status()
+            schemas = resp.json()
+            for s in schemas:
+                if s.get("implementation") == "Webhook":
+                    schema = s
+                    break
+        except Exception:
+            pass
+
+        if schema:
+            # Use the schema as the base — it has all required fields/defaults
+            schema.pop("id", None)  # read-only on POST
+            schema["name"] = name
+            schema["onGrab"] = False
+            schema["onDownload"] = on_download
+            schema["onUpgrade"] = on_upgrade
+            # Set URL and Method in fields (case-insensitive match)
+            for f in schema.get("fields", []):
+                fname = (f.get("name") or "").lower()
+                if fname == "url":
+                    f["value"] = url
+                elif fname == "method":
+                    f["value"] = 1  # POST
+            payload = schema
+        else:
+            payload = {
+                "onGrab": False,
+                "onDownload": on_download,
+                "onUpgrade": on_upgrade,
+                "onRename": False,
+                "onSeriesDelete": False,
+                "onEpisodeFileDelete": False,
+                "onEpisodeFileDeleteForUpgrade": False,
+                "onHealthIssue": False,
+                "onApplicationUpdate": False,
+                "onManualInteractionRequired": False,
+                "onSeriesAdd": False,
+                "name": name,
+                "fields": [
+                    {"name": "Url", "value": url},
+                    {"name": "Method", "value": 1},
+                    {"name": "Username", "value": ""},
+                    {"name": "Password", "value": ""},
+                ],
+                "implementationName": "Webhook",
+                "implementation": "Webhook",
+                "configContract": "WebhookSettings",
+                "infoLink": "https://wiki.servarr.com/sonarr/supported#webhook",
+                "tags": [],
+            }
+
         resp = await self._http.post(self._endpoint("notification"), json=payload)
+        if resp.status_code >= 400:
+            logger.warning(
+                "Sonarr webhook registration failed (%d): %s",
+                resp.status_code,
+                resp.text[:500],
+            )
         resp.raise_for_status()
         return resp.json()

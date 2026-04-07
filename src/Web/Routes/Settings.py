@@ -225,6 +225,13 @@ async def settings_page(request: Request, saved: int = 0) -> HTMLResponse:
         display["library.name"] = ""
         display["library.paths"] = ""
 
+    # Auto-detect base_url from the incoming request if not explicitly set.
+    # This gives the user a sensible default (the URL they're accessing from)
+    # instead of localhost:9876 which won't work for webhooks.
+    if not display.get("app.base_url") or display["app.base_url"] == "http://localhost:9876":
+        detected = f"{request.url.scheme}://{request.url.netloc}"
+        display["app.base_url"] = detected
+
     # Build the AniList callback URL from the current request so the user
     # knows exactly what to register on AniList's developer page.
     anilist_callback_url = str(request.url_for("anilist_callback"))
@@ -373,7 +380,7 @@ async def _settings_save_impl(request: Request) -> RedirectResponse:
 
     # Auto-register webhooks in Sonarr/Radarr if configured
     try:
-        base_url = new_config.app.base_url.rstrip("/")
+        base_url = new_config.base_url.rstrip("/")
 
         if new_config.sonarr.url and new_config.sonarr.api_key:
 

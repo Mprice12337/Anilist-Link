@@ -144,6 +144,7 @@
                 <div style="display:flex;gap:0.5rem;align-items:center">
                     <input type="text" name="{{ key }}" id="{{ key }}"
                            value="{{ display.get(key, '') }}"
+                           placeholder="Click Browse or paste path (e.g. /data/anime)"
                            {% if key in env_overrides %}disabled{% endif %}
                            style="flex:1">
                     {% if key not in env_overrides %}
@@ -152,6 +153,11 @@
                             style="white-space:nowrap">Browse</button>
                     {% endif %}
                 </div>
+                {% if not display.get(key, '') %}
+                <div style="font-size:0.8rem;color:var(--text-muted);margin-top:0.25rem">
+                    Uses the first root folder configured in {{ "Sonarr" if "sonarr" in key else "Radarr" }} if not set. Click Browse to see available folders.
+                </div>
+                {% endif %}
                 <select id="{{ key }}-picker" style="display:none;margin-top:0.35rem;width:100%"
                         onchange="document.getElementById('{{ key }}').value=this.value;this.style.display='none'">
                 </select>

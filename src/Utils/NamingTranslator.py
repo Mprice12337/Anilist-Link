@@ -21,7 +21,7 @@ _TMDB_SITE_NAMES = {"The Movie Database", "TMDB"}
 _IMDB_SITE_NAMES = {"Internet Movie Database", "IMDb"}
 
 # Max number of Sonarr lookups per title-chain resolve attempt
-_SEARCH_TITLE_LIMIT = 6
+_SEARCH_TITLE_LIMIT = 4
 
 
 GET_EXTERNAL_LINKS_QUERY = """
@@ -465,6 +465,47 @@ async def resolve_tvdb_via_title_chain(
     if not title_chain:
         return None, []
 
+    # For sequel series, also include root (S1) entry's title variants.
+    # TVDB typically registers multi-season shows under the S1 name.
+    all_titles = list(title_chain)  # scoring pool (includes S1 titles)
+    try:
+        relations, _ = await fetch_relations_and_tvdb(anilist_id, anilist_client)
+        has_prequel = any(rt == "PREQUEL" for rt, _ in relations)
+        if has_prequel:
+            # Walk to the root entry and get its titles
+            root_id = anilist_id
+            visited: set[int] = {root_id}
+            for _ in range(10):
+                rels, _ = await fetch_relations_and_tvdb(root_id, anilist_client)
+                prequel = next(
+                    (rid for rt, rid in rels if rt == "PREQUEL" and rid not in visited),
+                    None,
+                )
+                if not prequel:
+                    break
+                visited.add(prequel)
+                root_id = prequel
+            if root_id != anilist_id:
+                root_data = await anilist_client._execute_query(
+                    GET_FULL_MEDIA_QUERY, {"id": root_id}
+                )
+                root_media = root_data.get("Media", {})
+                root_titles = build_title_chain(root_media)
+                # Add S1 titles to the search chain (high priority, after own english)
+                seen = set(title_chain)
+                for rt in root_titles:
+                    if rt not in seen:
+                        title_chain.append(rt)
+                        all_titles.append(rt)
+                        seen.add(rt)
+                logger.info(
+                    "Added %d root titles from anilist_id=%d for sequel search",
+                    len(root_titles),
+                    root_id,
+                )
+    except Exception as exc:
+        logger.debug("Failed to fetch root titles for sequel: %s", exc)
+
     seen_tvdb: set[int] = set()
     scored: list[tuple[float, dict[str, Any]]] = []
 
@@ -481,7 +522,7 @@ async def resolve_tvdb_via_title_chain(
                 continue
             seen_tvdb.add(tvdb_id)
 
-            score = _score_candidate(r.get("title", ""), title_chain)
+            score = _score_candidate(r.get("title", ""), all_titles)
             poster = r.get("remotePoster") or (
                 r["images"][0].get("remoteUrl", "") if r.get("images") else ""
             )

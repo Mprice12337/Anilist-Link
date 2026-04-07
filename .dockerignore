@@ -19,6 +19,7 @@ _resources
 tests
 docs
 scripts
+!scripts/dev-tools/
 *.md
 !README.md
 Thumbs.db
