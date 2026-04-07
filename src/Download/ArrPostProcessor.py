@@ -16,7 +16,6 @@ from src.Clients.RadarrClient import RadarrClient
 from src.Clients.SonarrClient import SonarrClient
 from src.Database.Connection import DatabaseManager
 from src.Utils.Config import AppConfig
-from src.Utils.NamingTemplate import NamingTemplate
 
 logger = logging.getLogger(__name__)
 
@@ -67,29 +66,40 @@ class ArrPostProcessor:
             )
             return
 
-        anilist_title = await self._get_anilist_title(anilist_id)
-        if not anilist_title:
+        show_info, season_info = await self._get_show_and_season_info(anilist_id)
+        if not season_info["title"]:
             logger.warning("No AniList title for anilist_id=%d — skipping", anilist_id)
             return
 
         filename = Path(current_path).name
-        safe_dir = NamingTemplate.sanitize(anilist_title)
-        target_path = str(Path(series_path) / safe_dir / filename)
+        safe_dir = await self._get_folder_name(show_info)
+        season_dir = await self._get_season_folder_name(season_number, season_info)
 
-        if Path(target_path).resolve() == Path(current_path).resolve():
+        # Use library output path as target root; fall back to Sonarr series path
+        library_path = await self._get_library_output_path()
+        target_root = library_path or series_path
+
+        # Path prefix translation for Docker/remote setups
+        arr_prefix = self._config.sonarr.path_prefix
+        local_prefix = self._config.sonarr.local_path_prefix
+        local_current = self._to_local(current_path, arr_prefix, local_prefix)
+        local_root = self._to_local(target_root, arr_prefix, local_prefix)
+        local_target = str(Path(local_root) / safe_dir / season_dir / filename)
+
+        if Path(local_target).resolve() == Path(local_current).resolve():
             logger.debug("Sonarr file already at target path: %s", current_path)
             return
 
-        if not self._move_file(current_path, target_path):
+        if not self._move_file(local_current, local_target):
             return
 
-        relative_path = str(Path(target_path).relative_to(series_path))
+        arr_target = self._to_arr(local_target, arr_prefix, local_prefix)
         sonarr = SonarrClient(
             url=self._config.sonarr.url, api_key=self._config.sonarr.api_key
         )
         try:
-            await sonarr.update_episode_file(file_id, relative_path, target_path)
-            logger.info("Sonarr file id=%d updated → %s", file_id, target_path)
+            await sonarr.update_episode_file(file_id, filename, arr_target)
+            logger.info("Sonarr file id=%d updated → %s", file_id, arr_target)
         except Exception as exc:
             logger.error("Failed to update Sonarr file record id=%d: %s", file_id, exc)
         finally:
@@ -129,37 +139,48 @@ class ArrPostProcessor:
             return
 
         anilist_id: int = mapping["anilist_id"]
-        anilist_title = await self._get_anilist_title(anilist_id)
-        if not anilist_title:
+        title_info = await self._get_anilist_title_info(anilist_id)
+        if not title_info["title"]:
             logger.warning("No AniList title for anilist_id=%d — skipping", anilist_id)
             return
 
         filename = Path(current_path).name
-        safe_dir = NamingTemplate.sanitize(anilist_title)
+        safe_dir = await self._get_folder_name(title_info)
 
-        # Root = parent of movie folder (or parent of current file if no folderPath)
-        root = (
-            Path(folder_path).parent
-            if folder_path
-            else Path(current_path).parent.parent
-        )
-        target_path = str(root / safe_dir / filename)
+        # Use library output path as target root; fall back to Radarr movie root
+        library_path = await self._get_library_output_path()
+        arr_prefix = self._config.radarr.path_prefix
+        local_prefix = self._config.radarr.local_path_prefix
 
-        if Path(target_path).resolve() == Path(current_path).resolve():
+        if library_path:
+            target_root = library_path
+        else:
+            # Fall back to parent of movie folder
+            arr_root = (
+                Path(folder_path).parent
+                if folder_path
+                else Path(current_path).parent.parent
+            )
+            target_root = str(arr_root)
+
+        local_root = Path(self._to_local(target_root, arr_prefix, local_prefix))
+        local_current = self._to_local(current_path, arr_prefix, local_prefix)
+        local_target = str(local_root / safe_dir / filename)
+
+        if Path(local_target).resolve() == Path(local_current).resolve():
             logger.debug("Radarr file already at target path: %s", current_path)
             return
 
-        if not self._move_file(current_path, target_path):
+        if not self._move_file(local_current, local_target):
             return
 
-        # relativePath for movies is just the filename within the movie folder
-        relative_path = filename
+        arr_target = self._to_arr(local_target, arr_prefix, local_prefix)
         radarr = RadarrClient(
             url=self._config.radarr.url, api_key=self._config.radarr.api_key
         )
         try:
-            await radarr.update_movie_file(file_id, relative_path, target_path)
-            logger.info("Radarr file id=%d updated → %s", file_id, target_path)
+            await radarr.update_movie_file(file_id, filename, arr_target)
+            logger.info("Radarr file id=%d updated → %s", file_id, arr_target)
         except Exception as exc:
             logger.error("Failed to update Radarr file record id=%d: %s", file_id, exc)
         finally:
@@ -195,15 +216,6 @@ class ArrPostProcessor:
         """
         arr_prefix = self._config.sonarr.path_prefix
         local_prefix = self._config.sonarr.local_path_prefix
-        if not arr_prefix or not local_prefix:
-            return {
-                "ok": False,
-                "error": (
-                    "Reprocess requires local filesystem access. "
-                    "Configure 'Sonarr path prefix' and "
-                    "'Local path prefix' in Settings."
-                ),
-            }
 
         sonarr = SonarrClient(
             url=self._config.sonarr.url, api_key=self._config.sonarr.api_key
@@ -217,7 +229,10 @@ class ArrPostProcessor:
             if not series_path:
                 return {"ok": False, "error": "Series has no path in Sonarr"}
 
-            local_series_path = self._to_local(series_path, arr_prefix, local_prefix)
+            # Use library output path as target root; fall back to Sonarr series path
+            library_path = await self._get_library_output_path()
+            target_root = library_path or series_path
+            local_target_root = self._to_local(target_root, arr_prefix, local_prefix)
 
             # Build episodeFileId → seasonNumber map
             episodes = await sonarr.get_episodes(sonarr_id)
@@ -244,21 +259,24 @@ class ArrPostProcessor:
                     if not anilist_id:
                         continue
 
-                    anilist_title, anilist_year = (
-                        await self._get_anilist_title_and_year(anilist_id)
+                    show_info, season_info = await self._get_show_and_season_info(
+                        anilist_id
                     )
-                    if not anilist_title:
+                    if not season_info["title"]:
                         continue
 
                     filename = Path(arr_current_path).name
-                    safe_dir = await self._get_folder_name(
-                        anilist_title, year=anilist_year
+                    safe_dir = await self._get_folder_name(show_info)
+                    season_dir = await self._get_season_folder_name(
+                        season_number, season_info
                     )
 
                     local_current = self._to_local(
                         arr_current_path, arr_prefix, local_prefix
                     )
-                    local_target = str(Path(local_series_path) / safe_dir / filename)
+                    local_target = str(
+                        Path(local_target_root) / safe_dir / season_dir / filename
+                    )
                     arr_target = self._to_arr(local_target, arr_prefix, local_prefix)
 
                     already_at_target = (
@@ -269,7 +287,7 @@ class ArrPostProcessor:
                             "file_id": file_id,
                             "season": season_number,
                             "anilist_id": anilist_id,
-                            "anilist_title": anilist_title,
+                            "anilist_title": season_info["title"],
                             "folder_name": safe_dir,
                             "arr_from": arr_current_path,
                             "arr_to": arr_target,
@@ -307,10 +325,10 @@ class ArrPostProcessor:
                     skipped += 1
                     continue
 
-                anilist_title, anilist_year = await self._get_anilist_title_and_year(
+                show_info, season_info = await self._get_show_and_season_info(
                     anilist_id
                 )
-                if not anilist_title:
+                if not season_info["title"]:
                     logger.warning(
                         "No title for anilist_id=%d — skipping %s",
                         anilist_id,
@@ -320,13 +338,18 @@ class ArrPostProcessor:
                     continue
 
                 filename = Path(arr_current_path).name
-                safe_dir = await self._get_folder_name(anilist_title, year=anilist_year)
+                safe_dir = await self._get_folder_name(show_info)
+                season_dir = await self._get_season_folder_name(
+                    season_number, season_info
+                )
 
                 # Paths for local move
                 local_current = self._to_local(
                     arr_current_path, arr_prefix, local_prefix
                 )
-                local_target = str(Path(local_series_path) / safe_dir / filename)
+                local_target = str(
+                    Path(local_target_root) / safe_dir / season_dir / filename
+                )
 
                 if Path(local_target).resolve() == Path(local_current).resolve():
                     skipped += 1
@@ -361,15 +384,6 @@ class ArrPostProcessor:
         """
         arr_prefix = self._config.radarr.path_prefix
         local_prefix = self._config.radarr.local_path_prefix
-        if not arr_prefix or not local_prefix:
-            return {
-                "ok": False,
-                "error": (
-                    "Reprocess requires local filesystem access. "
-                    "Configure 'Radarr path prefix' and "
-                    "'Local path prefix' in Settings."
-                ),
-            }
 
         radarr = RadarrClient(
             url=self._config.radarr.url, api_key=self._config.radarr.api_key
@@ -386,10 +400,8 @@ class ArrPostProcessor:
                 }
 
             anilist_id: int = mapping["anilist_id"]
-            anilist_title, anilist_year = await self._get_anilist_title_and_year(
-                anilist_id
-            )
-            if not anilist_title:
+            title_info = await self._get_anilist_title_info(anilist_id)
+            if not title_info["title"]:
                 return {
                     "ok": False,
                     "error": f"No title found for anilist_id={anilist_id}",
@@ -405,14 +417,20 @@ class ArrPostProcessor:
                     return {"ok": True, "dry_run": True, "files": []}
                 return {"ok": True, "moved": 0, "skipped": 0, "errors": 0}
 
-            folder_path: str = movie.get("folderPath", "")
-            arr_root = (
-                Path(folder_path).parent
-                if folder_path
-                else Path(movie_files[0].get("path", "")).parent.parent
-            )
-            local_root = Path(self._to_local(str(arr_root), arr_prefix, local_prefix))
-            safe_dir = await self._get_folder_name(anilist_title, year=anilist_year)
+            # Use library output path as target root; fall back to Radarr movie root
+            library_path = await self._get_library_output_path()
+            if library_path:
+                target_root = library_path
+            else:
+                folder_path_str: str = movie.get("folderPath", "")
+                arr_root = (
+                    Path(folder_path_str).parent
+                    if folder_path_str
+                    else Path(movie_files[0].get("path", "")).parent.parent
+                )
+                target_root = str(arr_root)
+            local_root = Path(self._to_local(target_root, arr_prefix, local_prefix))
+            safe_dir = await self._get_folder_name(title_info)
 
             if dry_run:
                 plan: list[dict[str, Any]] = []
@@ -436,7 +454,7 @@ class ArrPostProcessor:
                         {
                             "file_id": file_id,
                             "anilist_id": anilist_id,
-                            "anilist_title": anilist_title,
+                            "anilist_title": title_info["title"],
                             "folder_name": safe_dir,
                             "arr_from": arr_current,
                             "arr_to": arr_target,
@@ -505,26 +523,83 @@ class ArrPostProcessor:
         )
         return int(row["anilist_id"]) if row else None
 
-    async def _get_anilist_title(self, anilist_id: int) -> str:
-        """Return the best available title for an AniList entry."""
-        title, _ = await self._get_anilist_title_and_year(anilist_id)
-        return title
+    async def _get_library_output_path(self) -> str | None:
+        """Return the first configured library path, or None."""
+        libraries = await self._db.get_all_libraries()
+        if not libraries:
+            return None
+        import json
+
+        paths = json.loads(libraries[0].get("paths", "[]"))
+        return paths[0] if paths else None
+
+    async def _get_show_and_season_info(self, anilist_id: int) -> tuple[dict, dict]:
+        """Return (show_title_info, season_title_info) for an AniList entry.
+
+        If the entry belongs to a series group, show_title_info uses the
+        root entry's titles (for the top-level folder).  season_title_info
+        always uses this entry's own titles (for the season subfolder).
+
+        If no series group exists, both dicts are identical.
+        """
+        entry_info = await self._get_anilist_title_info(anilist_id)
+
+        group = await self._db.get_series_group_by_anilist_id(anilist_id)
+        if group:
+            root_id = group.get("root_anilist_id")
+            if root_id and root_id != anilist_id:
+                root_info = await self._get_anilist_title_info(root_id)
+                if root_info["title"]:
+                    return root_info, entry_info
+
+        return entry_info, entry_info
 
     async def _get_anilist_title_and_year(self, anilist_id: int) -> tuple[str, int]:
         """Return the best available (title, year) for an AniList entry."""
+        info = await self._get_anilist_title_info(anilist_id)
+        return info["title"], info["year"]
+
+    async def _get_anilist_title_info(self, anilist_id: int) -> dict:
+        """Return title variants and year for an AniList entry.
+
+        Returns dict with keys: title, title_romaji, title_english, year.
+        ``title`` is resolved according to the user's app.title_display pref.
+        """
+        title_pref = await self._db.get_setting("app.title_display") or "romaji"
+        romaji = ""
+        english = ""
+        year = 0
+
+        cached = await self._db.get_cached_metadata(anilist_id)
+        if cached:
+            romaji = cached.get("title_romaji") or ""
+            english = cached.get("title_english") or ""
+            year = int(cached.get("year") or 0)
+
+        # Watchlist entry may have a better title (user-facing)
         users = await self._db.get_users_by_service("anilist")
         if users:
             entry = await self._db.get_watchlist_entry(users[0]["user_id"], anilist_id)
             if entry and entry.get("anilist_title"):
-                year = entry.get("start_year") or 0
-                return entry["anilist_title"], int(year) if year else 0
+                # Watchlist stores a single display title — use as fallback
+                if not romaji:
+                    romaji = entry["anilist_title"]
+                year = year or int(entry.get("start_year") or 0)
 
-        cached = await self._db.get_cached_metadata(anilist_id)
-        if cached:
-            title = cached.get("title_english") or cached.get("title_romaji") or ""
-            year = cached.get("year") or 0
-            return title, int(year) if year else 0
-        return "", 0
+        # Resolve display title based on user preference
+        if title_pref == "english" and english:
+            title = english
+        elif romaji:
+            title = romaji
+        else:
+            title = english or romaji
+
+        return {
+            "title": title,
+            "title_romaji": romaji,
+            "title_english": english,
+            "year": year,
+        }
 
     @staticmethod
     def _move_file(src: str, dst: str) -> bool:
@@ -538,7 +613,36 @@ class ArrPostProcessor:
             logger.error("Failed to move %s → %s: %s", src, dst, exc)
             return False
 
-    async def _get_folder_name(self, anilist_title: str, year: int = 0) -> str:
+    async def _get_season_folder_name(
+        self, season_number: int, title_info: dict
+    ) -> str:
+        """Render the season subfolder name using the user's season folder template."""
+        from src.Utils.NamingTemplate import (
+            DEFAULT_ILLEGAL_CHAR_REPLACEMENT,
+            DEFAULT_SEASON_FOLDER_TEMPLATE,
+            NamingTemplate,
+        )
+
+        tmpl_str = await self._db.get_setting("naming.season_folder_template") or ""
+        illegal_repl = (
+            await self._db.get_setting("naming.illegal_char_replacement") or ""
+        )
+        tmpl = NamingTemplate(tmpl_str or DEFAULT_SEASON_FOLDER_TEMPLATE)
+        year = title_info["year"]
+        tokens = {
+            "season": str(season_number),
+            "season.name": title_info["title"],
+            "year": str(year) if year else "",
+        }
+        rendered = tmpl.render(tokens)
+        return (
+            NamingTemplate.sanitize(
+                rendered, illegal_repl or DEFAULT_ILLEGAL_CHAR_REPLACEMENT
+            )
+            or f"Season {season_number}"
+        )
+
+    async def _get_folder_name(self, title_info: dict) -> str:
         """Render the AniList subfolder name using the user's folder naming template."""
         from src.Utils.NamingTemplate import (
             DEFAULT_FOLDER_TEMPLATE,
@@ -551,13 +655,14 @@ class ArrPostProcessor:
             await self._db.get_setting("naming.illegal_char_replacement") or ""
         )
         tmpl = NamingTemplate(folder_tmpl_str or DEFAULT_FOLDER_TEMPLATE)
+        year = title_info["year"]
         tokens = {
-            "title": anilist_title,
-            "title.romaji": anilist_title,
-            "title.english": anilist_title,
+            "title": title_info["title"],
+            "title.romaji": title_info["title_romaji"] or title_info["title"],
+            "title.english": title_info["title_english"] or title_info["title"],
             "year": str(year) if year else "",
         }
         rendered = tmpl.render(tokens)
         return NamingTemplate.sanitize(
             rendered, illegal_repl or DEFAULT_ILLEGAL_CHAR_REPLACEMENT
-        ) or NamingTemplate.sanitize(anilist_title)
+        ) or NamingTemplate.sanitize(title_info["title"])

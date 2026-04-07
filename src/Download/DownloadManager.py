@@ -11,6 +11,7 @@ from src.Clients.AnilistClient import AniListClient
 from src.Clients.RadarrClient import MovieAlreadyExistsError, RadarrClient
 from src.Clients.SonarrClient import SeriesAlreadyExistsError, SonarrClient
 from src.Database.Connection import DatabaseManager
+from src.Utils.NamingTranslator import collect_series_chain
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,8 @@ class DownloadManager:
         root_folder_path: str,
         *,
         monitored: bool = True,
+        monitor_strategy: str = "future",
+        search_immediately: bool = False,
         requested_by: str = "",
     ) -> AddResult:
         """Resolve an AniList entry to TVDB and add it to Sonarr."""
@@ -73,10 +76,16 @@ class DownloadManager:
         tvdb_id = self._anilist.extract_tvdb_id(links)
 
         if not tvdb_id:
-            # AniList didn't supply a numeric TVDB ID; fall back to Sonarr title search
-            logger.info(
-                "No TVDB ID in AniList links for '%s'; searching Sonarr by title", title
+            # Try walking PREQUEL relations to find root entry with TVDB link
+            from src.Utils.NamingTranslator import resolve_tvdb_via_prequel_chain
+
+            tvdb_id, _root_id = await resolve_tvdb_via_prequel_chain(
+                anilist_id, self._anilist
             )
+
+        if not tvdb_id:
+            # Fall back to Sonarr title search
+            logger.info("No TVDB ID for '%s'; searching Sonarr by title", title)
             try:
                 candidates = await sonarr_client.lookup_series(title)
                 if candidates:
@@ -108,6 +117,8 @@ class DownloadManager:
                 quality_profile_id=quality_profile_id,
                 root_folder_path=root_folder_path,
                 monitored=monitored,
+                monitor_strategy=monitor_strategy,
+                search_immediately=search_immediately,
             )
             external_id = sonarr_data.get("id")
             result = AddResult(
@@ -122,6 +133,47 @@ class DownloadManager:
             logger.info(
                 "Added '%s' (tvdbId=%d) to Sonarr (id=%s)", title, tvdb_id, external_id
             )
+            # Push AniList alt titles to improve Sonarr release matching
+            if external_id:
+                alt_titles = _collect_alt_titles(media)
+                if alt_titles:
+                    try:
+                        await sonarr_client.push_alt_titles(external_id, alt_titles)
+                        logger.info(
+                            "Pushed %d alt titles to Sonarr for id=%s",
+                            len(alt_titles),
+                            external_id,
+                        )
+                    except Exception as alt_exc:
+                        logger.warning(
+                            "Failed to push alt titles for id=%s: %s",
+                            external_id,
+                            alt_exc,
+                        )
+            # Auto-populate season mappings for split-cour anime
+            if external_id and tvdb_id:
+                try:
+                    chain = await collect_series_chain(
+                        anilist_id, tvdb_id, self._anilist
+                    )
+                    for season_idx, chain_aid in enumerate(chain):
+                        await self._db.execute(
+                            """INSERT OR IGNORE INTO anilist_sonarr_season_mapping
+                               (sonarr_id, season_number, anilist_id)
+                               VALUES (?, ?, ?)""",
+                            (external_id, season_idx + 1, chain_aid),
+                        )
+                    logger.info(
+                        "Auto-populated %d season mappings for sonarr_id=%s",
+                        len(chain),
+                        external_id,
+                    )
+                except Exception as chain_exc:
+                    logger.warning(
+                        "Failed to auto-populate season mappings for sonarr_id=%s: %s",
+                        external_id,
+                        chain_exc,
+                    )
         except SeriesAlreadyExistsError as exc:
             result = AddResult(
                 ok=True,
@@ -159,6 +211,7 @@ class DownloadManager:
         root_folder_path: str,
         *,
         monitored: bool = True,
+        search_immediately: bool = False,
         requested_by: str = "",
     ) -> AddResult:
         """Resolve an AniList entry to TMDB and add it to Radarr."""
@@ -213,6 +266,7 @@ class DownloadManager:
                 quality_profile_id=quality_profile_id,
                 root_folder_path=root_folder_path,
                 monitored=monitored,
+                search_immediately=search_immediately,
             )
             external_id = radarr_data.get("id")
             result = AddResult(
@@ -289,3 +343,17 @@ class DownloadManager:
 def _pick_title(media: dict[str, Any]) -> str:
     title = media.get("title", {})
     return title.get("english") or title.get("romaji") or title.get("native") or ""
+
+
+def _collect_alt_titles(media: dict[str, Any]) -> list[str]:
+    """Collect all title variants and synonyms from an AniList media object."""
+    titles: set[str] = set()
+    title_obj = media.get("title", {})
+    for key in ("english", "romaji", "native"):
+        t = title_obj.get(key)
+        if t:
+            titles.add(t)
+    for s in media.get("synonyms", []):
+        if s:
+            titles.add(s)
+    return list(titles)

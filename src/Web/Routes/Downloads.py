@@ -411,6 +411,8 @@ async def add_download(request: Request) -> JSONResponse:
     quality_profile_id: int = int(body.get("quality_profile_id", 0))
     root_folder: str = str(body.get("root_folder", "")).strip()
     monitored: bool = bool(body.get("monitored", True))
+    monitor_strategy: str = str(body.get("monitor_strategy", "future")).strip()
+    search_immediately: bool = bool(body.get("search_immediately", False))
 
     if (
         not anilist_id
@@ -449,6 +451,8 @@ async def add_download(request: Request) -> JSONResponse:
                 quality_profile_id=quality_profile_id,
                 root_folder_path=root_folder,
                 monitored=monitored,
+                monitor_strategy=monitor_strategy,
+                search_immediately=search_immediately,
             )
         finally:
             await sonarr_client.close()
@@ -467,6 +471,7 @@ async def add_download(request: Request) -> JSONResponse:
                 quality_profile_id=quality_profile_id,
                 root_folder_path=root_folder,
                 monitored=monitored,
+                search_immediately=search_immediately,
             )
         finally:
             await radarr_client.close()

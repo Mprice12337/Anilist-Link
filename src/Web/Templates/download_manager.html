@@ -64,7 +64,25 @@
         <div class="form-group checkbox-group">
             <label>
                 <input type="checkbox" id="modal-monitored" checked>
-                Monitored (search immediately)
+                Monitored
+            </label>
+        </div>
+
+        <div class="form-group" id="monitor-strategy-group">
+            <label for="modal-monitor-strategy">Monitor Strategy</label>
+            <select id="modal-monitor-strategy" class="form-control">
+                <option value="future">Future Episodes</option>
+                <option value="all">All Episodes</option>
+                <option value="firstSeason">First Season</option>
+                <option value="latestSeason">Latest Season</option>
+                <option value="none">None</option>
+            </select>
+        </div>
+
+        <div class="form-group checkbox-group">
+            <label>
+                <input type="checkbox" id="modal-search-immediately">
+                Search for existing episodes/movie immediately
             </label>
         </div>
 
@@ -176,6 +194,9 @@
     const modalQuality = document.getElementById('modal-quality');
     const modalFolder = document.getElementById('modal-folder');
     const modalMonitored = document.getElementById('modal-monitored');
+    const modalMonitorStrategy = document.getElementById('modal-monitor-strategy');
+    const monitorStrategyGroup = document.getElementById('monitor-strategy-group');
+    const modalSearchImmediately = document.getElementById('modal-search-immediately');
     const modalError = document.getElementById('modal-error');
     const modalCancel = document.getElementById('modal-cancel');
     const modalConfirm = document.getElementById('modal-confirm');
@@ -253,10 +274,14 @@
             modalService.value = suggestedService;
         }
 
+        monitorStrategyGroup.style.display = modalService.value === 'sonarr' ? '' : 'none';
         await loadOptions(modalService.value);
     };
 
-    modalService.addEventListener('change', () => loadOptions(modalService.value));
+    modalService.addEventListener('change', () => {
+        loadOptions(modalService.value);
+        monitorStrategyGroup.style.display = modalService.value === 'sonarr' ? '' : 'none';
+    });
 
     async function loadOptions(service) {
         if (optionsCache[service]) {
@@ -326,6 +351,8 @@
                     quality_profile_id: qualityProfileId,
                     root_folder: rootFolder,
                     monitored,
+                    monitor_strategy: service === 'sonarr' ? modalMonitorStrategy.value : undefined,
+                    search_immediately: modalSearchImmediately.checked,
                 }),
             });
             const data = await resp.json();

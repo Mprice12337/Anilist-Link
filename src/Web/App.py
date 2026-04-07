@@ -24,6 +24,36 @@ TEMPLATES_DIR = WEB_DIR / "Templates"
 STATIC_DIR = WEB_DIR / "Static"
 
 
+async def _register_arr_webhooks(config: AppConfig) -> None:
+    """Register Sonarr/Radarr webhooks if the services are configured."""
+    from src.Clients.RadarrClient import RadarrClient
+    from src.Clients.SonarrClient import SonarrClient
+
+    base_url = config.base_url.rstrip("/")
+
+    if config.sonarr.url and config.sonarr.api_key:
+        try:
+            client = SonarrClient(url=config.sonarr.url, api_key=config.sonarr.api_key)
+            await client.register_webhook(
+                "Anilist-Link", f"{base_url}/api/webhook/sonarr"
+            )
+            logger.info("Auto-registered Sonarr webhook at startup")
+            await client.close()
+        except Exception as exc:
+            logger.warning("Failed to register Sonarr webhook at startup: %s", exc)
+
+    if config.radarr.url and config.radarr.api_key:
+        try:
+            client = RadarrClient(url=config.radarr.url, api_key=config.radarr.api_key)
+            await client.register_webhook(
+                "Anilist-Link", f"{base_url}/api/webhook/radarr"
+            )
+            logger.info("Auto-registered Radarr webhook at startup")
+            await client.close()
+        except Exception as exc:
+            logger.warning("Failed to register Radarr webhook at startup: %s", exc)
+
+
 def create_app(
     config: AppConfig,
     db: DatabaseManager,
@@ -37,6 +67,10 @@ def create_app(
         # Startup
         logger.info("Starting scheduler")
         scheduler.start()
+
+        # Auto-register arr webhooks (fire-and-forget, non-blocking)
+        asyncio.create_task(_register_arr_webhooks(config))
+
         yield
         # Shutdown
         logger.info("Shutting down scheduler")

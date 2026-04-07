@@ -166,6 +166,42 @@ async def fetch_relations_and_tvdb(
     return relations, tvdb_id
 
 
+async def resolve_tvdb_via_prequel_chain(
+    anilist_id: int, anilist_client: AniListClient, max_depth: int = 10
+) -> tuple[int | None, int | None]:
+    """Walk PREQUEL relations to find a root entry with a TVDB ID.
+
+    Returns (tvdb_id, root_anilist_id) if found, else (None, None).
+    Useful for sequels where only the first season has a TVDB link.
+    """
+    current = anilist_id
+    visited: set[int] = {current}
+
+    for _ in range(max_depth):
+        relations, tvdb_id = await fetch_relations_and_tvdb(current, anilist_client)
+        if tvdb_id:
+            logger.info(
+                "Resolved TVDB ID %d for anilist_id=%d via prequel chain (at %d)",
+                tvdb_id,
+                anilist_id,
+                current,
+            )
+            return tvdb_id, current
+
+        # Follow the PREQUEL edge (go backwards in time)
+        prequel_id = None
+        for rel_type, related_id in relations:
+            if rel_type == "PREQUEL" and related_id not in visited:
+                prequel_id = related_id
+                break
+        if not prequel_id:
+            break
+        visited.add(prequel_id)
+        current = prequel_id
+
+    return None, None
+
+
 async def collect_series_chain(
     start_anilist_id: int,
     tvdb_id: int,

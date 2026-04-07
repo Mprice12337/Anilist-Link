@@ -260,17 +260,17 @@
           {% if entry.arr_service == 'sonarr' and entry.sonarr_id %}
           <button class="btn btn-secondary btn-xs"
                   onclick="reprocessEntry('sonarr', {{ entry.sonarr_id }}, this, false)"
-                  title="Move existing files into AniList-structured subfolders">Reprocess</button>
+                  title="Move downloaded files into your library folder">Move to Library</button>
           <button class="btn btn-secondary btn-xs"
                   onclick="reprocessEntry('sonarr', {{ entry.sonarr_id }}, this, true)"
-                  title="Preview what would be moved">Preview</button>
+                  title="Preview what files would be moved and where">Preview Move</button>
           {% elif entry.arr_service == 'radarr' and entry.radarr_id %}
           <button class="btn btn-secondary btn-xs"
                   onclick="reprocessEntry('radarr', {{ entry.radarr_id }}, this, false)"
-                  title="Move existing file into AniList-structured subfolder">Reprocess</button>
+                  title="Move downloaded file into your library folder">Move to Library</button>
           <button class="btn btn-secondary btn-xs"
                   onclick="reprocessEntry('radarr', {{ entry.radarr_id }}, this, true)"
-                  title="Preview what would be moved">Preview</button>
+                  title="Preview what file would be moved and where">Preview Move</button>
           {% endif %}
           {% elif arr_enabled %}
           <button class="btn btn-secondary btn-xs"
@@ -380,8 +380,8 @@
       <div id="quickAddMonitorRow" style="display:none;margin-top:0.75rem;align-items:center;gap:0.5rem;flex-wrap:wrap;">
         <label style="font-size:0.85rem;font-weight:600;white-space:nowrap;">Monitor mode:</label>
         <select id="quickAddMonitorMode" style="font-size:0.85rem;padding:0.3rem 0.5rem;border:1px solid var(--border-color,#ddd);border-radius:4px;background:var(--bg-primary,#fff);color:inherit;">
-          <option value="future">Future (new episodes only)</option>
           <option value="all">All episodes</option>
+          <option value="future">Future (new episodes only)</option>
           <option value="latestSeason">Latest season only</option>
           <option value="firstSeason">First season only</option>
           <option value="none">None (don't monitor)</option>
@@ -434,6 +434,18 @@
 </div>
 
 <!-- Match preview modal -->
+<!-- Loading overlay for resolve operations -->
+<div id="resolveLoadingModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+  <div class="modal-box" style="max-width:360px;text-align:center;padding:2rem;">
+    <div style="margin-bottom:1rem;">
+      <div class="spinner" style="display:inline-block;width:32px;height:32px;border:3px solid var(--border-color,#ddd);border-top-color:var(--accent,#4a90d9);border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+    </div>
+    <div id="resolveLoadingTitle" style="font-weight:600;font-size:1rem;margin-bottom:0.5rem;">Resolving...</div>
+    <div id="resolveLoadingStatus" style="font-size:0.85rem;color:var(--text-muted,#888);">Looking up TVDB ID on AniList...</div>
+  </div>
+</div>
+<style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+
 <div id="matchPreviewModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="matchPreviewTitle">
   <div class="modal-box">
     <div class="modal-header">
@@ -453,8 +465,8 @@
       <div style="margin-bottom:0.75rem;display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
         <label style="font-size:0.85rem;font-weight:600;white-space:nowrap;">Monitor mode:</label>
         <select id="matchMonitorMode" style="font-size:0.85rem;padding:0.3rem 0.5rem;border:1px solid var(--border-color,#ddd);border-radius:4px;background:var(--bg-primary,#fff);color:inherit;">
-          <option value="future">Future (new episodes only)</option>
           <option value="all">All episodes</option>
+          <option value="future">Future (new episodes only)</option>
           <option value="latestSeason">Latest season only</option>
           <option value="firstSeason">First season only</option>
           <option value="none">None (don't monitor)</option>
@@ -548,11 +560,11 @@ var arr_enabled = {{ 'true' if arr_enabled else 'false' }};
     if (entry.arr_status && entry.arr_status !== 'untracked') {
       html += '<button class="btn btn-primary btn-xs" onclick="closeWatchlistDetail(); openReleaseModal(' + entry.anilist_id + ', \'' + _escJs(entry.anilist_title||'') + '\', \'' + (entry.arr_service||'sonarr') + '\')">Search Releases</button> ';
       if (entry.arr_service === 'sonarr' && entry.sonarr_id) {
-        html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); reprocessEntry(\'sonarr\',' + entry.sonarr_id + ',this,false)" title="Move files into AniList subfolders">Reprocess</button> ';
-        html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); reprocessEntry(\'sonarr\',' + entry.sonarr_id + ',this,true)" title="Preview what would be moved">Preview</button>';
+        html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); reprocessEntry(\'sonarr\',' + entry.sonarr_id + ',this,false)" title="Move downloaded files into your library folder">Move to Library</button> ';
+        html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); reprocessEntry(\'sonarr\',' + entry.sonarr_id + ',this,true)" title="Preview what files would be moved and where">Preview Move</button>';
       } else if (entry.arr_service === 'radarr' && entry.radarr_id) {
-        html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); reprocessEntry(\'radarr\',' + entry.radarr_id + ',this,false)" title="Move file into AniList subfolder">Reprocess</button> ';
-        html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); reprocessEntry(\'radarr\',' + entry.radarr_id + ',this,true)" title="Preview what would be moved">Preview</button>';
+        html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); reprocessEntry(\'radarr\',' + entry.radarr_id + ',this,false)" title="Move downloaded file into your library folder">Move to Library</button> ';
+        html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); reprocessEntry(\'radarr\',' + entry.radarr_id + ',this,true)" title="Preview what file would be moved and where">Preview Move</button>';
       }
     } else if (typeof arr_enabled !== 'undefined' && arr_enabled) {
       html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); previewAdd(' + entry.anilist_id + ', \'' + _escJs(entry.anilist_title||'') + '\', this)" title="Add to Sonarr/Radarr">+ Add</button>';
@@ -920,9 +932,34 @@ var arr_enabled = {{ 'true' if arr_enabled else 'false' }};
     btn.disabled = true;
     btn.textContent = '\u2026';
 
+    // Show loading modal with animated status
+    var loadingModal = document.getElementById('resolveLoadingModal');
+    var loadingTitle = document.getElementById('resolveLoadingTitle');
+    var loadingStatus = document.getElementById('resolveLoadingStatus');
+    loadingTitle.textContent = 'Resolving \u201c' + title + '\u201d';
+    loadingStatus.textContent = 'Checking AniList for TVDB link\u2026';
+    loadingModal.classList.remove('hidden');
+
+    // Cycle through status messages to show progress
+    var statusMessages = [
+      { delay: 2000, text: 'Walking prequel chain for TVDB ID\u2026' },
+      { delay: 5000, text: 'Searching Sonarr by title variants\u2026' },
+      { delay: 12000, text: 'Trying alternate titles\u2026' },
+      { delay: 25000, text: 'Still searching \u2014 checking synonyms\u2026' },
+    ];
+    var statusTimers = statusMessages.map(function(msg) {
+      return setTimeout(function() { loadingStatus.textContent = msg.text; }, msg.delay);
+    });
+
+    function clearLoadingState() {
+      loadingModal.classList.add('hidden');
+      statusTimers.forEach(clearTimeout);
+    }
+
     fetch('/api/watchlist/resolve?anilist_id=' + anilistId)
       .then(function(r) { return r.json(); })
       .then(function(data) {
+        clearLoadingState();
         if (!data.resolved && data.needs_disambiguation) {
           openDisambig(anilistId, btn, title, data.service || 'sonarr', data.candidates || []);
         } else if (!data.resolved) {
@@ -934,6 +971,7 @@ var arr_enabled = {{ 'true' if arr_enabled else 'false' }};
         }
       })
       .catch(function(e) {
+        clearLoadingState();
         showToast('Request failed: ' + e.message, 'error');
         btn.disabled = false;
         btn.textContent = '+ Add';
@@ -1345,15 +1383,16 @@ var arr_enabled = {{ 'true' if arr_enabled else 'false' }};
       if (data.ok && data.dry_run) {
         var moved = (data.files || []).filter(function(f) { return f.action === 'move'; });
         var skip = (data.files || []).filter(function(f) { return f.action === 'skip'; });
-        var lines = ['Dry run — ' + moved.length + ' to move, ' + skip.length + ' already correct'];
+        var lines = ['Preview — ' + moved.length + ' to move, ' + skip.length + ' already in library'];
         moved.forEach(function(f) {
-          lines.push('→ ' + f.folder_name + '/' + f.arr_from.split('/').pop());
+          lines.push(f.local_from);
+          lines.push('  → ' + f.local_to);
         });
         showToast(lines.join('\n'), 'success');
       } else if (data.ok) {
-        showToast('Reprocess done — moved: ' + data.moved + ', skipped: ' + data.skipped + (data.errors ? ', errors: ' + data.errors : ''), data.errors ? 'error' : 'success');
+        showToast('Move complete — moved: ' + data.moved + ', skipped: ' + data.skipped + (data.errors ? ', errors: ' + data.errors : ''), data.errors ? 'error' : 'success');
       } else {
-        showToast('Reprocess failed: ' + (data.error || 'unknown error'), 'error');
+        showToast('Move failed: ' + (data.error || 'unknown error'), 'error');
       }
     } catch(e) {
       showToast('Reprocess error: ' + e.message, 'error');

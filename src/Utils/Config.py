@@ -346,6 +346,7 @@ def load_config_from_db_settings(
         timezone=_env("TZ", "UTC"),
         host=host,
         port=port,
+        base_url=r("app.base_url") or f"http://localhost:{port}",
         log_path=_resolve_log_path(),
         anilist=AniListConfig(
             client_id=r("anilist.client_id"),

@@ -12,6 +12,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from src.Clients.AnilistClient import AniListClient
 from src.Clients.PlexClient import PlexClient
+from src.Clients.RadarrClient import RadarrClient
+from src.Clients.SonarrClient import SonarrClient
 from src.Utils.Config import (
     SECRET_KEYS,
     SETTINGS_MAP,
@@ -19,6 +21,7 @@ from src.Utils.Config import (
     load_config_from_db_settings,
 )
 from src.Utils.NamingTemplate import NAMING_PRESETS
+from src.Web.App import spawn_background_task
 
 logger = logging.getLogger(__name__)
 
@@ -79,10 +82,14 @@ FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
             ("sonarr.url", "Server URL", "url"),
             ("sonarr.api_key", "API Key", "password"),
             ("sonarr.anime_root_folder", "Anime root folder path", "text"),
-            ("sonarr.path_prefix", "Sonarr path prefix (e.g. /media/tv)", "text"),
+            (
+                "sonarr.path_prefix",
+                "Remote path — as seen by Sonarr (leave blank if same host)",
+                "text",
+            ),
             (
                 "sonarr.local_path_prefix",
-                "Local path prefix (e.g. /mnt/media/tv)",
+                "Local path — same directory as seen by Anilist-Link",
                 "text",
             ),
         ],
@@ -93,10 +100,14 @@ FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
             ("radarr.url", "Server URL", "url"),
             ("radarr.api_key", "API Key", "password"),
             ("radarr.anime_root_folder", "Anime root folder path", "text"),
-            ("radarr.path_prefix", "Radarr path prefix (e.g. /media/movies)", "text"),
+            (
+                "radarr.path_prefix",
+                "Remote path — as seen by Radarr (leave blank if same host)",
+                "text",
+            ),
             (
                 "radarr.local_path_prefix",
-                "Local path prefix (e.g. /mnt/media/movies)",
+                "Local path — same directory as seen by Anilist-Link",
                 "text",
             ),
         ],
@@ -104,6 +115,11 @@ FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
     (
         "Options",
         [
+            (
+                "app.base_url",
+                "App URL (used for webhooks — must be reachable by Sonarr/Radarr)",
+                "url",
+            ),
             (
                 "scheduler.cr_sync_time",
                 "Crunchyroll daily sync time (HH:MM, 24h)",
@@ -284,6 +300,14 @@ async def settings_page(request: Request, saved: int = 0) -> HTMLResponse:
 @router.post("/settings")
 async def settings_save(request: Request) -> RedirectResponse:
     """Save settings to DB, rebuild config, and redirect back."""
+    try:
+        return await _settings_save_impl(request)
+    except Exception as exc:
+        logger.error("Settings save failed: %s", exc, exc_info=True)
+        raise
+
+
+async def _settings_save_impl(request: Request) -> RedirectResponse:
     db = request.app.state.db
     form = await request.form()
 
@@ -346,6 +370,48 @@ async def settings_save(request: Request) -> RedirectResponse:
     if new_config.scheduler != old_config.scheduler:
         scheduler = request.app.state.scheduler
         scheduler.update_intervals(new_config.scheduler)
+
+    # Auto-register webhooks in Sonarr/Radarr if configured
+    try:
+        base_url = new_config.app.base_url.rstrip("/")
+
+        if new_config.sonarr.url and new_config.sonarr.api_key:
+
+            async def _register_sonarr_webhook() -> None:
+                client = SonarrClient(
+                    url=new_config.sonarr.url, api_key=new_config.sonarr.api_key
+                )
+                try:
+                    await client.register_webhook(
+                        "Anilist-Link", f"{base_url}/api/webhook/sonarr"
+                    )
+                    logger.info("Auto-registered Sonarr webhook")
+                except Exception as exc:
+                    logger.warning("Failed to auto-register Sonarr webhook: %s", exc)
+                finally:
+                    await client.close()
+
+            spawn_background_task(request.app.state, _register_sonarr_webhook())
+
+        if new_config.radarr.url and new_config.radarr.api_key:
+
+            async def _register_radarr_webhook() -> None:
+                client = RadarrClient(
+                    url=new_config.radarr.url, api_key=new_config.radarr.api_key
+                )
+                try:
+                    await client.register_webhook(
+                        "Anilist-Link", f"{base_url}/api/webhook/radarr"
+                    )
+                    logger.info("Auto-registered Radarr webhook")
+                except Exception as exc:
+                    logger.warning("Failed to auto-register Radarr webhook: %s", exc)
+                finally:
+                    await client.close()
+
+            spawn_background_task(request.app.state, _register_radarr_webhook())
+    except Exception as exc:
+        logger.error("Webhook auto-registration failed: %s", exc, exc_info=True)
 
     logger.info("Settings saved via dashboard")
     return RedirectResponse(url="/settings?saved=1", status_code=303)

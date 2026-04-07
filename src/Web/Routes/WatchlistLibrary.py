@@ -1041,6 +1041,7 @@ async def resolve_arr_match(request: Request) -> JSONResponse:
 
     from src.Utils.NamingTranslator import (
         resolve_tvdb_id,
+        resolve_tvdb_via_prequel_chain,
         resolve_tvdb_via_title_chain,
     )
 
@@ -1048,6 +1049,12 @@ async def resolve_arr_match(request: Request) -> JSONResponse:
     try:
         tvdb_id = await resolve_tvdb_id(anilist_id, anilist_client)
         candidates: list[dict] = []
+
+        if not tvdb_id:
+            # Try walking PREQUEL relations to find root entry with TVDB link
+            tvdb_id, _root_id = await resolve_tvdb_via_prequel_chain(
+                anilist_id, anilist_client
+            )
 
         if not tvdb_id:
             tvdb_id, candidates = await resolve_tvdb_via_title_chain(
