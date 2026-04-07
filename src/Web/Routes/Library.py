@@ -78,7 +78,6 @@ async def _run_library_scan(
 # ------------------------------------------------------------------
 
 
-
 @router.get("/library/{library_id}", response_class=HTMLResponse)
 async def library_detail(request: Request, library_id: int) -> Response:
     """Browse a library's items."""

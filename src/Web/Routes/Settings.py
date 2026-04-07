@@ -228,7 +228,10 @@ async def settings_page(request: Request, saved: int = 0) -> HTMLResponse:
     # Auto-detect base_url from the incoming request if not explicitly set.
     # This gives the user a sensible default (the URL they're accessing from)
     # instead of localhost:9876 which won't work for webhooks.
-    if not display.get("app.base_url") or display["app.base_url"] == "http://localhost:9876":
+    if (
+        not display.get("app.base_url")
+        or display["app.base_url"] == "http://localhost:9876"
+    ):
         detected = f"{request.url.scheme}://{request.url.netloc}"
         display["app.base_url"] = detected
 

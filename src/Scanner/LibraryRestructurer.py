@@ -1954,9 +1954,7 @@ class LibraryRestructurer:
                         )
                         group_entries = [dict(e) for e in all_entries]
                         # Index by anilist_id for authoritative-map lookups
-                        entries_by_aid = {
-                            e["anilist_id"]: e for e in group_entries
-                        }
+                        entries_by_aid = {e["anilist_id"]: e for e in group_entries}
                         for subdir in sorted(season_subdirs):
                             subdir_name = os.path.basename(subdir.rstrip("/"))
                             # Prefer the authoritative map populated during
@@ -1965,9 +1963,7 @@ class LibraryRestructurer:
                             # (e.g. romaji titles that don't resemble the
                             # English display_title stored in the DB).
                             entry: dict | None = None
-                            mapped_aid = group.season_dir_anilist_map.get(
-                                subdir_name
-                            )
+                            mapped_aid = group.season_dir_anilist_map.get(subdir_name)
                             if mapped_aid:
                                 entry = entries_by_aid.get(mapped_aid)
                                 # Consume from the fallback pool so later

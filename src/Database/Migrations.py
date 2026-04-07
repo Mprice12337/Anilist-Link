@@ -106,9 +106,7 @@ async def _apply_column_guards(db: aiosqlite.Connection) -> None:
     added: list[str] = []
     for table, column, col_def in guards:
         try:
-            await db.execute(
-                f"ALTER TABLE {table} ADD COLUMN {column} {col_def}"
-            )
+            await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
             added.append(f"{table}.{column}")
         except aiosqlite.OperationalError:
             pass  # Column already exists — expected for up-to-date DBs
