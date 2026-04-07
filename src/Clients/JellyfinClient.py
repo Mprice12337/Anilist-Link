@@ -484,7 +484,7 @@ class JellyfinClient:
                     if grandparent_id:
                         grandparent = await self.get_item(grandparent_id)
                         if grandparent and grandparent.get("Type") in _LIBRARY_TYPES:
-                            # parent is the library container; current is the show folder.
+                            # parent is library container; current is show.
                             top_folder = current
                             break
                 if parent["Id"] in seen:
@@ -504,7 +504,7 @@ class JellyfinClient:
                 if not parent or parent["Id"] in seen:
                     break
                 logger.debug(
-                    "upload_poster_to_parent_folder: non-folder %s(%s) -> parent %s(%s)",
+                    "upload_poster: non-folder %s(%s) -> parent %s(%s)",
                     current.get("Id"),
                     current.get("Type"),
                     parent.get("Id"),
@@ -520,7 +520,7 @@ class JellyfinClient:
             return
         if top_folder.get("Id") == item_id:
             logger.debug(
-                "upload_poster_to_parent_folder: item %s IS the top-level folder (no separate parent to target)",
+                "upload_poster: item %s IS the top-level folder",
                 item_id,
             )
             return

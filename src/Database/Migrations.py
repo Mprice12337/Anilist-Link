@@ -88,7 +88,11 @@ async def _apply_column_guards(db: aiosqlite.Connection) -> None:
         ("plex_media", "library_title", "TEXT NOT NULL DEFAULT ''"),
         ("plex_media", "summary", "TEXT NOT NULL DEFAULT ''"),
         ("jellyfin_media", "folder_name", "TEXT NOT NULL DEFAULT ''"),
-        ("anilist_cache", "expires_at", "TEXT NOT NULL DEFAULT (datetime('now', '+7 days'))"),
+        (
+            "anilist_cache",
+            "expires_at",
+            "TEXT NOT NULL DEFAULT (datetime('now', '+7 days'))",
+        ),
         ("anilist_cache", "year", "INTEGER NOT NULL DEFAULT 0"),
         ("media_mappings", "series_group_id", "INTEGER"),
         ("media_mappings", "season_number", "INTEGER"),
