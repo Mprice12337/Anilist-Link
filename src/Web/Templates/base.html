@@ -16,6 +16,7 @@
             <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">Dashboard</a>
             <a href="/watchlist" class="{% if '/watchlist' in request.url.path %}active{% endif %}">Watchlist</a>
             <a href="/library" class="{% if '/library' in request.url.path %}active{% endif %}">Library</a>
+            <a href="/watch-sync" class="{% if '/watch-sync' in request.url.path %}active{% endif %}">Watch Sync</a>
             <a href="/tools" class="{% if '/tools' in request.url.path or '/restructure' in request.url.path or '/crunchyroll' in request.url.path or '/download' in request.url.path %}active{% endif %}">Tools</a>
             <a href="/settings" class="{% if '/settings' in request.url.path %}active{% endif %}">Settings</a>
         </div>

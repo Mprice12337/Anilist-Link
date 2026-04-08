@@ -19,6 +19,8 @@ JOB_CRUNCHYROLL_SYNC = "crunchyroll_sync"
 JOB_METADATA_SCAN = "metadata_scan"
 JOB_PLEX_METADATA_SCAN = "plex_metadata_scan"
 JOB_WATCH_SYNC = "watch_sync"
+JOB_JELLYFIN_WATCH_SYNC = "jellyfin_watch_sync"
+JOB_PLEX_WATCH_SYNC = "plex_watch_sync"
 JOB_DOWNLOAD_SYNC = "download_sync"
 JOB_LIBRARY_REINDEX = "library_reindex"
 JOB_WATCHLIST_REFRESH = "watchlist_refresh"
@@ -66,6 +68,9 @@ class JobScheduler:
         download_sync_interval_minutes: int = 60,
         library_reindex_func: Callable[[], Awaitable[None]] | None = None,
         watchlist_refresh_func: Callable[[], Awaitable[None]] | None = None,
+        jellyfin_watch_sync_func: Callable[[], Awaitable[None]] | None = None,
+        plex_watch_sync_func: Callable[[], Awaitable[None]] | None = None,
+        watch_sync_interval_minutes: int = 15,
     ) -> None:
         """Register job callables with configured intervals."""
         if crunchyroll_sync_func:
@@ -163,6 +168,34 @@ class JobScheduler:
                 "Registered %s job (every %d min)",
                 JOB_WATCHLIST_REFRESH,
                 self._config.watchlist_refresh_interval_minutes,
+            )
+
+        if jellyfin_watch_sync_func:
+            self._scheduler.add_job(
+                jellyfin_watch_sync_func,
+                trigger=IntervalTrigger(minutes=watch_sync_interval_minutes),
+                id=JOB_JELLYFIN_WATCH_SYNC,
+                name="Jellyfin Watch Sync",
+                replace_existing=True,
+            )
+            logger.info(
+                "Registered %s job (every %d min)",
+                JOB_JELLYFIN_WATCH_SYNC,
+                watch_sync_interval_minutes,
+            )
+
+        if plex_watch_sync_func:
+            self._scheduler.add_job(
+                plex_watch_sync_func,
+                trigger=IntervalTrigger(minutes=watch_sync_interval_minutes),
+                id=JOB_PLEX_WATCH_SYNC,
+                name="Plex Watch Sync",
+                replace_existing=True,
+            )
+            logger.info(
+                "Registered %s job (every %d min)",
+                JOB_PLEX_WATCH_SYNC,
+                watch_sync_interval_minutes,
             )
 
     def start(self) -> None:

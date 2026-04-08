@@ -1,0 +1,298 @@
+{% extends "base.html" %}
+{% block title %}Anilist-Link: Watch Sync{% endblock %}
+{% block container_class %}container-medium{% endblock %}
+
+{% block content %}
+<div class="page-header" style="margin-bottom:1.5rem">
+  <h1 style="margin:0">Watch Sync</h1>
+  <p class="text-muted" style="margin:0.25rem 0 0">
+    Sync watch progress between your media servers and AniList.
+  </p>
+</div>
+
+{# ── Alert banner ─────────────────────────────────────────────────────── #}
+<div id="alert-banner" style="display:none;margin-bottom:1rem" class="alert"></div>
+
+{# ── Jellyfin ──────────────────────────────────────────────────────────── #}
+<div class="card" style="margin-bottom:1.5rem">
+  <div class="card-header" style="display:flex;align-items:center;gap:0.75rem">
+    <h2 style="margin:0;font-size:1.1rem">Jellyfin</h2>
+    {% if jellyfin_user %}
+    <span class="badge badge-green">Linked</span>
+    {% else %}
+    <span class="badge badge-gray">Not linked</span>
+    {% endif %}
+  </div>
+  <div class="card-body">
+
+    {% if jellyfin_user %}
+    {# ── Linked state ─── #}
+    <p style="margin:0 0 1rem">
+      Syncing as <strong>{{ jellyfin_user.jf_username }}</strong>
+      <span class="text-muted">(ID: {{ jellyfin_user.jf_user_id }})</span>
+    </p>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+      <button class="btn btn-primary" onclick="runJellyfinSync()">
+        ↑ Jellyfin → AniList
+      </button>
+      <button class="btn btn-secondary" onclick="pushJellyfinSync()">
+        ↓ AniList → Jellyfin
+      </button>
+      <button class="btn btn-danger" onclick="unlinkJellyfin()">
+        Unlink
+      </button>
+    </div>
+
+    {% else %}
+    {# ── Unlinked state ─── #}
+    <p class="text-muted" style="margin:0 0 1rem">
+      Select your Jellyfin account to link for watch sync.
+    </p>
+    <div style="display:flex;gap:0.5rem;align-items:flex-end;flex-wrap:wrap">
+      <div>
+        <label class="form-label">Jellyfin User</label>
+        <select id="jf-user-select" class="form-input" style="min-width:200px">
+          <option value="">— load users —</option>
+        </select>
+      </div>
+      <button class="btn btn-secondary" onclick="loadJellyfinUsers()">Refresh</button>
+      <button class="btn btn-primary" onclick="linkJellyfin()">Link Account</button>
+    </div>
+    {% endif %}
+
+  </div>
+</div>
+
+{# ── Plex ────────────────────────────────────────────────────────────── #}
+<div class="card" style="margin-bottom:1.5rem">
+  <div class="card-header" style="display:flex;align-items:center;gap:0.75rem">
+    <h2 style="margin:0;font-size:1.1rem">Plex</h2>
+    {% if plex_user %}
+    <span class="badge badge-green">Linked</span>
+    {% else %}
+    <span class="badge badge-gray">Not linked</span>
+    {% endif %}
+  </div>
+  <div class="card-body">
+
+    {% if plex_user %}
+    {# ── Linked state ─── #}
+    <p style="margin:0 0 1rem">
+      Syncing as <strong>{{ plex_user.plex_username }}</strong>
+    </p>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+      <button class="btn btn-primary" onclick="runPlexSync()">
+        ↑ Plex → AniList
+      </button>
+      <button class="btn btn-secondary" onclick="pushPlexSync()">
+        ↓ AniList → Plex
+      </button>
+      <button class="btn btn-danger" onclick="unlinkPlex()">
+        Unlink
+      </button>
+    </div>
+
+    {% else %}
+    {# ── Unlinked state ─── #}
+    <p class="text-muted" style="margin:0 0 1rem">
+      Select your Plex account to link for watch sync.
+    </p>
+    <div style="display:flex;gap:0.5rem;align-items:flex-end;flex-wrap:wrap">
+      <div>
+        <label class="form-label">Plex Account</label>
+        <select id="plex-account-select" class="form-input" style="min-width:200px">
+          <option value="">— load accounts —</option>
+        </select>
+      </div>
+      <button class="btn btn-secondary" onclick="loadPlexAccounts()">Refresh</button>
+      <button class="btn btn-primary" onclick="linkPlex()">Link Account</button>
+    </div>
+    {% endif %}
+
+  </div>
+</div>
+
+{# ── How it works ─────────────────────────────────────────────────────── #}
+<div class="card">
+  <div class="card-header">
+    <h2 style="margin:0;font-size:1.1rem">How it works</h2>
+  </div>
+  <div class="card-body" style="font-size:0.9rem;color:var(--text-muted)">
+    <ul style="margin:0;padding-left:1.25rem;line-height:1.8">
+      <li><strong>Media server → AniList:</strong> reads watched episodes and updates your AniList progress. Only moves progress forward; won't decrease a count that's higher on AniList.</li>
+      <li><strong>AniList → Media server:</strong> pushes your AniList progress back into Plex/Jellyfin by marking episodes as played. Useful for initial backfill.</li>
+      <li>Sync runs automatically every 15 minutes when an account is linked. You can also trigger it manually above.</li>
+      <li>Requires that shows are already matched to AniList entries (run a Plex/Jellyfin metadata scan first).</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  function showAlert(msg, type) {
+    var el = document.getElementById("alert-banner");
+    el.textContent = msg;
+    el.className = "alert alert-" + (type || "info");
+    el.style.display = "block";
+    setTimeout(function () { el.style.display = "none"; }, 5000);
+  }
+
+  async function apiFetch(url, opts) {
+    try {
+      var resp = await fetch(url, opts);
+      var data = await resp.json();
+      return data;
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  }
+
+  // ── Jellyfin ──────────────────────────────────────────────────────── //
+
+  window.loadJellyfinUsers = async function () {
+    var sel = document.getElementById("jf-user-select");
+    if (!sel) return;
+    sel.innerHTML = '<option value="">Loading…</option>';
+    var data = await apiFetch("/api/jellyfin/users");
+    if (!data.ok) {
+      showAlert("Failed to load Jellyfin users: " + data.error, "error");
+      sel.innerHTML = '<option value="">— error —</option>';
+      return;
+    }
+    sel.innerHTML = '<option value="">— select user —</option>';
+    (data.users || []).forEach(function (u) {
+      var opt = document.createElement("option");
+      opt.value = JSON.stringify({ id: u.id, name: u.name });
+      opt.textContent = u.name;
+      sel.appendChild(opt);
+    });
+  };
+
+  window.linkJellyfin = async function () {
+    var sel = document.getElementById("jf-user-select");
+    if (!sel || !sel.value) {
+      showAlert("Please select a Jellyfin user first.", "error");
+      return;
+    }
+    var user = JSON.parse(sel.value);
+    var data = await apiFetch("/api/watch-sync/jellyfin/link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jf_user_id: user.id, jf_username: user.name }),
+    });
+    if (data.ok) {
+      showAlert("Jellyfin account linked! Reloading…", "success");
+      setTimeout(function () { window.location.reload(); }, 1000);
+    } else {
+      showAlert("Error: " + (data.error || "unknown"), "error");
+    }
+  };
+
+  window.unlinkJellyfin = async function () {
+    if (!confirm("Unlink Jellyfin account?")) return;
+    var data = await apiFetch("/api/watch-sync/jellyfin/unlink", { method: "POST" });
+    if (data.ok) {
+      showAlert("Jellyfin account unlinked. Reloading…", "success");
+      setTimeout(function () { window.location.reload(); }, 800);
+    } else {
+      showAlert("Error: " + (data.error || "unknown"), "error");
+    }
+  };
+
+  window.runJellyfinSync = async function () {
+    showAlert("Jellyfin → AniList sync started…", "info");
+    var data = await apiFetch("/api/watch-sync/jellyfin/run", { method: "POST" });
+    showAlert(data.message || (data.error || "Error"), data.ok ? "success" : "error");
+  };
+
+  window.pushJellyfinSync = async function () {
+    showAlert("AniList → Jellyfin sync started…", "info");
+    var data = await apiFetch("/api/watch-sync/jellyfin/push", { method: "POST" });
+    showAlert(data.message || (data.error || "Error"), data.ok ? "success" : "error");
+  };
+
+  // ── Plex ─────────────────────────────────────────────────────────── //
+
+  window.loadPlexAccounts = async function () {
+    var sel = document.getElementById("plex-account-select");
+    if (!sel) return;
+    sel.innerHTML = '<option value="">Loading…</option>';
+    var data = await apiFetch("/api/plex/accounts");
+    if (!data.ok) {
+      showAlert("Failed to load Plex accounts: " + data.error, "error");
+      sel.innerHTML = '<option value="">— error —</option>';
+      return;
+    }
+    var accounts = data.accounts || [];
+    sel.innerHTML = '<option value="">— select account —</option>';
+
+    // If no home accounts returned, Plex is single-user — offer admin option
+    if (accounts.length === 0) {
+      var opt = document.createElement("option");
+      opt.value = JSON.stringify({ id: "1", name: "Admin" });
+      opt.textContent = "Admin (single-user Plex)";
+      sel.appendChild(opt);
+      showAlert(
+        "No Plex Home accounts found. Using admin account.", "info"
+      );
+      return;
+    }
+    accounts.forEach(function (a) {
+      var opt = document.createElement("option");
+      opt.value = JSON.stringify({ id: a.id, name: a.name });
+      opt.textContent = a.name || ("Account " + a.id);
+      sel.appendChild(opt);
+    });
+  };
+
+  window.linkPlex = async function () {
+    var sel = document.getElementById("plex-account-select");
+    if (!sel || !sel.value) {
+      showAlert("Please select a Plex account first.", "error");
+      return;
+    }
+    var account = JSON.parse(sel.value);
+    var data = await apiFetch("/api/watch-sync/plex/link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        plex_username: account.name,
+        plex_uuid: account.id,
+      }),
+    });
+    if (data.ok) {
+      showAlert("Plex account linked! Reloading…", "success");
+      setTimeout(function () { window.location.reload(); }, 1000);
+    } else {
+      showAlert("Error: " + (data.error || "unknown"), "error");
+    }
+  };
+
+  window.unlinkPlex = async function () {
+    if (!confirm("Unlink Plex account?")) return;
+    var data = await apiFetch("/api/watch-sync/plex/unlink", { method: "POST" });
+    if (data.ok) {
+      showAlert("Plex account unlinked. Reloading…", "success");
+      setTimeout(function () { window.location.reload(); }, 800);
+    } else {
+      showAlert("Error: " + (data.error || "unknown"), "error");
+    }
+  };
+
+  window.runPlexSync = async function () {
+    showAlert("Plex → AniList sync started…", "info");
+    var data = await apiFetch("/api/watch-sync/plex/run", { method: "POST" });
+    showAlert(data.message || (data.error || "Error"), data.ok ? "success" : "error");
+  };
+
+  window.pushPlexSync = async function () {
+    showAlert("AniList → Plex sync started…", "info");
+    var data = await apiFetch("/api/watch-sync/plex/push", { method: "POST" });
+    showAlert(data.message || (data.error || "Error"), data.ok ? "success" : "error");
+  };
+
+})();
+</script>
+{% endblock %}

@@ -21,6 +21,8 @@ from src.Sync.CrunchyrollPreviewRunner import (
     CrunchyrollPreviewRunner,
 )
 from src.Sync.DownloadSyncer import DownloadSyncer
+from src.Sync.JellyfinWatchSyncer import JellyfinWatchSyncer
+from src.Sync.PlexWatchSyncer import PlexWatchSyncer
 from src.Sync.WatchlistRefresh import watchlist_refresh_task
 from src.Sync.WatchSyncer import WatchSyncer
 from src.Utils.Config import AppConfig, load_config, load_config_from_db_settings
@@ -294,6 +296,36 @@ async def main() -> None:
     async def _watchlist_refresh() -> None:
         await watchlist_refresh_task(db, app.state.anilist_client)
 
+    async def _jellyfin_watch_sync() -> None:
+        cfg = app.state.config
+        if not cfg.jellyfin.url or not cfg.jellyfin.api_key:
+            return
+        from src.Clients.JellyfinClient import JellyfinClient as _JF
+
+        jf = _JF(url=cfg.jellyfin.url, api_key=cfg.jellyfin.api_key)
+        try:
+            syncer = JellyfinWatchSyncer(
+                db=db, anilist_client=app.state.anilist_client, jellyfin_client=jf
+            )
+            await syncer.sync_to_anilist()
+        finally:
+            await jf.close()
+
+    async def _plex_watch_sync() -> None:
+        cfg = app.state.config
+        if not cfg.plex.url or not cfg.plex.token:
+            return
+        from src.Clients.PlexClient import PlexClient as _Plex
+
+        plex = _Plex(url=cfg.plex.url, token=cfg.plex.token)
+        try:
+            syncer = PlexWatchSyncer(
+                db=db, anilist_client=app.state.anilist_client, plex_client=plex
+            )
+            await syncer.sync_to_anilist()
+        finally:
+            await plex.close()
+
     scheduler.register_jobs(
         crunchyroll_sync_func=_cr_sync,
         plex_scan_func=_plex_scan,
@@ -301,6 +333,8 @@ async def main() -> None:
         download_sync_interval_minutes=config.download_sync.sync_interval_minutes,
         library_reindex_func=_library_reindex,
         watchlist_refresh_func=_watchlist_refresh,
+        jellyfin_watch_sync_func=_jellyfin_watch_sync,
+        plex_watch_sync_func=_plex_watch_sync,
     )
 
     # Expose callables for ad-hoc triggering (used by manual-run endpoints)

@@ -138,6 +138,7 @@ def create_app(
     from src.Web.Routes.Tools import router as tools_router
     from src.Web.Routes.UnifiedLibrary import router as unified_library_router
     from src.Web.Routes.WatchlistLibrary import router as watchlist_library_router
+    from src.Web.Routes.WatchSync import router as watch_sync_router
 
     app.include_router(arr_webhook_router)
     app.include_router(downloads_router)
@@ -158,6 +159,7 @@ def create_app(
     app.include_router(restructure_router)
     app.include_router(settings_router)
     app.include_router(sonarr_sync_router)
+    app.include_router(watch_sync_router)
     app.include_router(watchlist_library_router)
 
     return app

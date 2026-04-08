@@ -1874,4 +1874,83 @@ class DatabaseManager:
     async def clear_radarr_cache(self) -> None:
         """Remove all radarr_movie_cache entries."""
         await self.execute("DELETE FROM radarr_movie_cache")
+
+    # ------------------------------------------------------------------
+    # Plex Users (watch sync account linking)
+    # ------------------------------------------------------------------
+
+    async def upsert_plex_user(
+        self,
+        plex_username: str,
+        plex_uuid: str,
+        anilist_user_id: str = "",
+        plex_token: str = "",
+        is_admin: bool = False,
+    ) -> None:
+        """Insert or update a linked Plex user (replace by plex_uuid)."""
+        await self.execute("DELETE FROM plex_users WHERE plex_uuid=?", (plex_uuid,))
+        await self.execute(
+            """INSERT INTO plex_users
+                   (anilist_user_id, plex_username, plex_uuid, plex_token, is_admin)
+               VALUES (?, ?, ?, ?, ?)
+            """,
+            (anilist_user_id, plex_username, plex_uuid, plex_token, int(is_admin)),
+        )
+
+    async def get_plex_user(self) -> dict[str, Any] | None:
+        """Return the single linked Plex user (first row)."""
+        return await self.fetch_one("SELECT * FROM plex_users ORDER BY id LIMIT 1")
+
+    async def get_all_plex_users(self) -> list[dict[str, Any]]:
+        """Return all linked Plex users."""
+        return await self.fetch_all("SELECT * FROM plex_users ORDER BY created_at")
+
+    async def delete_plex_user(self, plex_uuid: str) -> None:
+        """Unlink a Plex user by their UUID."""
+        await self.execute("DELETE FROM plex_users WHERE plex_uuid=?", (plex_uuid,))
+
+    async def clear_plex_users(self) -> None:
+        """Remove all linked Plex users."""
+        await self.execute("DELETE FROM plex_users")
+
+    # ------------------------------------------------------------------
+    # Jellyfin Users (watch sync account linking)
+    # ------------------------------------------------------------------
+
+    async def upsert_jellyfin_user(
+        self,
+        jf_user_id: str,
+        jf_username: str,
+        anilist_user_id: str = "",
+        jf_token: str = "",
+    ) -> None:
+        """Insert or update a linked Jellyfin user (replace by jf_user_id)."""
+        await self.execute(
+            "DELETE FROM jellyfin_users WHERE jf_user_id=?", (jf_user_id,)
+        )
+        await self.execute(
+            """INSERT INTO jellyfin_users
+                   (anilist_user_id, jf_username, jf_user_id, jf_token)
+               VALUES (?, ?, ?, ?)
+            """,
+            (anilist_user_id, jf_username, jf_user_id, jf_token),
+        )
+
+    async def get_jellyfin_user(self) -> dict[str, Any] | None:
+        """Return the single linked Jellyfin user (first row)."""
+        return await self.fetch_one("SELECT * FROM jellyfin_users ORDER BY id LIMIT 1")
+
+    async def get_all_jellyfin_users(self) -> list[dict[str, Any]]:
+        """Return all linked Jellyfin users."""
+        return await self.fetch_all("SELECT * FROM jellyfin_users ORDER BY created_at")
+
+    async def delete_jellyfin_user(self, jf_user_id: str) -> None:
+        """Unlink a Jellyfin user by their user ID."""
+        await self.execute(
+            "DELETE FROM jellyfin_users WHERE jf_user_id=?", (jf_user_id,)
+        )
+
+    async def clear_jellyfin_users(self) -> None:
+        """Remove all linked Jellyfin users."""
+        await self.execute("DELETE FROM jellyfin_users")
         await self.db.commit()

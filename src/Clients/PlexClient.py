@@ -226,6 +226,60 @@ class PlexClient:
             )
         return seasons
 
+    async def get_accounts(self) -> list[dict[str, Any]]:
+        """Return all home accounts on the Plex server.
+
+        Each dict has at minimum ``id`` (numeric account ID) and ``name`` keys.
+        Requires the admin token.  Returns an empty list if the endpoint is
+        unavailable (e.g. non-PlexHome servers — in that case only the admin
+        account exists and its viewCount data is already in the default view).
+        """
+        try:
+            resp = await self._http.get("/accounts")
+            resp.raise_for_status()
+            accounts = resp.json().get("MediaContainer", {}).get("Account", [])
+            return [
+                {"id": str(a.get("id", "")), "name": a.get("name", "")}
+                for a in accounts
+            ]
+        except Exception:
+            logger.debug("Failed to fetch Plex accounts")
+            return []
+
+    async def mark_episode_watched(self, rating_key: str) -> None:
+        """Mark an episode as watched (scrobble) on the Plex server.
+
+        Uses the ``/:/scrobble`` endpoint which marks the item played and
+        increments ``viewCount`` for the authenticated user's token.
+        """
+        try:
+            resp = await self._http.get(
+                "/:/scrobble",
+                params={
+                    "key": rating_key,
+                    "identifier": "com.plexapp.plugins.library",
+                },
+            )
+            resp.raise_for_status()
+            logger.debug("Scrobbled Plex item %s as watched", rating_key)
+        except Exception:
+            logger.debug("Failed to scrobble Plex item %s", rating_key)
+
+    async def mark_episode_unwatched(self, rating_key: str) -> None:
+        """Mark an episode as unwatched on the Plex server."""
+        try:
+            resp = await self._http.get(
+                "/:/unscrobble",
+                params={
+                    "key": rating_key,
+                    "identifier": "com.plexapp.plugins.library",
+                },
+            )
+            resp.raise_for_status()
+            logger.debug("Unscrobbled Plex item %s as unwatched", rating_key)
+        except Exception:
+            logger.debug("Failed to unscrobble Plex item %s", rating_key)
+
     # ------------------------------------------------------------------
     # Write operations
     # ------------------------------------------------------------------
