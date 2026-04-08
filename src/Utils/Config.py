@@ -71,6 +71,7 @@ class SchedulerConfig:
         "02:00"  # "HH:MM" for daily at a fixed time; empty = use interval
     )
     library_reindex_interval_hours: int = 6
+    watchlist_refresh_interval_minutes: int = 30
 
 
 @dataclass(frozen=True)
@@ -216,6 +217,9 @@ def load_config() -> AppConfig:
             sync_interval_minutes=_env_int("SYNC_INTERVAL", 15),
             cr_sync_time=_env("CR_SYNC_TIME", ""),
             library_reindex_interval_hours=_env_int("LIBRARY_REINDEX_INTERVAL", 6),
+            watchlist_refresh_interval_minutes=_env_int(
+                "WATCHLIST_REFRESH_INTERVAL", 30
+            ),
         ),
         download_sync=DownloadSyncConfig(
             auto_statuses=tuple(
@@ -266,6 +270,10 @@ SETTINGS_MAP: dict[str, tuple[str, str]] = {
     "scheduler.scan_interval_hours": ("SCAN_INTERVAL", "24"),
     "scheduler.cr_sync_time": ("CR_SYNC_TIME", "02:00"),
     "scheduler.library_reindex_interval_hours": ("LIBRARY_REINDEX_INTERVAL", "6"),
+    "scheduler.watchlist_refresh_interval_minutes": (
+        "WATCHLIST_REFRESH_INTERVAL",
+        "30",
+    ),
     "app.debug": ("DEBUG", "false"),
     "app.title_display": ("TITLE_DISPLAY", "romaji"),
     "restructure.plex_path_prefix": ("RESTRUCTURE_PLEX_PREFIX", ""),
@@ -394,6 +402,9 @@ def load_config_from_db_settings(
             cr_sync_time=r("scheduler.cr_sync_time"),
             library_reindex_interval_hours=int(
                 r("scheduler.library_reindex_interval_hours") or "6"
+            ),
+            watchlist_refresh_interval_minutes=int(
+                r("scheduler.watchlist_refresh_interval_minutes") or "30"
             ),
         ),
         download_sync=DownloadSyncConfig(

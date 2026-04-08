@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -15,6 +16,7 @@ from fastapi.templating import Jinja2Templates
 from src.Clients.AnilistClient import AniListClient
 from src.Database.Connection import DatabaseManager
 from src.Scheduler.Jobs import JobScheduler
+from src.Sync.WatchlistRefresh import watchlist_refresh_task
 from src.Utils.Config import AppConfig
 
 logger = logging.getLogger(__name__)
@@ -71,6 +73,9 @@ def create_app(
         # Auto-register arr webhooks (fire-and-forget, non-blocking)
         asyncio.create_task(_register_arr_webhooks(config))
 
+        # Refresh AniList watchlist cache on startup (fire-and-forget)
+        asyncio.create_task(watchlist_refresh_task(db, anilist_client))
+
         yield
         # Shutdown
         logger.info("Shutting down scheduler")
@@ -91,7 +96,21 @@ def create_app(
     app.state.db = db
     app.state.anilist_client = anilist_client
     app.state.scheduler = scheduler
-    app.state.templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+    templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+    def _utc_to_local(utc_str: str) -> str:
+        """Convert a UTC datetime string from SQLite to the container's local time."""
+        if not utc_str:
+            return utc_str
+        try:
+            dt = datetime.strptime(utc_str[:19], "%Y-%m-%d %H:%M:%S")
+            dt_local = dt.replace(tzinfo=timezone.utc).astimezone()
+            return dt_local.strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError):
+            return utc_str
+
+    templates.env.filters["localtime"] = _utc_to_local
+    app.state.templates = templates
     app.state.background_tasks = set()  # prevent GC of fire-and-forget tasks
 
     # Static files

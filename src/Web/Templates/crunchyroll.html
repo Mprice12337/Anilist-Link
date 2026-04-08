@@ -25,7 +25,7 @@
     <h1><img src="/static/img/crunchyroll.png" alt="Crunchyroll" class="page-service-logo">Crunchyroll</h1>
     {% if runs %}
     <span class="text-muted" style="font-size:0.85rem">
-      Last scan: {{ runs[0].created_at[:16] if runs[0].created_at else "—" }}
+      Last scan: {{ (runs[0].created_at | localtime)[:16] if runs[0].created_at else "—" }}
     </span>
     {% endif %}
   </div>
@@ -35,7 +35,7 @@
             onchange="changeRun(this.value)">
       {% for run in runs %}
       <option value="{{ run.run_id }}" {% if run.run_id == run_id %}selected{% endif %}>
-        {{ run.created_at[:16] if run.created_at else run.run_id[:8] }}
+        {{ (run.created_at | localtime)[:16] if run.created_at else run.run_id[:8] }}
         — {{ run.entry_count }} entries{% if run.approved_count %}, {{ run.approved_count }} approved{% endif %}
       </option>
       {% endfor %}
@@ -384,7 +384,7 @@
           data-after-status="{{ entry.after_status | lower }}"
           data-change-type="{{ 'new' if not entry.before_status else ('completed' if entry.after_status == 'COMPLETED' else 'progress') }}"
           data-run-id="{{ entry.sync_run_id }}"
-          data-applied="{{ entry.applied_at or '' }}"
+          data-applied="{{ entry.applied_at | localtime if entry.applied_at else '' }}"
           style="{% if entry.undone_at %}opacity:0.5{% endif %}">
         <td>
           <div style="display:flex;align-items:center;gap:0.5rem">
@@ -413,7 +413,7 @@
           </div>
         </td>
         <td class="text-muted" style="font-size:0.82rem;white-space:nowrap">
-          {{ entry.applied_at[:16] if entry.applied_at else "—" }}
+          {{ (entry.applied_at | localtime)[:16] if entry.applied_at else "—" }}
         </td>
         <td>
           <span class="text-muted" style="font-size:0.78rem;font-family:monospace"

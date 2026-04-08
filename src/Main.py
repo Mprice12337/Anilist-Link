@@ -21,6 +21,7 @@ from src.Sync.CrunchyrollPreviewRunner import (
     CrunchyrollPreviewRunner,
 )
 from src.Sync.DownloadSyncer import DownloadSyncer
+from src.Sync.WatchlistRefresh import watchlist_refresh_task
 from src.Sync.WatchSyncer import WatchSyncer
 from src.Utils.Config import AppConfig, load_config, load_config_from_db_settings
 from src.Utils.Logging import get_logger, setup_logging
@@ -62,6 +63,8 @@ async def crunchyroll_sync_task(
             return
 
         await syncer.run_sync()
+        if not dry_run:
+            await watchlist_refresh_task(db, anilist_client)
     except Exception:
         logger.exception("Crunchyroll sync error")
     finally:
@@ -288,12 +291,16 @@ async def main() -> None:
     async def _library_reindex() -> None:
         await library_reindex_task(db, app.state.anilist_client)
 
+    async def _watchlist_refresh() -> None:
+        await watchlist_refresh_task(db, app.state.anilist_client)
+
     scheduler.register_jobs(
         crunchyroll_sync_func=_cr_sync,
         plex_scan_func=_plex_scan,
         download_sync_func=_download_sync,
         download_sync_interval_minutes=config.download_sync.sync_interval_minutes,
         library_reindex_func=_library_reindex,
+        watchlist_refresh_func=_watchlist_refresh,
     )
 
     # Expose callables for ad-hoc triggering (used by manual-run endpoints)
@@ -314,6 +321,9 @@ async def main() -> None:
     )
     app.state.download_sync_task = lambda: download_sync_task(
         app.state.config, db, app.state.anilist_client
+    )
+    app.state.watchlist_refresh_task = lambda: watchlist_refresh_task(
+        db, app.state.anilist_client
     )
 
     # Start uvicorn

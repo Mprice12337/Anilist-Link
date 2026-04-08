@@ -391,6 +391,11 @@ async def apply_preview_run(request: Request, run_id: str) -> JSONResponse:
             )
             errors += 1
 
+    if applied > 0:
+        spawn_background_task(
+            request.app.state, request.app.state.watchlist_refresh_task()
+        )
+
     return JSONResponse(
         {"ok": True, "applied": applied, "errors": errors, "total": len(approved)}
     )

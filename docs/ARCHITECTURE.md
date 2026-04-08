@@ -2,7 +2,7 @@
 
 This document defines the architecture of Anilist-Link, organized around its four functional pillars. It serves as the primary reference for understanding the system's design, components, and implementation status. Update this document as the codebase evolves.
 
-**Date of Last Update**: 2026-04-01
+**Date of Last Update**: 2026-04-08
 
 ---
 
@@ -140,7 +140,8 @@ APScheduler integration for periodic background tasks. `JobScheduler` class wrap
 - Cron and interval trigger support via `_cr_trigger()`
 - Manual job trigger via `trigger_job(job_id)`
 - Job status query via `get_job_status()`
-- Registered jobs: Crunchyroll watch sync, Plex/Jellyfin metadata scan, watch sync, download sync
+- Registered jobs: Crunchyroll watch sync, Plex/Jellyfin metadata scan, watch sync, download sync, watchlist refresh
+- `watchlist_refresh` (`src/Sync/WatchlistRefresh.py`): refreshes `user_watchlist` for all linked AniList accounts; runs every 30 min (configurable via `WATCHLIST_REFRESH_INTERVAL`), fires on startup, and is triggered automatically after Crunchyroll sync completes or preview changes are applied
 
 ### 3.8. Config (`src/Utils/Config.py`)
 
@@ -503,7 +504,8 @@ Anilist-Link/
 │   ├── Sync/                                     # Watch status and download synchronization
 │   │   ├── WatchSyncer.py                        # Crunchyroll→AniList watch sync [✅]
 │   │   ├── CrunchyrollPreviewRunner.py           # CR sync preview/approve/undo pipeline [✅]
-│   │   └── DownloadSyncer.py                     # AniList watchlist→Sonarr/Radarr sync [✅]
+│   │   ├── DownloadSyncer.py                     # AniList watchlist→Sonarr/Radarr sync [✅]
+│   │   └── WatchlistRefresh.py                   # AniList watchlist cache refresh (all users) [✅]
 │   ├── Download/                                 # Download management (P4)
 │   │   ├── DownloadManager.py                    # Orchestrates AniList→Sonarr/Radarr [✅]
 │   │   ├── MappingResolver.py                    # AniList↔Arr mapping persistence [✅]

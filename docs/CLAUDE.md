@@ -348,6 +348,7 @@ Application-specific variables:
 - `SONARR_API_KEY` - Sonarr API key [P4]
 - `RADARR_URL` - Radarr server URL (e.g., `http://192.168.1.100:7878`) [P4]
 - `RADARR_API_KEY` - Radarr API key [P4]
+- `WATCHLIST_REFRESH_INTERVAL` - Minutes between scheduled AniList watchlist refreshes (default: `30`)
 
 ---
 
@@ -436,12 +437,14 @@ Current tables:
 - **Plex Metadata Scan**: Periodic scan of Plex libraries, matching to AniList, metadata application [triggered manually via UI]
 - **Jellyfin Metadata Scan**: Periodic scan of Jellyfin libraries [triggered manually via UI]
 - **Download Sync**: Periodic AniList watchlist → Sonarr/Radarr auto-add [implemented]
+- **Watchlist Refresh**: Periodic refresh of `user_watchlist` cache from AniList for all linked users [implemented]
 - **Plex Watch Sync**: Periodic Plex→AniList watch sync [planned — P1]
 - **Jellyfin Watch Sync**: Periodic Jellyfin→AniList watch sync [planned — P1]
 
 #### Important Job Classes
 - `crunchyroll_sync` - Scheduled Crunchyroll watch sync at configurable interval [implemented]
 - `download_sync` - Periodic AniList watchlist → Sonarr/Radarr sync [implemented]
+- `watchlist_refresh` - Refreshes `user_watchlist` for all linked AniList users; every 30 min, on startup, and post-CR-sync [implemented]
 - `plex_metadata_scan` - Plex library scan and metadata application [planned for scheduling]
 - `plex_watch_sync` - Plex watch progress polling [planned — P1]
 

@@ -68,12 +68,12 @@
                     <br><span class="text-muted">ep {{ entry.after_progress }}</span>
                 </td>
                 <td class="text-muted" style="font-size:0.85rem;white-space:nowrap">
-                    {{ entry.applied_at[:16] if entry.applied_at else "—" }}
+                    {{ (entry.applied_at | localtime)[:16] if entry.applied_at else "—" }}
                 </td>
                 <td id="undone-status-{{ entry.id }}">
                     {% if entry.undone_at %}
                     <span class="badge badge-muted">Undone</span>
-                    <br><span class="text-muted" style="font-size:0.75rem">{{ entry.undone_at[:16] }}</span>
+                    <br><span class="text-muted" style="font-size:0.75rem">{{ (entry.undone_at | localtime)[:16] }}</span>
                     {% else %}
                     <span class="badge badge-success">Applied</span>
                     {% endif %}

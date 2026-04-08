@@ -21,6 +21,7 @@ JOB_PLEX_METADATA_SCAN = "plex_metadata_scan"
 JOB_WATCH_SYNC = "watch_sync"
 JOB_DOWNLOAD_SYNC = "download_sync"
 JOB_LIBRARY_REINDEX = "library_reindex"
+JOB_WATCHLIST_REFRESH = "watchlist_refresh"
 
 
 def _cr_trigger(config: SchedulerConfig) -> CronTrigger | IntervalTrigger:
@@ -64,6 +65,7 @@ class JobScheduler:
         download_sync_func: Callable[[], Awaitable[None]] | None = None,
         download_sync_interval_minutes: int = 60,
         library_reindex_func: Callable[[], Awaitable[None]] | None = None,
+        watchlist_refresh_func: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """Register job callables with configured intervals."""
         if crunchyroll_sync_func:
@@ -147,6 +149,22 @@ class JobScheduler:
                 self._config.library_reindex_interval_hours,
             )
 
+        if watchlist_refresh_func:
+            self._scheduler.add_job(
+                watchlist_refresh_func,
+                trigger=IntervalTrigger(
+                    minutes=self._config.watchlist_refresh_interval_minutes
+                ),
+                id=JOB_WATCHLIST_REFRESH,
+                name="AniList Watchlist Refresh",
+                replace_existing=True,
+            )
+            logger.info(
+                "Registered %s job (every %d min)",
+                JOB_WATCHLIST_REFRESH,
+                self._config.watchlist_refresh_interval_minutes,
+            )
+
     def start(self) -> None:
         if not self._scheduler.running:
             self._scheduler.start()
@@ -217,6 +235,23 @@ class JobScheduler:
                     "Rescheduled %s to every %d hr",
                     JOB_LIBRARY_REINDEX,
                     new_config.library_reindex_interval_hours,
+                )
+
+        if (
+            new_config.watchlist_refresh_interval_minutes
+            != old.watchlist_refresh_interval_minutes
+        ):
+            job = self._scheduler.get_job(JOB_WATCHLIST_REFRESH)
+            if job:
+                job.reschedule(
+                    trigger=IntervalTrigger(
+                        minutes=new_config.watchlist_refresh_interval_minutes
+                    )
+                )
+                logger.info(
+                    "Rescheduled %s to every %d min",
+                    JOB_WATCHLIST_REFRESH,
+                    new_config.watchlist_refresh_interval_minutes,
                 )
 
     def trigger_job(self, job_id: str) -> bool:

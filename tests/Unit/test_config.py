@@ -64,13 +64,14 @@ class TestDataclassConstruction:
         assert cfg.headless is True
         assert cfg.max_pages == 10
         assert cfg.auto_sync_enabled is True
-        assert cfg.auto_approve is True
+        assert cfg.auto_approve is False
 
     def test_scheduler_config_defaults(self) -> None:
         cfg = SchedulerConfig()
         assert cfg.scan_interval_hours == 24
         assert cfg.sync_interval_minutes == 15
         assert cfg.cr_sync_time == "02:00"
+        assert cfg.watchlist_refresh_interval_minutes == 30
 
     def test_database_config_default_path(self) -> None:
         cfg = DatabaseConfig()
