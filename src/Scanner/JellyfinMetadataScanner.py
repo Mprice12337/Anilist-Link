@@ -298,8 +298,8 @@ class JellyfinMetadataScanner:
                 anilist_id = override["anilist_id"]
                 logger.info("  [override] %s -> AniList %d", title, anilist_id)
                 if not preview:
-                    await self._apply_anilist_metadata(
-                        item_id, title, anilist_id, 1.0, "manual_override", dry_run
+                    await self._apply_metadata_for_show(
+                        item_id, title, anilist_id, "", 1.0, "manual_override", dry_run
                     )
                 else:
                     results.items.append(
@@ -359,10 +359,11 @@ class JellyfinMetadataScanner:
                     xref_title,
                 )
                 if not preview:
-                    await self._apply_anilist_metadata(
+                    await self._apply_metadata_for_show(
                         item_id,
                         title,
                         xref_id,
+                        xref_title,
                         xref_conf,
                         f"cross_source:{cross_match.get('match_method', '')}",
                         dry_run,
@@ -455,24 +456,6 @@ class JellyfinMetadataScanner:
                 confidence,
             )
 
-            # Build series group if available
-            group_id: int | None = None
-            group_entries: list[dict] = []
-            tv_entries: list[dict] = []
-            if self._group_builder:
-                try:
-                    group_id, group_entries = (
-                        await self._group_builder.get_or_build_group(anilist_id)
-                    )
-                    tv_entries = [
-                        e
-                        for e in group_entries
-                        if e.get("format", "") in ("TV", "TV_SHORT")
-                    ]
-                except Exception:
-                    logger.exception("  Failed to build series group for %s", title)
-                    group_id = None
-
             if preview:
                 changes: dict[str, str] = {}
                 al_title = (
@@ -518,56 +501,15 @@ class JellyfinMetadataScanner:
                     )
                 )
             else:
-                # Detect Structure B: multiple real seasons in Jellyfin
-                is_structure_b = False
-                jf_real_seasons = []
-                if group_id and len(tv_entries) > 1:
-                    try:
-                        jf_seasons = await self._jellyfin.get_show_seasons(item_id)
-                        jf_real_seasons = sorted(
-                            [s for s in jf_seasons if s.index > 0],
-                            key=lambda s: s.index,
-                        )
-                        is_structure_b = len(jf_real_seasons) > 1
-                    except Exception:
-                        logger.debug(
-                            "  Could not fetch seasons for %s, assuming Structure A",
-                            item_id,
-                            exc_info=True,
-                        )
-
-                show_anilist_id = (
-                    tv_entries[0]["anilist_id"]
-                    if (is_structure_b and tv_entries)
-                    else anilist_id
+                await self._apply_metadata_for_show(
+                    item_id,
+                    title,
+                    anilist_id,
+                    anilist_title,
+                    confidence,
+                    "fuzzy",
+                    dry_run,
                 )
-                show_anilist_title = (
-                    tv_entries[0].get("display_title", anilist_title)
-                    if (is_structure_b and tv_entries)
-                    else anilist_title
-                )
-
-                await self._db.upsert_media_mapping(
-                    source="jellyfin",
-                    source_id=item_id,
-                    source_title=title,
-                    anilist_id=show_anilist_id,
-                    anilist_title=show_anilist_title,
-                    match_confidence=confidence,
-                    match_method="fuzzy",
-                    series_group_id=group_id,
-                    season_number=1,
-                )
-
-                if is_structure_b:
-                    # Apply per-season posters + show-level first-entry poster
-                    await self._apply_structure_b_metadata(
-                        item_id, title, jf_real_seasons, tv_entries, confidence, dry_run
-                    )
-                else:
-                    await self._apply_anilist_metadata(
-                        item_id, title, anilist_id, confidence, "fuzzy", dry_run
-                    )
             results.matched += 1
 
         except Exception:
@@ -585,6 +527,86 @@ class JellyfinMetadataScanner:
                     )
                 )
             results.failed += 1
+
+    async def _apply_metadata_for_show(
+        self,
+        item_id: str,
+        title: str,
+        anilist_id: int,
+        hint_title: str,
+        confidence: float,
+        method: str,
+        dry_run: bool,
+    ) -> None:
+        """Build series group, detect Structure B, store mapping, apply metadata.
+
+        Centralises the logic so override, cross-source, and fuzzy-match paths
+        all benefit from per-season metadata when a show has multiple Jellyfin
+        season containers.
+        """
+        group_id: int | None = None
+        tv_entries: list[dict] = []
+        if self._group_builder:
+            try:
+                group_id, group_entries = await self._group_builder.get_or_build_group(
+                    anilist_id
+                )
+                tv_entries = [
+                    e
+                    for e in group_entries
+                    if e.get("format", "") in ("TV", "TV_SHORT")
+                ]
+            except Exception:
+                logger.exception("  Failed to build series group for %s", title)
+
+        is_structure_b = False
+        jf_real_seasons: list[JellyfinSeason] = []
+        if group_id and len(tv_entries) > 1:
+            try:
+                jf_seasons = await self._jellyfin.get_show_seasons(item_id)
+                jf_real_seasons = sorted(
+                    [s for s in jf_seasons if s.index > 0],
+                    key=lambda s: s.index,
+                )
+                is_structure_b = len(jf_real_seasons) > 1
+            except Exception:
+                logger.debug(
+                    "  Could not fetch seasons for %s, assuming Structure A",
+                    item_id,
+                    exc_info=True,
+                )
+
+        show_anilist_id = (
+            tv_entries[0]["anilist_id"]
+            if (is_structure_b and tv_entries)
+            else anilist_id
+        )
+        show_anilist_title = (
+            tv_entries[0].get("display_title", hint_title)
+            if (is_structure_b and tv_entries)
+            else hint_title
+        )
+
+        await self._db.upsert_media_mapping(
+            source="jellyfin",
+            source_id=item_id,
+            source_title=title,
+            anilist_id=show_anilist_id,
+            anilist_title=show_anilist_title,
+            match_confidence=confidence,
+            match_method=method,
+            series_group_id=group_id,
+            season_number=1,
+        )
+
+        if is_structure_b:
+            await self._apply_structure_b_metadata(
+                item_id, title, jf_real_seasons, tv_entries, confidence, dry_run
+            )
+        else:
+            await self._apply_anilist_metadata(
+                item_id, title, anilist_id, confidence, method, dry_run
+            )
 
     async def _apply_structure_b_metadata(
         self,
