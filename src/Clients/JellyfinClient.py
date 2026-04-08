@@ -418,6 +418,87 @@ class JellyfinClient:
         except Exception:
             logger.debug("Failed to trigger image refresh for item %s", item_id)
 
+    async def _find_show_root_folder(self, item_id: str) -> dict[str, Any] | None:
+        """Walk the Jellyfin item hierarchy to find the top-level show folder.
+
+        Returns the Folder item whose parent is a library root
+        (CollectionFolder / UserView / AggregateFolder).  Handles:
+        - Items that ARE the show folder (returned directly)
+        - Movie/Episode children nested one or two levels inside a show folder
+        - Double-nested layouts: Show(year)/Season(year)/episodes
+
+        Returns None if the hierarchy cannot be resolved.
+        """
+        _LIBRARY_TYPES = {"CollectionFolder", "UserView", "AggregateFolder"}
+
+        current = await self.get_item(item_id)
+        if not current:
+            return None
+
+        logger.debug(
+            "_find_show_root_folder: start item=%s type=%s parentId=%s",
+            item_id,
+            current.get("Type"),
+            current.get("ParentId"),
+        )
+
+        seen: set[str] = {item_id}
+
+        while True:
+            if current.get("Type") == "Folder":
+                parent_id = current.get("ParentId", "")
+                if not parent_id:
+                    break
+                parent = await self.get_item(parent_id)
+                if not parent:
+                    break
+                parent_type = parent.get("Type", "")
+                logger.debug(
+                    "_find_show_root_folder: current=%s(%s) -> parent=%s(%s)",
+                    current.get("Id"),
+                    current.get("Type"),
+                    parent.get("Id"),
+                    parent_type,
+                )
+                if parent_type in _LIBRARY_TYPES:
+                    # Parent is a library root → current IS the show folder.
+                    return current
+                if parent_type == "Folder":
+                    # Check if the parent's parent is a library root — handles
+                    # layouts where an intermediate plain Folder acts as the
+                    # library directory (not a CollectionFolder).
+                    grandparent_id = parent.get("ParentId", "")
+                    if grandparent_id:
+                        grandparent = await self.get_item(grandparent_id)
+                        if grandparent and grandparent.get("Type") in _LIBRARY_TYPES:
+                            return current
+                if parent["Id"] in seen:
+                    logger.debug(
+                        "_find_show_root_folder: cycle detected at %s", parent["Id"]
+                    )
+                    break
+                seen.add(parent["Id"])
+                current = parent
+            else:
+                # Non-folder (Movie, Episode, etc.) — step up to parent folder
+                parent_id = current.get("ParentId", "")
+                if not parent_id:
+                    break
+                parent = await self.get_item(parent_id)
+                if not parent or parent["Id"] in seen:
+                    break
+                logger.debug(
+                    "_find_show_root_folder: non-folder %s(%s) -> parent %s(%s)",
+                    current.get("Id"),
+                    current.get("Type"),
+                    parent.get("Id"),
+                    parent.get("Type"),
+                )
+                seen.add(parent["Id"])
+                current = parent
+
+        return None
+
     async def upload_poster_to_parent_folder(
         self, item_id: str, image_url: str
     ) -> None:
@@ -428,91 +509,7 @@ class JellyfinClient:
         items, so without this step the visible library card (the Folder) never
         receives the AniList artwork.
         """
-        # Walk up the item hierarchy to find the top-level show folder —
-        # the Folder whose parent is a library root (CollectionFolder / UserView).
-        # This handles double-nested layouts like Show (year)/Season (year)/episodes.
-        _LIBRARY_TYPES = {"CollectionFolder", "UserView", "AggregateFolder"}
-
-        current = await self.get_item(item_id)
-        if not current:
-            logger.debug("upload_poster_to_parent_folder: item %s not found", item_id)
-            return
-
-        logger.debug(
-            "upload_poster_to_parent_folder: start item=%s type=%s parentId=%s",
-            item_id,
-            current.get("Type"),
-            current.get("ParentId"),
-        )
-
-        top_folder: dict[str, Any] | None = None
-        seen: set[str] = {item_id}
-
-        while True:
-            if current.get("Type") == "Folder":
-                parent_id = current.get("ParentId", "")
-                if not parent_id:
-                    logger.debug(
-                        "upload_poster_to_parent_folder: no parent_id on %s, stopping",
-                        current.get("Id"),
-                    )
-                    break
-                parent = await self.get_item(parent_id)
-                if not parent:
-                    logger.debug(
-                        "upload_poster_to_parent_folder: parent %s not found", parent_id
-                    )
-                    break
-                parent_type = parent.get("Type", "")
-                logger.debug(
-                    "upload_poster_to_parent_folder: current=%s(%s) -> parent=%s(%s)",
-                    current.get("Id"),
-                    current.get("Type"),
-                    parent.get("Id"),
-                    parent_type,
-                )
-                if parent_type in _LIBRARY_TYPES:
-                    # Parent is library root → current IS the show folder.
-                    top_folder = current
-                    break
-                if parent_type == "Folder":
-                    # Parent is a plain folder — check if IT is a library container
-                    # (i.e. its parent is a library root).  This handles layouts like:
-                    #   AggregateFolder → library_dir [Folder] → Show [Folder] → items
-                    # where the intermediate library_dir is not a CollectionFolder.
-                    grandparent_id = parent.get("ParentId", "")
-                    if grandparent_id:
-                        grandparent = await self.get_item(grandparent_id)
-                        if grandparent and grandparent.get("Type") in _LIBRARY_TYPES:
-                            # parent is library container; current is show.
-                            top_folder = current
-                            break
-                if parent["Id"] in seen:
-                    logger.debug(
-                        "upload_poster_to_parent_folder: cycle detected at %s",
-                        parent["Id"],
-                    )
-                    break  # cycle guard
-                seen.add(parent["Id"])
-                current = parent
-            else:
-                # Non-folder item (Movie, Episode, etc.) — step up once
-                parent_id = current.get("ParentId", "")
-                if not parent_id:
-                    break
-                parent = await self.get_item(parent_id)
-                if not parent or parent["Id"] in seen:
-                    break
-                logger.debug(
-                    "upload_poster: non-folder %s(%s) -> parent %s(%s)",
-                    current.get("Id"),
-                    current.get("Type"),
-                    parent.get("Id"),
-                    parent.get("Type"),
-                )
-                seen.add(parent["Id"])
-                current = parent
-
+        top_folder = await self._find_show_root_folder(item_id)
         if not top_folder:
             logger.debug(
                 "upload_poster_to_parent_folder: no top folder found for %s", item_id
@@ -520,7 +517,7 @@ class JellyfinClient:
             return
         if top_folder.get("Id") == item_id:
             logger.debug(
-                "upload_poster: item %s IS the top-level folder",
+                "upload_poster_to_parent_folder: item %s IS the top-level folder",
                 item_id,
             )
             return
@@ -548,6 +545,271 @@ class JellyfinClient:
             logger.warning(
                 "Failed to lock top-level folder %s", folder_id, exc_info=True
             )
+
+    # ------------------------------------------------------------------
+    # Watch status operations
+    # ------------------------------------------------------------------
+
+    async def get_users(self) -> list[dict[str, Any]]:
+        """Return all users on the Jellyfin server.
+
+        Each dict has at minimum ``Id`` and ``Name`` keys.
+        """
+        try:
+            resp = await self._http.get("/Users")
+            resp.raise_for_status()
+            return resp.json()  # type: ignore[no-any-return]
+        except Exception:
+            logger.debug("Failed to fetch Jellyfin users")
+            return []
+
+    async def get_series_episodes_with_userdata(
+        self,
+        series_id: str,
+        user_id: str,
+        season_item_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return episodes for a series, including per-user watch state.
+
+        Uses ``GET /Items`` with ``ParentId`` and ``Recursive=true`` rather
+        than ``GET /Shows/{id}/Episodes`` because the Shows endpoint silently
+        returns nothing when the series has no explicit Season containers
+        (common for double-nested folder layouts like
+        ``/Show/Season1/ep.mkv``).
+
+        If ``season_item_id`` (the Jellyfin season UUID) is provided, only
+        episodes from that season container are returned by passing it as
+        ``ParentId`` instead of the series ID.
+
+        Episodes are sorted by season number then episode number so that
+        ``episodes[:progress]`` always maps to the first N episodes in order.
+        """
+        episode_params: dict[str, str] = {
+            "IncludeItemTypes": "Episode",
+            "Recursive": "true",
+            "Fields": "UserData",
+            "EnableUserData": "true",
+            "SortBy": "ParentIndexNumber,IndexNumber",
+            "SortOrder": "Ascending",
+        }
+
+        try:
+            if season_item_id is not None:
+                # Season-scoped: use the user-context endpoint with the season
+                # UUID as ParentId — this is the most reliable approach for
+                # fetching a specific season's episodes with played state.
+                resp = await self._http.get(
+                    f"/Users/{user_id}/Items",
+                    params={**episode_params, "ParentId": season_item_id},
+                )
+                resp.raise_for_status()
+                items: list[dict[str, Any]] = resp.json().get("Items", [])
+                logger.debug(
+                    "Episodes via user-Items season=%s → %d", season_item_id, len(items)
+                )
+                return items
+
+            # ----------------------------------------------------------------
+            # Series-level: first log the item's actual type so we know what
+            # we're dealing with, then try multiple strategies.
+            # ----------------------------------------------------------------
+            diag = await self._http.get(
+                "/Items",
+                params={"Ids": series_id, "Fields": "Type,Name,Path"},
+            )
+            item_type = "unknown"
+            if diag.status_code == 200:
+                diag_items = diag.json().get("Items", [])
+                if diag_items:
+                    item_type = diag_items[0].get("Type", "unknown")
+                    logger.debug(
+                        "Item %s is Type=%s Name=%r",
+                        series_id,
+                        item_type,
+                        diag_items[0].get("Name"),
+                    )
+                else:
+                    logger.warning(
+                        "series_id=%s not found in Jellyfin — "
+                        "source_id may be stale; re-run the Jellyfin scanner",
+                        series_id,
+                    )
+                    return []
+
+            # Strategy 1: user-context endpoint with ParentId.
+            # /Users/{id}/Items respects the item hierarchy in user-context
+            # and is more reliable than the admin /Items endpoint for
+            # filtering by non-Series container IDs (Folders, BoxSets, etc.)
+            u_resp = await self._http.get(
+                f"/Users/{user_id}/Items",
+                params={**episode_params, "ParentId": series_id},
+            )
+            if u_resp.status_code not in (400, 404):
+                u_resp.raise_for_status()
+                items = u_resp.json().get("Items", [])
+                total = u_resp.json().get("TotalRecordCount", len(items))
+                logger.debug(
+                    "Episodes via user-Items series=%s type=%s → %d (total=%d)",
+                    series_id,
+                    item_type,
+                    len(items),
+                    total,
+                )
+                # Sanity check: if we got back the whole library (~all episodes)
+                # the filter was ignored — treat as 0 and fall through.
+                if items and total < 5000:
+                    return items
+                if total >= 5000:
+                    logger.debug(
+                        "user-Items returned %d — filter likely ignored, trying /Shows",
+                        total,
+                    )
+
+            # Strategy 2: canonical /Shows/{id}/Episodes (works for Series type).
+            ep_resp = await self._http.get(
+                f"/Shows/{series_id}/Episodes",
+                params={
+                    "UserId": user_id,
+                    "Fields": "UserData",
+                    "EnableUserData": "true",
+                    "SortBy": "ParentIndexNumber,IndexNumber",
+                    "SortOrder": "Ascending",
+                },
+            )
+            if ep_resp.status_code not in (400, 404):
+                ep_resp.raise_for_status()
+                items = ep_resp.json().get("Items", [])
+                if items:
+                    logger.debug(
+                        "Episodes via /Shows series=%s → %d", series_id, len(items)
+                    )
+                    return items
+
+            logger.warning(
+                "All episode strategies failed for series_id=%s type=%s — "
+                "0 usable episodes found",
+                series_id,
+                item_type,
+            )
+            return []
+
+        except Exception:
+            logger.debug(
+                "Failed to fetch episodes for Jellyfin series %s season %s",
+                series_id,
+                season_item_id,
+                exc_info=True,
+            )
+            return []
+
+    async def resolve_season_id(self, series_id: str, season_number: int) -> str | None:
+        """Return the Jellyfin season item UUID for a given season number.
+
+        ``season_number`` corresponds to ``IndexNumber`` in Jellyfin (1 for
+        Season 1, 2 for Season 2, etc.; 0 = Specials).  Returns ``None`` if
+        the season is not found.
+        """
+        seasons = await self.get_show_seasons(series_id)
+        for season in seasons:
+            if season.index == season_number:
+                return season.item_id
+        logger.debug(
+            "Season %d not found for Jellyfin series %s (available: %s)",
+            season_number,
+            series_id,
+            [s.index for s in seasons],
+        )
+        return None
+
+    async def get_item_with_userdata(
+        self, item_id: str, user_id: str
+    ) -> dict[str, Any] | None:
+        """Fetch a single Jellyfin item including user-specific UserData.
+
+        Uses the user-context endpoint ``/Users/{userId}/Items/{itemId}``
+        which populates ``UserData.Played``, ``UserData.PlayCount``, etc.
+        Returns ``None`` if the item is not found or the request fails.
+        """
+        try:
+            resp = await self._http.get(
+                f"/Users/{user_id}/Items/{item_id}",
+                params={"Fields": "UserData"},
+            )
+            if resp.status_code in (400, 404):
+                return None
+            resp.raise_for_status()
+            return resp.json()  # type: ignore[no-any-return]
+        except Exception:
+            logger.debug(
+                "Failed to fetch item %s with userdata for user %s",
+                item_id,
+                user_id,
+            )
+            return None
+
+    async def mark_episode_played(self, item_id: str, user_id: str) -> None:
+        """Mark an episode or movie as played for the given Jellyfin user."""
+        try:
+            resp = await self._http.post(f"/Users/{user_id}/PlayedItems/{item_id}")
+            resp.raise_for_status()
+            logger.debug(
+                "Marked Jellyfin item %s as played for user %s", item_id, user_id
+            )
+        except Exception:
+            logger.debug(
+                "Failed to mark item %s as played for user %s", item_id, user_id
+            )
+
+    async def mark_episode_unplayed(self, item_id: str, user_id: str) -> None:
+        """Mark an episode as unplayed for the given Jellyfin user."""
+        try:
+            resp = await self._http.request(
+                "DELETE", f"/Users/{user_id}/PlayedItems/{item_id}"
+            )
+            resp.raise_for_status()
+            logger.debug(
+                "Marked Jellyfin item %s as unplayed for user %s", item_id, user_id
+            )
+        except Exception:
+            logger.debug(
+                "Failed to mark item %s as unplayed for user %s", item_id, user_id
+            )
+
+    async def write_tvshow_nfo(self, item_id: str, title: str) -> None:
+        """Write a minimal tvshow.nfo into the show's root directory.
+
+        Jellyfin reads this file during library scans to classify the folder as
+        a TV show, preventing mixed-library "versions" grouping of episode files.
+        Walks up the hierarchy via ``_find_show_root_folder`` so the NFO always
+        lands at the top-level show folder regardless of which child item
+        (season subfolder, episode file, etc.) triggered the metadata apply.
+        """
+        try:
+            show_folder = await self._find_show_root_folder(item_id)
+            if not show_folder or not show_folder.get("Path"):
+                logger.debug(
+                    "write_tvshow_nfo: could not resolve show root for item %s",
+                    item_id,
+                )
+                return
+            raw_path: str = show_folder["Path"]
+            local_path = self._path_translator.translate(raw_path)
+            folder_dir = local_path.rstrip("/").rstrip("\\")
+            nfo_path = os.path.join(folder_dir, "tvshow.nfo")
+            safe_title = (
+                title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            )
+            content = (
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+                "<tvshow>\n"
+                f"  <title>{safe_title}</title>\n"
+                "</tvshow>\n"
+            )
+            with open(nfo_path, "w", encoding="utf-8") as fh:
+                fh.write(content)
+            logger.info("Wrote tvshow.nfo for '%s' at %s", title, nfo_path)
+        except Exception as exc:
+            logger.debug("Could not write tvshow.nfo for item %s: %s", item_id, exc)
 
     async def refresh_library(self) -> None:
         """Trigger a full Jellyfin library refresh."""

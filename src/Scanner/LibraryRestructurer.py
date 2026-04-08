@@ -63,6 +63,9 @@ _SUPPORT_FILENAMES = {
     "clearlogo.png",
     "backdrop.jpg",
 }
+# NFO files that must survive support-file cleanup — they tell media servers
+# how to classify the directory and are written by us, not by media servers.
+_PROTECTED_NFO_FILENAMES = {"tvshow.nfo", "movie.nfo"}
 # Formats that count as numbered seasons; OVA/ONA/SPECIAL/MOVIE go to Specials
 _TV_FORMATS = {"TV", "TV_SHORT"}
 
@@ -95,6 +98,8 @@ def _find_video_subdirs(root: str) -> list[str]:
 def _is_support_file(filename: str) -> bool:
     """Return True if *filename* is a media-server metadata/artwork file."""
     name_lower = filename.lower()
+    if name_lower in _PROTECTED_NFO_FILENAMES:
+        return False
     if name_lower in _SUPPORT_FILENAMES:
         return True
     ext = os.path.splitext(name_lower)[1]
@@ -139,6 +144,28 @@ def _delete_support_files(directory: str) -> int:
     except OSError:
         pass
     return deleted
+
+
+def _write_tvshow_nfo(folder_path: str, title: str) -> None:
+    """Write a minimal tvshow.nfo so Jellyfin classifies the folder as a TV show.
+
+    Safe to call on every restructure/rename — already-correct files are
+    overwritten with the same content so the title stays current.
+    """
+    nfo_path = os.path.join(folder_path, "tvshow.nfo")
+    safe_title = title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    content = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        "<tvshow>\n"
+        f"  <title>{safe_title}</title>\n"
+        "</tvshow>\n"
+    )
+    try:
+        with open(nfo_path, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        logger.info("Wrote tvshow.nfo to %s", folder_path)
+    except OSError as exc:
+        logger.warning("Could not write tvshow.nfo to %s: %s", folder_path, exc)
 
 
 @dataclass
@@ -2209,6 +2236,11 @@ class LibraryRestructurer:
                         "Could not remove source folder %s: %s", src_folder, exc
                     )
 
+            # Write tvshow.nfo so Jellyfin classifies this folder as a TV show
+            # rather than grouping its contents as movie versions.
+            if os.path.isdir(group.target_folder):
+                _write_tvshow_nfo(group.target_folder, group.display_title)
+
             stats["groups"] += 1
 
         return stats
@@ -2394,6 +2426,10 @@ class LibraryRestructurer:
                     logger.info(
                         "Deleted %d support files from %s", deleted, cleanup_dir
                     )
+
+            # Write tvshow.nfo so Jellyfin classifies this folder as a TV show.
+            if os.path.isdir(target_folder):
+                _write_tvshow_nfo(target_folder, group.display_title)
 
             stats["groups"] += 1
 

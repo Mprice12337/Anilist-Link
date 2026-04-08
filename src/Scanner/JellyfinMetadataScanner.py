@@ -808,6 +808,11 @@ class JellyfinMetadataScanner:
             # (mixed libraries show Folders in the grid, not the media items)
             await self._jellyfin.upload_poster_to_parent_folder(item_id, cover_url)
 
+        # Write tvshow.nfo so Jellyfin classifies the folder as a TV show on
+        # the next library scan. This prevents mixed-library "versions" grouping
+        # where episode files are stacked as alternate cuts of one movie.
+        await self._jellyfin.write_tvshow_nfo(item_id, al_title)
+
         logger.info("  [applied] Jellyfin metadata written to '%s'", jellyfin_title)
 
     async def _get_anilist_metadata(
