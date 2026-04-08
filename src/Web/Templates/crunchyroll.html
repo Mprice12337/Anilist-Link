@@ -340,10 +340,21 @@
 
   {% if not log_entries %}
   <div class="card" style="text-align:center;padding:3rem 1.5rem">
+    {% if runs %}
+    <p class="text-muted" style="margin-bottom:0.5rem">
+      No applied syncs yet.
+    </p>
+    <p class="text-muted" style="margin-bottom:1.5rem;font-size:0.9rem">
+      You have {{ runs | length }} unapplied preview run{{ 's' if runs | length != 1 else '' }}.
+      Review and apply it from the Preview tab to record entries here.
+    </p>
+    <button class="btn btn-primary" onclick="switchTab('preview')">Review Preview</button>
+    {% else %}
     <p class="text-muted" style="margin-bottom:1.5rem">
-      No sync history yet. Apply a preview run to see entries here.
+      No sync history yet. Run a preview scan and apply it to see entries here.
     </p>
     <button class="btn btn-secondary" onclick="switchTab('preview')">Go to Preview</button>
+    {% endif %}
   </div>
   {% else %}
   <div style="overflow-x:auto">

@@ -773,7 +773,14 @@ class CrunchyrollClient:
             )
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             chrome_version_output = result.stdout.strip() or result.stderr.strip()
-            chrome_version = chrome_version_output.split()[-1].split(".")[0]
+            # Use regex to find the first numeric version (e.g. "146.0.7680.177")
+            # so that Debian build suffixes like "(bookworm)" are ignored.
+            version_match = re.search(r"(\d+)\.\d+", chrome_version_output)
+            if not version_match:
+                raise ValueError(
+                    f"Could not parse Chrome version from: {chrome_version_output!r}"
+                )
+            chrome_version = version_match.group(1)
             logger.info("Detected Chrome major version: %s", chrome_version)
             self._driver = uc.Chrome(
                 options=options,

@@ -9,6 +9,7 @@ page fetch goes through the async ``CrunchyrollClient``.
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any
 
 from src.Clients.AnilistClient import AniListClient
@@ -45,6 +46,8 @@ class WatchSyncer:
         self._episode_data_cache: dict[tuple[str, int], dict[str, Any]] = {}
         # Key: (user_id, anime_id), Value: highest_progress_processed
         self._processed: dict[tuple[str, int], int] = {}
+        # Unique ID for this sync run — used when writing cr_sync_log entries
+        self._sync_run_id: str = uuid.uuid4().hex
 
     # ==================================================================
     # Public entry point
@@ -352,7 +355,13 @@ class WatchSyncer:
 
             # Perform the update with rewatch logic
             result = await self._update_with_rewatch_logic(
-                anime_id, actual_episode, total_episodes, access_token, anilist_user_id
+                anime_id,
+                actual_episode,
+                total_episodes,
+                access_token,
+                anilist_user_id,
+                user_id=user_id,
+                show_title=anime_title,
             )
 
             if result["success"]:
@@ -480,7 +489,13 @@ class WatchSyncer:
                 return False
 
             result = await self._update_with_rewatch_logic(
-                anime_id, 1, 1, access_token, anilist_user_id
+                anime_id,
+                1,
+                1,
+                access_token,
+                anilist_user_id,
+                user_id=user_id,
+                show_title=anime_title,
             )
 
             if result["success"]:
@@ -604,6 +619,8 @@ class WatchSyncer:
         total_episodes: int | None,
         access_token: str,
         anilist_user_id: int,
+        user_id: str = "",
+        show_title: str = "",
     ) -> dict[str, Any]:
         """Update anime progress with intelligent rewatch detection.
 
@@ -693,6 +710,34 @@ class WatchSyncer:
                 )
 
             result["success"] = success
+
+            # Write an audit entry to cr_sync_log so auto-approve runs appear
+            # in the history tab alongside manually-applied preview runs.
+            if success and not self._dry_run and user_id:
+                before_status = (existing or {}).get("status") or ""
+                before_progress = (existing or {}).get("progress") or 0
+                after_status = (
+                    "COMPLETED"
+                    if (total_episodes and progress >= total_episodes)
+                    else "CURRENT"
+                )
+                try:
+                    await self._db.insert_cr_sync_log_entry(
+                        user_id=user_id,
+                        anilist_id=anime_id,
+                        show_title=show_title,
+                        before_status=before_status,
+                        before_progress=before_progress,
+                        after_status=after_status,
+                        after_progress=progress,
+                        sync_run_id=self._sync_run_id,
+                        cr_sync_preview_id=None,
+                    )
+                except Exception as log_exc:
+                    logger.warning(
+                        "Failed to write cr_sync_log for %s: %s", show_title, log_exc
+                    )
+
             return result
 
         except Exception as exc:

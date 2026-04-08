@@ -261,6 +261,12 @@ class RateLimiter:
         raw_remaining = headers.get("X-RateLimit-Remaining")
         if raw_remaining is not None:
             self._remaining = int(raw_remaining)
+            # Sync local bucket down to the server's actual remaining count if we
+            # are ahead of it.  Without this the local bucket (which refills
+            # continuously) drifts above AniList's fixed-window counter and lets
+            # requests through right up to the moment AniList returns a 429.
+            if self._tokens > self._remaining:
+                self._tokens = float(self._remaining)
 
         logger.debug(
             "Rate headers: limit=%d, remaining=%d, tokens=%.1f, refill=%.2f/s",

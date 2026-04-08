@@ -23,7 +23,7 @@ class CrunchyrollConfig:
     headless: bool = True
     max_pages: int = 10
     auto_sync_enabled: bool = True
-    auto_approve: bool = True
+    auto_approve: bool = False
 
 
 @dataclass(frozen=True)
