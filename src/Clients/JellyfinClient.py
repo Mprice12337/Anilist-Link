@@ -121,13 +121,37 @@ class JellyfinClient:
             )
         return libraries
 
-    async def get_library_shows(self, library_id: str) -> list[JellyfinShow]:
-        """Get all Series and Movie items in a library."""
+    async def get_library_shows(
+        self,
+        library_id: str,
+        by_season: bool = False,
+    ) -> list[JellyfinShow]:
+        """Get show containers from a library.
+
+        Args:
+            library_id: The Jellyfin library ID.
+            by_season: When True, return Season+Movie items so each season
+                subfolder is an independent scan target. After tvshow.nfo is
+                written, Jellyfin reclassifies season subfolders from Movie →
+                Season; this mode restores per-season granularity regardless of
+                NFO status. Specials (IndexNumber == 0) are excluded.
+                When False (default), return Series+Movie items — one entry per
+                show root, suited for the restructure wizard and show-level ops.
+        """
+        if by_season:
+            include_types = "Season,Movie"
+            allowed_types = {"Season", "Movie"}
+        else:
+            include_types = "Series,Movie"
+            allowed_types = {"Series", "Movie"}
+
         params = {
             "ParentId": library_id,
-            "IncludeItemTypes": "Series,Movie",
+            "IncludeItemTypes": include_types,
             "Recursive": "true",
-            "Fields": ("Path,Overview,Genres,Studios,OriginalTitle,ProductionYear"),
+            "Fields": (
+                "Path,Overview,Genres,Studios,OriginalTitle,ProductionYear,IndexNumber"
+            ),
             "SortBy": "SortName",
             "SortOrder": "Ascending",
         }
@@ -135,14 +159,17 @@ class JellyfinClient:
         resp.raise_for_status()
         shows: list[JellyfinShow] = []
         for item in resp.json().get("Items", []):
-            # Only process top-level containers — Series and Movie.
-            # Episodes, Seasons, and other child types are excluded.
-            if item.get("Type") not in ("Series", "Movie"):
+            item_type = item.get("Type", "")
+            if item_type not in allowed_types:
                 logger.debug(
-                    "Skipping non-Series/Movie item '%s' (Type=%s)",
+                    "Skipping item '%s' (Type=%s)",
                     item.get("Name", ""),
-                    item.get("Type", "unknown"),
+                    item_type,
                 )
+                continue
+            # In by_season mode, skip the auto-generated Specials bucket.
+            if by_season and item_type == "Season" and item.get("IndexNumber", 1) == 0:
+                logger.debug("Skipping Specials season for '%s'", item.get("Name", ""))
                 continue
             shows.append(
                 JellyfinShow(
@@ -154,7 +181,7 @@ class JellyfinClient:
                     library_id=library_id,
                     overview=item.get("Overview", "") or "",
                     genres=item.get("Genres", []) or [],
-                    media_type=item.get("Type", "Series"),
+                    media_type=item_type,
                 )
             )
         return shows
@@ -421,10 +448,10 @@ class JellyfinClient:
     async def _find_show_root_folder(self, item_id: str) -> dict[str, Any] | None:
         """Walk the Jellyfin item hierarchy to find the top-level show folder.
 
-        Returns the Folder item whose parent is a library root
+        Returns the Folder or Series item whose parent is a library root
         (CollectionFolder / UserView / AggregateFolder).  Handles:
-        - Items that ARE the show folder (returned directly)
-        - Movie/Episode children nested one or two levels inside a show folder
+        - Items that ARE the show folder/series (returned directly)
+        - Season/Movie/Episode children nested inside a Series or Folder container
         - Double-nested layouts: Show(year)/Season(year)/episodes
 
         Returns None if the hierarchy cannot be resolved.
@@ -445,7 +472,13 @@ class JellyfinClient:
         seen: set[str] = {item_id}
 
         while True:
-            if current.get("Type") == "Folder":
+            current_type = current.get("Type", "")
+
+            # Series is always the top-level show container — return immediately.
+            if current_type == "Series":
+                return current
+
+            if current_type == "Folder":
                 parent_id = current.get("ParentId", "")
                 if not parent_id:
                     break
@@ -456,7 +489,7 @@ class JellyfinClient:
                 logger.debug(
                     "_find_show_root_folder: current=%s(%s) -> parent=%s(%s)",
                     current.get("Id"),
-                    current.get("Type"),
+                    current_type,
                     parent.get("Id"),
                     parent_type,
                 )
@@ -480,7 +513,7 @@ class JellyfinClient:
                 seen.add(parent["Id"])
                 current = parent
             else:
-                # Non-folder (Movie, Episode, etc.) — step up to parent folder
+                # Season, Movie, Episode, etc. — step up to parent container
                 parent_id = current.get("ParentId", "")
                 if not parent_id:
                     break
@@ -490,7 +523,7 @@ class JellyfinClient:
                 logger.debug(
                     "_find_show_root_folder: non-folder %s(%s) -> parent %s(%s)",
                     current.get("Id"),
-                    current.get("Type"),
+                    current_type,
                     parent.get("Id"),
                     parent.get("Type"),
                 )

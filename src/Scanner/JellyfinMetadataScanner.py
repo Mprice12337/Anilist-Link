@@ -206,7 +206,7 @@ class JellyfinMetadataScanner:
             progress.current_title = "Counting shows..."
         for lib in eligible:
             try:
-                shows = await self._jellyfin.get_library_shows(lib.id)
+                shows = await self._jellyfin.get_library_shows(lib.id, by_season=True)
                 library_shows[lib.id] = shows
             except Exception:
                 logger.exception(

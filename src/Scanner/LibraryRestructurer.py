@@ -394,12 +394,22 @@ def _match_subdir_to_entry(
     best_entry: dict | None = None
     best_score = 0.0
     for entry in entries:
-        title = (entry.get("display_title") or "").lower()
-        if not title:
+        # display_title is English; title_romaji / title_english are enriched
+        # from anilist_cache before this function is called.  Check all three
+        # variants and take the highest score so that romaji-named folders
+        # match correctly even when display_title is English (and vice versa).
+        candidate_titles = [
+            t.lower()
+            for t in [
+                entry.get("display_title") or "",
+                entry.get("title_romaji") or "",
+                entry.get("title_english") or "",
+            ]
+            if t
+        ]
+        if not candidate_titles:
             continue
-        # Simple ratio: 2 * matching_chars / total_chars
-        # Use SequenceMatcher for a quick approximation
-        score = SequenceMatcher(None, clean, title).ratio()
+        score = max(SequenceMatcher(None, clean, t).ratio() for t in candidate_titles)
         if score > best_score:
             best_score = score
             best_entry = entry

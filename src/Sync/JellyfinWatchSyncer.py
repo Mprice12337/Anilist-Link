@@ -545,9 +545,18 @@ class JellyfinWatchSyncer:
         # several AniList entries (Structure B sequels that have no own mapping).
         mappings = await self._db.get_mapping_by_anilist_id(anilist_id)
         jf_mappings = [m for m in mappings if m["source"] == "jellyfin"]
-        if jf_mappings:
-            m = jf_mappings[0]
-            return m["source_id"], None, m.get("anilist_title", "")
+        # Try each mapping in order — skip stale entries (IDs that no longer
+        # exist in Jellyfin, e.g. after a library rescan regenerated item IDs).
+        for m in jf_mappings:
+            candidate_id: str = m["source_id"]
+            item = await self._jellyfin.get_item(candidate_id)
+            if item is not None:
+                return candidate_id, None, m.get("anilist_title", "")
+            logger.debug(
+                "Mapping source_id=%s for AniList #%d is stale — skipping",
+                candidate_id,
+                anilist_id,
+            )
 
         # Case 2: sequel — find which series group contains this anilist_id
         sge_row = await self._db.fetch_one(
@@ -570,8 +579,18 @@ class JellyfinWatchSyncer:
         if not parent_mapping:
             return None, None, ""
 
+        parent_id: str = parent_mapping["source_id"]
+        parent_item = await self._jellyfin.get_item(parent_id)
+        if parent_item is None:
+            logger.debug(
+                "Series group parent source_id=%s is stale for AniList #%d",
+                parent_id,
+                anilist_id,
+            )
+            return None, None, ""
+
         return (
-            parent_mapping["source_id"],
+            parent_id,
             season_number_sq,
             parent_mapping.get("anilist_title", ""),
         )
