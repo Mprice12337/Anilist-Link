@@ -148,6 +148,36 @@ async def _run_analysis_background(
         )
         app_state.onboarding_restructure_plan = plan  # type: ignore[attr-defined]
 
+        # Persist plan to DB so it appears in history regardless of whether applied.
+        # Store a group-level summary (not per-file) for the history view.
+        _plan_summary = json.dumps([
+            {
+                "title": g.display_title,
+                "source": ", ".join(os.path.basename(s) for s in g.source_folders),
+                "target": os.path.basename(g.target_folder),
+                "files": len(g.file_moves),
+            }
+            for g in plan.groups
+        ])
+        _tmpl = templates or {}
+        _plan_id = await db.save_restructure_plan(
+            source_dirs=json.dumps(source_dirs),
+            output_dir=output_dir or "",
+            level=level,
+            file_template=_tmpl.get("naming.file_template", ""),
+            folder_template=_tmpl.get("naming.folder_template", ""),
+            season_folder_template=_tmpl.get("naming.season_folder_template", ""),
+            movie_file_template=_tmpl.get("naming.movie_file_template", ""),
+            title_pref=_tmpl.get("app.title_display", "romaji"),
+            illegal_char_replacement=_tmpl.get("naming.illegal_char_replacement", ""),
+            group_count=plan.total_groups,
+            file_count=plan.total_files,
+            plan_summary=_plan_summary,
+            status="planned",
+        )
+        app_state.pending_plan_id = _plan_id  # type: ignore[attr-defined]
+        logger.info("Saved restructure plan id=%d to history", _plan_id)
+
         # Create/reuse a library for post-restructure seeding
         lib_paths = [output_dir] if output_dir else list(source_dirs)
         libraries = await db.get_all_libraries()
@@ -227,11 +257,21 @@ async def _run_execution(app_state: object) -> None:
     source_mode: str = app_state.restructure_source_mode  # type: ignore[attr-defined]
 
     restructurer = await LibraryRestructurer.from_settings(db, anilist_client)
+    pending_plan_id: int | None = getattr(app_state, "pending_plan_id", None)
 
     try:
         # Phase 1: Move/rename files
-        stats = await restructurer.execute(plan, progress)
+        stats = await restructurer.execute(plan, progress, plan_id=pending_plan_id)
         app_state.restructure_stats = stats  # type: ignore[attr-defined]
+
+        # Mark the plan as applied now that files have been moved.
+        if pending_plan_id:
+            from datetime import datetime, timezone
+            _applied_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            await db.update_restructure_plan_status(
+                pending_plan_id, "applied", applied_at=_applied_at
+            )
+            app_state.pending_plan_id = None  # type: ignore[attr-defined]
 
         # Clear restructure state so _auto_scan_media_servers proceeds
         app_state.restructure_plan = None  # type: ignore[attr-defined]
@@ -802,6 +842,12 @@ async def restructure_cancel(request: Request) -> RedirectResponse:
         # Flag so _auto_scan_media_servers skips redundant local index
         request.app.state.library_already_seeded = True  # type: ignore[attr-defined]
 
+    # Mark the pending plan as skipped in history
+    pending_plan_id: int | None = getattr(request.app.state, "pending_plan_id", None)
+    if pending_plan_id:
+        await db.update_restructure_plan_status(pending_plan_id, "skipped")
+        request.app.state.pending_plan_id = None  # type: ignore[attr-defined]
+
     # Clear all restructure state (including pending templates)
     request.app.state.restructure_plan = None
     request.app.state.onboarding_restructure_plan = None
@@ -855,6 +901,14 @@ async def restructure_execute(request: Request) -> RedirectResponse:
         await _seed_library_from_plan(request.app.state, plan)
         request.app.state.library_already_seeded = True  # type: ignore[attr-defined]
 
+        # Mark the pending plan as skipped
+        pending_plan_id_exe: int | None = getattr(
+            request.app.state, "pending_plan_id", None
+        )
+        if pending_plan_id_exe:
+            await db.update_restructure_plan_status(pending_plan_id_exe, "skipped")
+            request.app.state.pending_plan_id = None  # type: ignore[attr-defined]
+
         request.app.state.restructure_plan = None
         request.app.state.onboarding_restructure_plan = None
         request.app.state.restructure_progress = None
@@ -896,24 +950,38 @@ async def restructure_execute(request: Request) -> RedirectResponse:
 
 @router.get("/restructure/report", response_class=HTMLResponse)
 async def restructure_report_page(request: Request) -> HTMLResponse:
-    """Persistent restructure operation log — browseable at any time."""
+    """Restructure history — plan-level view with applied/planned status."""
+    import json as _json
+
     db = request.app.state.db
     templates = request.app.state.templates
 
-    limit = int(request.query_params.get("limit", "1000"))
-    status_filter = request.query_params.get("status", "")  # "", "success", "error"
+    plans = await db.get_restructure_plans(limit=100)
+    # Parse plan_summary JSON for each plan
+    for p in plans:
+        try:
+            p["summary_groups"] = _json.loads(p.get("plan_summary") or "[]")
+        except Exception:
+            p["summary_groups"] = []
+        try:
+            p["source_dirs_list"] = _json.loads(p.get("source_dirs") or "[]")
+        except Exception:
+            p["source_dirs_list"] = []
 
+    # Fall back to legacy file-move view if no plans recorded yet
+    limit = int(request.query_params.get("limit", "1000"))
+    status_filter = request.query_params.get("status", "")
     entries = await db.get_restructure_log(limit=limit)
     if status_filter:
         entries = [e for e in entries if e["status"] == status_filter]
-
     moved = sum(1 for e in entries if e["status"] == "success")
-    errors = sum(1 for e in entries if e["status"] == "error")
+    errors = sum(1 for e in entries if e["status"] != "success")
 
     return templates.TemplateResponse(
         "restructure_report.html",
         {
             "request": request,
+            "plans": plans,
             "entries": entries,
             "moved": moved,
             "errors": errors,
@@ -921,6 +989,101 @@ async def restructure_report_page(request: Request) -> HTMLResponse:
             "status_filter": status_filter,
         },
     )
+
+
+@router.get("/restructure/plan/{plan_id}", response_class=HTMLResponse)
+async def restructure_plan_detail(request: Request, plan_id: int) -> Response:
+    """Show detail view for a specific restructure plan."""
+    import json as _json
+
+    db = request.app.state.db
+    templates = request.app.state.templates
+
+    plan = await db.get_restructure_plan(plan_id)
+    if not plan:
+        return RedirectResponse(url="/restructure/report", status_code=303)
+
+    try:
+        summary_groups = _json.loads(plan.get("plan_summary") or "[]")
+    except Exception:
+        summary_groups = []
+    try:
+        source_dirs_list = _json.loads(plan.get("source_dirs") or "[]")
+    except Exception:
+        source_dirs_list = []
+
+    # Fetch actual executed moves for this plan (if applied)
+    log_entries = await db.get_restructure_log_for_plan(plan_id)
+
+    return templates.TemplateResponse(
+        "restructure_plan_detail.html",
+        {
+            "request": request,
+            "plan": plan,
+            "summary_groups": summary_groups,
+            "source_dirs_list": source_dirs_list,
+            "log_entries": log_entries,
+        },
+    )
+
+
+@router.post("/api/restructure/plan/{plan_id}/rerun", response_class=JSONResponse)
+async def restructure_plan_rerun(request: Request, plan_id: int) -> JSONResponse:
+    """Re-run analysis using the settings from a previous plan."""
+    if _is_restructure_busy(request.app.state):
+        return JSONResponse(
+            {"ok": False, "error": "A restructure operation is already running"},
+            status_code=409,
+        )
+
+    db = request.app.state.db
+    plan_row = await db.get_restructure_plan(plan_id)
+    if not plan_row:
+        return JSONResponse({"ok": False, "error": "Plan not found"}, status_code=404)
+
+    import json as _json
+
+    try:
+        source_dirs = _json.loads(plan_row.get("source_dirs") or "[]")
+    except Exception:
+        source_dirs = []
+
+    if not source_dirs:
+        return JSONResponse(
+            {"ok": False, "error": "No source directories in stored plan"},
+            status_code=400,
+        )
+
+    templates_dict = {
+        "naming.file_template": plan_row.get("file_template") or "",
+        "naming.folder_template": plan_row.get("folder_template") or "",
+        "naming.season_folder_template": plan_row.get("season_folder_template") or "",
+        "naming.movie_file_template": plan_row.get("movie_file_template") or "",
+        "app.title_display": plan_row.get("title_pref") or "romaji",
+        "naming.illegal_char_replacement": (
+            plan_row.get("illegal_char_replacement") or ""
+        ),
+    }
+    # Remove empty strings so from_settings fallbacks apply
+    templates_dict = {k: v for k, v in templates_dict.items() if v}
+
+    progress = RestructureProgress(status="running")
+    request.app.state.restructure_progress = progress
+    request.app.state.pending_naming_templates = templates_dict
+
+    spawn_background_task(
+        request.app.state,
+        _run_analysis_background(
+            request.app.state,
+            source_dirs=source_dirs,
+            output_dir=plan_row.get("output_dir") or "",
+            level=plan_row.get("level") or "full_restructure",
+            force_rescan=False,
+            templates=templates_dict,
+        ),
+    )
+
+    return JSONResponse({"ok": True, "redirect": "/"})
 
 
 @router.get("/restructure/results", response_class=HTMLResponse)

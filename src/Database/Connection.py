@@ -618,6 +618,26 @@ class DatabaseManager:
             (group_id,),
         )
 
+    async def get_series_group_entries_with_titles(
+        self, group_id: int
+    ) -> list[dict[str, Any]]:
+        """Return series group entries enriched with title_romaji/title_english
+        from anilist_cache.  Used by seed_library_items so that
+        _match_subdir_to_entry has full titles for fuzzy matching, not just
+        the abbreviated display_title stored in series_group_entries.
+        """
+        return await self.fetch_all(
+            """SELECT sge.*,
+                      ac.title_romaji, ac.title_english
+               FROM series_group_entries sge
+               LEFT JOIN anilist_cache ac
+                   ON ac.anilist_id = sge.anilist_id
+                  AND ac.expires_at > datetime('now')
+               WHERE sge.group_id = ?
+               ORDER BY sge.season_order""",
+            (group_id,),
+        )
+
     async def clear_series_group_entries(self, group_id: int) -> None:
         """Delete all entries for a series group (before re-populating)."""
         await self.execute(
@@ -718,13 +738,14 @@ class DatabaseManager:
         operation: str = "move",
         status: str = "success",
         error_message: str = "",
+        plan_id: int | None = None,
     ) -> None:
         """Log a single file restructure operation."""
         await self.execute(
             """INSERT INTO restructure_log
                    (group_title, source_path, destination_path,
-                    operation, status, error_message)
-               VALUES (?, ?, ?, ?, ?, ?)
+                    operation, status, error_message, plan_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 group_title,
@@ -733,6 +754,7 @@ class DatabaseManager:
                 operation,
                 status,
                 error_message,
+                plan_id,
             ),
         )
 
@@ -741,6 +763,95 @@ class DatabaseManager:
         return await self.fetch_all(
             "SELECT * FROM restructure_log ORDER BY executed_at DESC LIMIT ?",
             (limit,),
+        )
+
+    # ------------------------------------------------------------------
+    # Restructure Plans
+    # ------------------------------------------------------------------
+
+    async def save_restructure_plan(
+        self,
+        source_dirs: str,
+        output_dir: str,
+        level: str,
+        file_template: str,
+        folder_template: str,
+        season_folder_template: str,
+        movie_file_template: str,
+        title_pref: str,
+        illegal_char_replacement: str,
+        group_count: int,
+        file_count: int,
+        plan_summary: str,
+        status: str = "planned",
+    ) -> int:
+        """Persist a restructure plan (before or after execution). Returns plan id."""
+        cursor = await self.execute(
+            """INSERT INTO restructure_plans
+                   (source_dirs, output_dir, level,
+                    file_template, folder_template, season_folder_template,
+                    movie_file_template, title_pref, illegal_char_replacement,
+                    group_count, file_count, plan_summary, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                source_dirs,
+                output_dir,
+                level,
+                file_template,
+                folder_template,
+                season_folder_template,
+                movie_file_template,
+                title_pref,
+                illegal_char_replacement,
+                group_count,
+                file_count,
+                plan_summary,
+                status,
+            ),
+        )
+        return cursor.lastrowid or 0
+
+    async def update_restructure_plan_status(
+        self,
+        plan_id: int,
+        status: str,
+        applied_at: str | None = None,
+    ) -> None:
+        """Update the status of a restructure plan (e.g. to 'applied')."""
+        if applied_at:
+            await self.execute(
+                "UPDATE restructure_plans SET status=?, applied_at=? WHERE id=?",
+                (status, applied_at, plan_id),
+            )
+        else:
+            await self.execute(
+                "UPDATE restructure_plans SET status=? WHERE id=?",
+                (status, plan_id),
+            )
+
+    async def get_restructure_plans(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return recent restructure plans, newest first."""
+        return await self.fetch_all(
+            "SELECT * FROM restructure_plans ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        )
+
+    async def get_restructure_plan(self, plan_id: int) -> dict[str, Any] | None:
+        """Return a single restructure plan by id."""
+        return await self.fetch_one(
+            "SELECT * FROM restructure_plans WHERE id=?",
+            (plan_id,),
+        )
+
+    async def get_restructure_log_for_plan(
+        self, plan_id: int, limit: int = 1000
+    ) -> list[dict[str, Any]]:
+        """Return restructure_log entries linked to a specific plan."""
+        return await self.fetch_all(
+            "SELECT * FROM restructure_log"
+            " WHERE plan_id=? ORDER BY executed_at DESC LIMIT ?",
+            (plan_id, limit),
         )
 
     # ------------------------------------------------------------------

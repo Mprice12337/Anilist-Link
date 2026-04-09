@@ -604,8 +604,14 @@ class JellyfinMetadataScanner:
                 item_id, title, jf_real_seasons, tv_entries, confidence, dry_run
             )
         else:
+            # For flat-folder / Structure A, use the first TV entry's anilist_id
+            # so the series-level poster always shows Season 1 artwork regardless
+            # of which entry the matcher happened to match to.
+            _series_anilist_id = (
+                tv_entries[0]["anilist_id"] if tv_entries else anilist_id
+            )
             await self._apply_anilist_metadata(
-                item_id, title, anilist_id, confidence, method, dry_run
+                item_id, title, _series_anilist_id, confidence, method, dry_run
             )
 
     async def _apply_structure_b_metadata(

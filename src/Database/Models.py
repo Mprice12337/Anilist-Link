@@ -315,6 +315,7 @@ TABLES: dict[str, str] = {
             last_episode INTEGER NOT NULL DEFAULT 0,
             status TEXT NOT NULL DEFAULT '',
             synced_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(user_id, media_mapping_id),
             FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
             FOREIGN KEY (media_mapping_id)
                 REFERENCES media_mappings(id) ON DELETE CASCADE
@@ -412,7 +413,28 @@ TABLES: dict[str, str] = {
             operation TEXT NOT NULL DEFAULT 'move',
             status TEXT NOT NULL DEFAULT 'success',
             error_message TEXT NOT NULL DEFAULT '',
-            executed_at TEXT NOT NULL DEFAULT (datetime('now'))
+            executed_at TEXT NOT NULL DEFAULT (datetime('now')),
+            plan_id INTEGER
+        )
+    """,
+    "restructure_plans": """
+        CREATE TABLE IF NOT EXISTS restructure_plans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_dirs TEXT NOT NULL DEFAULT '[]',
+            output_dir TEXT NOT NULL DEFAULT '',
+            level TEXT NOT NULL DEFAULT 'full_restructure',
+            file_template TEXT NOT NULL DEFAULT '',
+            folder_template TEXT NOT NULL DEFAULT '',
+            season_folder_template TEXT NOT NULL DEFAULT '',
+            movie_file_template TEXT NOT NULL DEFAULT '',
+            title_pref TEXT NOT NULL DEFAULT 'romaji',
+            illegal_char_replacement TEXT NOT NULL DEFAULT '',
+            group_count INTEGER NOT NULL DEFAULT 0,
+            file_count INTEGER NOT NULL DEFAULT 0,
+            plan_summary TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'planned',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            applied_at TEXT
         )
     """,
     "libraries": """

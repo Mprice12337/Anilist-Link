@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Anilist-Link: Restructure Report{% endblock %}
+{% block title %}Anilist-Link: Restructure History{% endblock %}
 
 {% block content %}
 <style>
@@ -11,38 +11,69 @@
     gap: 1rem;
     margin-bottom: 1.5rem;
 }
-.stat-pills {
+.plan-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 1rem;
+    overflow: hidden;
+}
+.plan-card-header {
     display: flex;
+    align-items: center;
     gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: var(--bg-card);
     flex-wrap: wrap;
 }
-.stat-pill {
-    padding: 0.3rem 0.85rem;
-    border-radius: 999px;
-    font-size: 0.82rem;
-    font-weight: 600;
+.plan-card-body {
+    padding: 0.75rem 1rem;
+    font-size: 0.85rem;
 }
-.stat-pill.success { background: rgba(34,197,94,0.15); color: #22c55e; }
-.stat-pill.error   { background: rgba(239,68,68,0.15);  color: #ef4444; }
-.stat-pill.total   { background: var(--bg-card); color: var(--text-muted); border: 1px solid var(--border); }
-.filter-bar {
+.badge {
+    display: inline-block;
+    padding: 0.2rem 0.65rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.badge-applied  { background: rgba(34,197,94,0.15); color: #22c55e; }
+.badge-planned  { background: rgba(99,102,241,0.15); color: #818cf8; }
+.badge-skipped  { background: rgba(156,163,175,0.15); color: #9ca3af; }
+.plan-meta {
+    color: var(--text-muted);
+    font-size: 0.8rem;
     display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
+    gap: 1rem;
     flex-wrap: wrap;
     align-items: center;
 }
-.filter-bar a {
-    padding: 0.3rem 0.85rem;
-    border-radius: var(--radius);
-    font-size: 0.83rem;
-    border: 1px solid var(--border);
-    color: var(--text-muted);
-    text-decoration: none;
-    transition: background 0.15s, color 0.15s;
+.plan-groups {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-top: 0.5rem;
 }
-.filter-bar a:hover { background: var(--bg-card); color: var(--text); }
-.filter-bar a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.plan-group-tag {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.2rem 0.55rem;
+    font-size: 0.76rem;
+    color: var(--text-muted);
+}
+.plan-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    flex-wrap: wrap;
+}
+.empty-state {
+    text-align: center;
+    padding: 3rem 1rem;
+    color: var(--text-muted);
+}
+/* Legacy file-move table (shown below plans) */
 .report-table {
     width: 100%;
     border-collapse: collapse;
@@ -64,39 +95,92 @@
 .report-table tr:last-child td { border-bottom: none; }
 .report-table tr:hover td { background: var(--bg-card); }
 .mono { font-family: monospace; font-size: 0.78rem; word-break: break-all; }
-.status-ok   { color: #22c55e; font-weight: 600; }
-.status-err  { color: #ef4444; font-weight: 600; }
-.path-cell { max-width: 280px; }
-.empty-state {
-    text-align: center;
-    padding: 3rem 1rem;
-    color: var(--text-muted);
-}
+.status-ok  { color: #22c55e; font-weight: 600; }
+.status-err { color: #ef4444; font-weight: 600; }
+.path-cell  { max-width: 280px; }
 </style>
 
 <div class="report-header">
     <div>
-        <h1 style="font-size: 1.4rem; margin: 0 0 0.25rem">Restructure Report</h1>
+        <h1 style="font-size: 1.4rem; margin: 0 0 0.25rem">Restructure History</h1>
         <p class="text-muted" style="margin: 0; font-size: 0.88rem">
-            Full log of all file organization operations.
+            Plans are saved at analyze time — regardless of whether they were applied.
         </p>
     </div>
-    <div class="stat-pills">
-        <span class="stat-pill total">{{ total }} entries</span>
-        {% if moved %}<span class="stat-pill success">✓ {{ moved }} moved</span>{% endif %}
-        {% if errors %}<span class="stat-pill error">✗ {{ errors }} errors</span>{% endif %}
-    </div>
+    <a href="/restructure" class="btn btn-primary">New Restructure</a>
 </div>
 
-<div class="card">
-    <div class="filter-bar">
-        <span style="font-size:0.82rem;color:var(--text-muted);margin-right:0.25rem">Filter:</span>
-        <a href="/restructure/report" class="{{ 'active' if not status_filter else '' }}">All</a>
-        <a href="/restructure/report?status=success" class="{{ 'active' if status_filter == 'success' else '' }}">Moved</a>
-        <a href="/restructure/report?status=error" class="{{ 'active' if status_filter == 'error' else '' }}">Errors</a>
-    </div>
+{% if plans %}
+<div>
+    {% for plan in plans %}
+    <div class="plan-card">
+        <div class="plan-card-header">
+            {% if plan.status == 'applied' %}
+                <span class="badge badge-applied">&#10003; Applied</span>
+            {% elif plan.status == 'skipped' %}
+                <span class="badge badge-skipped">Skipped</span>
+            {% else %}
+                <span class="badge badge-planned">Planned</span>
+            {% endif %}
 
-    {% if entries %}
+            <div class="plan-meta">
+                <span>{{ plan.group_count }} show{% if plan.group_count != 1 %}s{% endif %},
+                      {{ plan.file_count }} file{% if plan.file_count != 1 %}s{% endif %}</span>
+                <span>{{ plan.level | replace('_', ' ') | title }}</span>
+                <span title="{{ plan.created_at }}">
+                    {{ plan.created_at.split('T')[0] if 'T' in plan.created_at else plan.created_at.split(' ')[0] }}
+                    {{ plan.created_at.split('T')[1].split('.')[0] if 'T' in plan.created_at else (plan.created_at.split(' ')[1] if ' ' in plan.created_at else '') }}
+                </span>
+                {% if plan.applied_at %}
+                <span class="text-muted">Applied:
+                    {{ plan.applied_at.split('T')[0] if 'T' in plan.applied_at else plan.applied_at.split(' ')[0] }}
+                </span>
+                {% endif %}
+            </div>
+
+            <div style="margin-left:auto;display:flex;gap:0.5rem;flex-shrink:0">
+                {% if plan.group_count > 0 %}
+                <a href="/restructure/plan/{{ plan.id }}" class="btn btn-sm btn-secondary">Details</a>
+                {% endif %}
+                {% if plan.status != 'applied' %}
+                <button class="btn btn-sm btn-primary" onclick="rerunPlan({{ plan.id }}, this)">Re-run Analysis</button>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if plan.source_dirs_list %}
+        <div class="plan-card-body">
+            <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.35rem">Source dirs:</div>
+            <div class="plan-groups">
+                {% for d in plan.source_dirs_list %}
+                <span class="plan-group-tag" title="{{ d }}">{{ d.split('/')[-1] or d }}</span>
+                {% endfor %}
+            </div>
+            {% if plan.summary_groups %}
+            <div style="font-size:0.78rem;color:var(--text-muted);margin:0.5rem 0 0.35rem">Shows in plan:</div>
+            <div class="plan-groups">
+                {% for g in plan.summary_groups[:12] %}
+                <span class="plan-group-tag" title="{{ g.source }} → {{ g.target }}">
+                    {{ g.title }}{% if g.files %} <span style="opacity:0.6">({{ g.files }})</span>{% endif %}
+                </span>
+                {% endfor %}
+                {% if plan.summary_groups | length > 12 %}
+                <span class="plan-group-tag" style="opacity:0.6">+{{ (plan.summary_groups | length) - 12 }} more</span>
+                {% endif %}
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+
+{% elif entries %}
+{# Legacy view: no plans saved yet, show raw file-move log #}
+<div class="card">
+    <p class="text-muted" style="font-size:0.85rem;margin:0 0 1rem">
+        Showing legacy file-move log. Future runs will be saved as plans.
+    </p>
     <div style="overflow-x: auto; max-height: 70vh; overflow-y: auto;">
         <table class="report-table">
             <thead>
@@ -126,9 +210,9 @@
                     </td>
                     <td>
                         {% if e.status == 'success' %}
-                            <span class="status-ok">✓ moved</span>
+                            <span class="status-ok">&#10003; moved</span>
                         {% else %}
-                            <span class="status-err" title="{{ e.error_message }}">✗ {{ e.error_message or 'error' }}</span>
+                            <span class="status-err" title="{{ e.error_message }}">&#10007; {{ e.error_message or 'error' }}</span>
                         {% endif %}
                     </td>
                     <td style="white-space:nowrap;color:var(--text-muted)">
@@ -142,16 +226,38 @@
             </tbody>
         </table>
     </div>
-    {% else %}
-    <div class="empty-state">
-        <div style="font-size:2rem;margin-bottom:0.5rem">📂</div>
-        <p>No restructure operations found{% if status_filter %} for this filter{% endif %}.</p>
-        {% if status_filter %}
-        <a href="/restructure/report" class="btn btn-secondary" style="margin-top:0.5rem">Show all</a>
-        {% else %}
-        <p style="font-size:0.85rem">Run a <a href="/restructure" style="color:var(--accent)">library restructure</a> to see results here.</p>
-        {% endif %}
-    </div>
-    {% endif %}
 </div>
+
+{% else %}
+<div class="empty-state">
+    <div style="font-size:2rem;margin-bottom:0.5rem">&#128194;</div>
+    <p>No restructure history yet.</p>
+    <p style="font-size:0.85rem">Run a <a href="/restructure" style="color:var(--accent)">library restructure</a> to see results here.</p>
+</div>
+{% endif %}
+
+<script>
+async function rerunPlan(planId, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Starting\u2026';
+    try {
+        var resp = await fetch('/api/restructure/plan/' + planId + '/rerun', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+        });
+        var data = await resp.json();
+        if (data.ok) {
+            window.location.href = data.redirect || '/';
+        } else {
+            alert(data.error || 'Failed to start re-run');
+            btn.disabled = false;
+            btn.textContent = 'Re-run Analysis';
+        }
+    } catch (e) {
+        alert('Request failed: ' + e.message);
+        btn.disabled = false;
+        btn.textContent = 'Re-run Analysis';
+    }
+}
+</script>
 {% endblock %}

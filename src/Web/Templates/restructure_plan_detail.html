@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+{% block title %}Anilist-Link: Restructure Plan #{{ plan.id }}{% endblock %}
+
+{% block content %}
+<style>
+.detail-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-bottom: 1.5rem;
+}
+.badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 999px;
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+.badge-applied  { background: rgba(34,197,94,0.15); color: #22c55e; }
+.badge-planned  { background: rgba(99,102,241,0.15); color: #818cf8; }
+.badge-skipped  { background: rgba(156,163,175,0.15); color: #9ca3af; }
+.meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+}
+.meta-item {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.6rem 0.9rem;
+}
+.meta-label { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.15rem; }
+.meta-value { font-size: 0.9rem; font-weight: 600; }
+.group-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 0.75rem;
+    padding: 0.65rem 0.9rem;
+    font-size: 0.85rem;
+}
+.group-title { font-weight: 600; margin-bottom: 0.25rem; }
+.group-arrow { color: var(--accent); margin: 0 0.4rem; }
+.report-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+}
+.report-table th {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 2px solid var(--border);
+    color: var(--text-muted);
+    font-weight: 600;
+    white-space: nowrap;
+}
+.report-table td {
+    padding: 0.4rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+}
+.report-table tr:last-child td { border-bottom: none; }
+.report-table tr:hover td { background: var(--bg-card); }
+.mono { font-family: monospace; font-size: 0.78rem; word-break: break-all; }
+.status-ok  { color: #22c55e; font-weight: 600; }
+.status-err { color: #ef4444; font-weight: 600; }
+.path-cell  { max-width: 260px; }
+</style>
+
+<div class="detail-header">
+    <a href="/restructure/report" class="btn btn-secondary" style="padding:0.3rem 0.7rem;font-size:0.85rem">&larr; History</a>
+    <h1 style="font-size:1.3rem;margin:0">Plan #{{ plan.id }}</h1>
+    {% if plan.status == 'applied' %}
+        <span class="badge badge-applied">&#10003; Applied</span>
+    {% elif plan.status == 'skipped' %}
+        <span class="badge badge-skipped">Skipped</span>
+    {% else %}
+        <span class="badge badge-planned">Planned (not applied)</span>
+    {% endif %}
+    {% if plan.status != 'applied' %}
+    <button class="btn btn-primary" onclick="rerunPlan({{ plan.id }}, this)" style="margin-left:auto">Re-run Analysis</button>
+    {% endif %}
+</div>
+
+<div class="meta-grid">
+    <div class="meta-item">
+        <div class="meta-label">Operation</div>
+        <div class="meta-value">{{ plan.level | replace('_', ' ') | title }}</div>
+    </div>
+    <div class="meta-item">
+        <div class="meta-label">Shows</div>
+        <div class="meta-value">{{ plan.group_count }}</div>
+    </div>
+    <div class="meta-item">
+        <div class="meta-label">Files</div>
+        <div class="meta-value">{{ plan.file_count }}</div>
+    </div>
+    <div class="meta-item">
+        <div class="meta-label">Title Pref</div>
+        <div class="meta-value">{{ plan.title_pref | title }}</div>
+    </div>
+    <div class="meta-item">
+        <div class="meta-label">Created</div>
+        <div class="meta-value" style="font-size:0.8rem">
+            {{ plan.created_at.split('T')[0] if 'T' in plan.created_at else plan.created_at.split(' ')[0] }}
+        </div>
+    </div>
+    {% if plan.applied_at %}
+    <div class="meta-item">
+        <div class="meta-label">Applied</div>
+        <div class="meta-value" style="font-size:0.8rem">
+            {{ plan.applied_at.split('T')[0] if 'T' in plan.applied_at else plan.applied_at.split(' ')[0] }}
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+{% if source_dirs_list %}
+<div class="card" style="margin-bottom:1rem;padding:0.75rem 1rem;font-size:0.85rem">
+    <div class="text-muted" style="font-size:0.78rem;margin-bottom:0.4rem">Source directories</div>
+    {% for d in source_dirs_list %}
+    <div class="mono">{{ d }}</div>
+    {% endfor %}
+    {% if plan.output_dir %}
+    <div class="text-muted" style="font-size:0.78rem;margin:0.5rem 0 0.2rem">Output directory</div>
+    <div class="mono">{{ plan.output_dir }}</div>
+    {% endif %}
+</div>
+{% endif %}
+
+{% if plan.file_template or plan.folder_template %}
+<div class="card" style="margin-bottom:1.5rem;padding:0.75rem 1rem;font-size:0.82rem">
+    <div class="text-muted" style="font-size:0.78rem;margin-bottom:0.4rem">Naming templates</div>
+    <div style="display:grid;grid-template-columns:auto 1fr;gap:0.25rem 0.75rem;align-items:baseline">
+        {% if plan.file_template %}
+        <span class="text-muted">Episode:</span><code>{{ plan.file_template }}</code>
+        {% endif %}
+        {% if plan.folder_template %}
+        <span class="text-muted">Folder:</span><code>{{ plan.folder_template }}</code>
+        {% endif %}
+        {% if plan.season_folder_template %}
+        <span class="text-muted">Season:</span><code>{{ plan.season_folder_template }}</code>
+        {% endif %}
+        {% if plan.movie_file_template %}
+        <span class="text-muted">Movie:</span><code>{{ plan.movie_file_template }}</code>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+{% if summary_groups %}
+<h2 style="font-size:1.1rem;margin:0 0 0.75rem">Planned Changes ({{ summary_groups | length }} show{% if summary_groups | length != 1 %}s{% endif %})</h2>
+<div>
+    {% for g in summary_groups %}
+    <div class="group-card">
+        <div class="group-title">{{ g.title }}</div>
+        <div style="color:var(--text-muted)">
+            <span class="mono">{{ g.source }}</span>
+            <span class="group-arrow">&rarr;</span>
+            <span class="mono">{{ g.target }}</span>
+            <span style="margin-left:0.5rem;font-size:0.78rem">({{ g.files }} file{% if g.files != 1 %}s{% endif %})</span>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if log_entries %}
+<h2 style="font-size:1.1rem;margin:1.5rem 0 0.75rem">Executed Moves ({{ log_entries | length }})</h2>
+<div class="card" style="padding:0">
+    <div style="overflow-x:auto;max-height:60vh;overflow-y:auto">
+        <table class="report-table">
+            <thead>
+                <tr>
+                    <th>Show</th>
+                    <th>Source</th>
+                    <th>Destination</th>
+                    <th>Result</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for e in log_entries %}
+                <tr>
+                    <td>{{ e.group_title }}</td>
+                    <td class="path-cell">
+                        <span class="mono" title="{{ e.source_path }}">{{ e.source_path.split('/')[-1] }}</span>
+                        <div style="font-size:0.72rem;color:var(--text-muted)">{{ '/'.join(e.source_path.split('/')[:-1]) }}</div>
+                    </td>
+                    <td class="path-cell">
+                        <span class="mono" title="{{ e.destination_path }}">{{ e.destination_path.split('/')[-1] }}</span>
+                        <div style="font-size:0.72rem;color:var(--text-muted)">{{ '/'.join(e.destination_path.split('/')[:-1]) }}</div>
+                    </td>
+                    <td>
+                        {% if e.status == 'success' %}
+                            <span class="status-ok">&#10003; moved</span>
+                        {% else %}
+                            <span class="status-err" title="{{ e.error_message }}">&#10007; {{ e.error_message or 'error' }}</span>
+                        {% endif %}
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% elif plan.status == 'applied' %}
+<p class="text-muted" style="font-size:0.85rem;margin-top:1rem">No file-move log entries linked to this plan.</p>
+{% endif %}
+
+<script>
+async function rerunPlan(planId, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Starting\u2026';
+    try {
+        var resp = await fetch('/api/restructure/plan/' + planId + '/rerun', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+        });
+        var data = await resp.json();
+        if (data.ok) {
+            window.location.href = data.redirect || '/';
+        } else {
+            alert(data.error || 'Failed to start re-run');
+            btn.disabled = false;
+            btn.textContent = 'Re-run Analysis';
+        }
+    } catch (e) {
+        alert('Request failed: ' + e.message);
+        btn.disabled = false;
+        btn.textContent = 'Re-run Analysis';
+    }
+}
+</script>
+{% endblock %}
