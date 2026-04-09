@@ -816,18 +816,16 @@ class LibraryRestructurer:
             tv_season_order = 1
             entry_format = ""
             entry_episodes: int | None = None
-            tv_count = 0
             for entry in entries:
                 fmt = entry.get("format") or ""
-                if fmt in _TV_FORMATS:
-                    tv_count += 1
                 if entry["anilist_id"] == si.anilist_id:
                     season_order = entry["season_order"]
                     entry_format = fmt
                     entry_episodes = entry.get("episodes")
-                    # TV entries get a TV-only season number; OVA/ONA/SPECIAL/MOVIE
-                    # entries get 0 so the restructurer routes them to Specials.
-                    tv_season_order = tv_count if fmt in _TV_FORMATS else 0
+                    # Use the chronological season_order for ALL formats so that
+                    # OVA/ONA/SPECIAL/MOVIE entries are never routed to S00 /
+                    # Specials — they keep their position in the series group.
+                    tv_season_order = season_order
                     break
 
             group_shows[group_id].append(
@@ -958,10 +956,8 @@ class LibraryRestructurer:
             dest_filenames: dict[str, str] = {}
 
             for show_info in shows_in_group:
-                # Use TV-only season number for folder naming so that OVA/ONA/
-                # SPECIAL/MOVIE entries don't shift the numbered TV seasons.
-                # tv_season_order == 0 means the entry is not a TV season; its
-                # files are routed to the Specials folder.
+                # Use the chronological season_order for all entries (TV and non-TV).
+                # No entry is routed to S00/Specials; each keeps its group position.
                 season_num = show_info["tv_season_order"]
                 src_folder = show_info["local_path"]
                 group_si = show_by_anilist.get(show_info["anilist_id"])
