@@ -10,7 +10,7 @@ from src.Database.Models import INDEXES, TABLES
 
 logger = logging.getLogger(__name__)
 
-LATEST_VERSION = 3
+LATEST_VERSION = 4
 
 
 async def run_migrations(db: aiosqlite.Connection) -> None:
@@ -35,6 +35,10 @@ async def run_migrations(db: aiosqlite.Connection) -> None:
 
     if current < 3:
         await _apply_v3(db)
+        current = 3
+
+    if current < 4:
+        await _apply_v4(db)
 
 
 async def _get_current_version(db: aiosqlite.Connection) -> int:
@@ -194,3 +198,34 @@ async def _apply_v3(db: aiosqlite.Connection) -> None:
     await db.execute("INSERT INTO schema_version (version) VALUES (?)", (3,))
     await db.commit()
     logger.info("Migration v3 applied: restructure_plans table added")
+
+
+async def _apply_v4(db: aiosqlite.Connection) -> None:
+    """Add watch_sync_log table for Plex/Jellyfin sync audit trail."""
+    logger.info("Applying migration v4: adding watch_sync_log table")
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS watch_sync_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL DEFAULT '',
+            user_id TEXT NOT NULL DEFAULT '',
+            anilist_id INTEGER NOT NULL DEFAULT 0,
+            show_title TEXT NOT NULL DEFAULT '',
+            before_status TEXT NOT NULL DEFAULT '',
+            before_progress INTEGER NOT NULL DEFAULT 0,
+            after_status TEXT NOT NULL DEFAULT '',
+            after_progress INTEGER NOT NULL DEFAULT 0,
+            applied_at TEXT NOT NULL DEFAULT (datetime('now')),
+            undone_at TEXT
+        )
+    """)
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_watch_sync_log_anilist"
+        " ON watch_sync_log(anilist_id)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_watch_sync_log_source"
+        " ON watch_sync_log(source)"
+    )
+    await db.execute("INSERT INTO schema_version (version) VALUES (?)", (4,))
+    await db.commit()
+    logger.info("Migration v4 applied: watch_sync_log table added")

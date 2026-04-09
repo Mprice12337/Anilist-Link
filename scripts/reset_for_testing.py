@@ -1,8 +1,24 @@
-"""Reset database for onboarding re-test.
+"""Reset all media/operational data while preserving credentials and auth.
 
-Clears all operational data (settings, mappings, library items, logs, etc.)
-while keeping AniList cache, series groups, and series group entries intact
-so the API doesn't need to be re-queried.
+Clears:
+  - All media mappings, scans, and library snapshots
+  - Sync state, watch logs, CR preview/history
+  - Series groups, AniList cache, watchlist cache
+  - Download requests and Sonarr/Radarr mappings
+  - Restructure plans and logs
+  - Onboarding status (so the wizard runs again)
+  - Notification banners
+
+Preserves (untouched):
+  - app_settings credentials (URLs, API keys, tokens, passwords)
+  - users  — AniList OAuth tokens
+  - plex_users  — linked Plex account
+  - jellyfin_users  — linked Jellyfin account
+  - cr_session_cache  — Crunchyroll browser session/cookies
+  - schema_version
+
+This lets you go through onboarding fresh without having to re-enter or
+re-authenticate any credentials.
 
 Usage:
     python scripts/reset_for_testing.py [--db-path PATH] [--confirm]
@@ -15,42 +31,65 @@ import sqlite3
 import sys
 from pathlib import Path
 
-# Tables to wipe completely
+# ---------------------------------------------------------------------------
+# Tables wiped entirely
+# ---------------------------------------------------------------------------
 TABLES_TO_CLEAR = [
     "media_mappings",
-    "users",
     "sync_state",
     "manual_overrides",
-    "cr_session_cache",
-    "app_settings",
     "plex_media",
     "jellyfin_media",
-    "restructure_log",
-    "libraries",
-    "library_items",
-    "plex_users",
-    "jellyfin_users",
-    "cr_sync_preview",
-    "cr_sync_log",
-    "download_requests",
-]
-
-# Tables to preserve (not touched)
-TABLES_TO_KEEP = [
-    "schema_version",
-    "anilist_cache",
     "series_groups",
     "series_group_entries",
+    "anilist_cache",
+    "user_watchlist",
+    "restructure_log",
+    "restructure_plans",
+    "libraries",
+    "library_items",
+    "cr_sync_preview",
+    "cr_sync_log",
+    "watch_sync_log",
+    "download_requests",
+    "anilist_sonarr_mapping",
+    "anilist_radarr_mapping",
+    "sonarr_series_cache",
+    "radarr_movie_cache",
 ]
+
+# ---------------------------------------------------------------------------
+# Tables kept entirely
+# ---------------------------------------------------------------------------
+TABLES_TO_KEEP = [
+    "schema_version",
+    "users",            # AniList OAuth tokens
+    "plex_users",       # linked Plex account
+    "jellyfin_users",   # linked Jellyfin account
+    "cr_session_cache", # Crunchyroll browser session
+]
+
+# app_settings rows whose key starts with any of these prefixes are deleted.
+# Everything else (credentials, service URLs, scheduler config, etc.) is kept.
+SETTINGS_PREFIXES_TO_CLEAR = [
+    "onboarding.",
+    "notifications",    # exact key — notification banners
+]
+
+
+def _should_clear_setting(key: str) -> bool:
+    for prefix in SETTINGS_PREFIXES_TO_CLEAR:
+        if key == prefix or key.startswith(prefix):
+            return True
+    return False
 
 
 def find_db() -> Path:
     """Locate the database using the same logic as Config.py."""
     config_dir = Path("/config")
-    if config_dir.exists():
+    if config_dir.exists() and config_dir.is_dir():
         return config_dir / "anilist_link.db"
-    local = Path("./data")
-    return local / "anilist_link.db"
+    return Path("./data/anilist_link.db")
 
 
 def reset(db_path: Path, confirm: bool) -> None:
@@ -58,70 +97,102 @@ def reset(db_path: Path, confirm: bool) -> None:
         print(f"Database not found: {db_path}")
         sys.exit(1)
 
-    print(f"Database: {db_path}")
-    print()
-    print("Will CLEAR:")
+    con = sqlite3.connect(db_path)
+    con.row_factory = sqlite3.Row
+    cur = con.cursor()
+
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    existing = {row[0] for row in cur.fetchall()}
+
+    # Identify which app_settings rows will be deleted
+    settings_to_delete: list[str] = []
+    settings_to_keep: list[str] = []
+    if "app_settings" in existing:
+        cur.execute("SELECT key FROM app_settings ORDER BY key")
+        for row in cur.fetchall():
+            key = row[0]
+            if _should_clear_setting(key):
+                settings_to_delete.append(key)
+            else:
+                settings_to_keep.append(key)
+
+    # Print plan
+    print(f"\nDatabase: {db_path}\n")
+    print("Will CLEAR (full tables):")
     for t in TABLES_TO_CLEAR:
-        print(f"  - {t}")
-    print()
-    print("Will KEEP:")
+        marker = "  -" if t in existing else "  · (not found)"
+        print(f"  {'·' if t not in existing else '-'} {t}")
+
+    if settings_to_delete:
+        print(f"\n  - app_settings rows ({len(settings_to_delete)}):")
+        for k in settings_to_delete:
+            print(f"      {k}")
+
+    print("\nWill KEEP:")
     for t in TABLES_TO_KEEP:
         print(f"  ✓ {t}")
+    if settings_to_keep:
+        print(f"  ✓ app_settings credentials ({len(settings_to_keep)} rows kept)")
+
     print()
 
     if not confirm:
         answer = input("Proceed? [y/N] ").strip().lower()
         if answer != "y":
             print("Aborted.")
+            con.close()
             sys.exit(0)
 
-    con = sqlite3.connect(db_path)
-    con.row_factory = sqlite3.Row
-    cur = con.cursor()
+    # ── Execute ─────────────────────────────────────────────────────────
+    cleared: list[tuple[str, int]] = []
+    skipped: list[str] = []
 
-    # Get actual tables present in the DB so we don't fail on missing ones
-    cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    existing = {row[0] for row in cur.fetchall()}
-
-    cleared = []
-    skipped = []
     for table in TABLES_TO_CLEAR:
         if table in existing:
-            cur.execute(f"DELETE FROM {table}")  # noqa: S608 (trusted constant list)
-            count = cur.rowcount
-            cleared.append((table, count))
+            cur.execute(f"DELETE FROM {table}")  # noqa: S608
+            cleared.append((table, cur.rowcount))
         else:
             skipped.append(table)
 
+    # Selectively clear app_settings
+    if settings_to_delete and "app_settings" in existing:
+        placeholders = ",".join("?" for _ in settings_to_delete)
+        cur.execute(
+            f"DELETE FROM app_settings WHERE key IN ({placeholders})",  # noqa: S608
+            settings_to_delete,
+        )
+        cleared.append(("app_settings (onboarding/notifications)", cur.rowcount))
+
     con.commit()
 
-    # Report preserved row counts
-    print("Results:")
+    # ── Report ───────────────────────────────────────────────────────────
+    print("\nResults:")
     for table, count in cleared:
-        print(f"  cleared {table:30s}  ({count} rows removed)")
+        print(f"  cleared  {table:<42}  ({count} rows removed)")
     for table in skipped:
-        print(f"  skipped {table:30s}  (table not found)")
-    print()
+        print(f"  skipped  {table:<42}  (table not found)")
 
-    preserved = []
+    print("\nPreserved:")
     for table in TABLES_TO_KEEP:
         if table in existing:
             cur.execute(f"SELECT COUNT(*) FROM {table}")  # noqa: S608
             n = cur.fetchone()[0]
-            preserved.append((table, n))
-
-    print("Preserved:")
-    for table, n in preserved:
-        print(f"  kept    {table:30s}  ({n} rows)")
+            print(f"  kept     {table:<42}  ({n} rows)")
+    if settings_to_keep:
+        print(f"  kept     {'app_settings (credentials)':<42}  ({len(settings_to_keep)} rows)")
 
     con.close()
-    print()
-    print("Done. Restart the app to begin onboarding fresh.")
+    print("\nDone. Restart the app to go through onboarding with existing credentials.\n")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db-path", type=Path, help="Path to the SQLite database file")
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--db-path", type=Path, help="Path to the SQLite database file"
+    )
     parser.add_argument(
         "--confirm", action="store_true", help="Skip the confirmation prompt"
     )

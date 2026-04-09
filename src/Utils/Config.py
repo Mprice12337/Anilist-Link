@@ -31,6 +31,7 @@ class PlexConfig:
     url: str = ""
     token: str = ""
     anime_library_keys: tuple[str, ...] = ()
+    watch_sync_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ class JellyfinConfig:
     url: str = ""
     api_key: str = ""
     anime_library_ids: tuple[str, ...] = ()
+    watch_sync_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -195,6 +197,7 @@ def load_config() -> AppConfig:
             url=_env("PLEX_URL"),
             token=_env("PLEX_TOKEN"),
             anime_library_keys=_parse_json_list(_env("PLEX_ANIME_LIBRARIES", "[]")),
+            watch_sync_enabled=_env_bool("PLEX_WATCH_SYNC_ENABLED", False),
         ),
         jellyfin=JellyfinConfig(
             url=_env("JELLYFIN_URL"),
@@ -202,6 +205,7 @@ def load_config() -> AppConfig:
             anime_library_ids=_parse_json_list(
                 _env("JELLYFIN_ANIME_LIBRARY_IDS", "[]")
             ),
+            watch_sync_enabled=_env_bool("JELLYFIN_WATCH_SYNC_ENABLED", False),
         ),
         sonarr=SonarrConfig(
             url=_env("SONARR_URL"),
@@ -252,9 +256,11 @@ SETTINGS_MAP: dict[str, tuple[str, str]] = {
     "plex.url": ("PLEX_URL", ""),
     "plex.token": ("PLEX_TOKEN", ""),
     "plex.anime_library_keys": ("PLEX_ANIME_LIBRARIES", "[]"),
+    "plex.watch_sync_enabled": ("PLEX_WATCH_SYNC_ENABLED", "false"),
     "jellyfin.url": ("JELLYFIN_URL", ""),
     "jellyfin.api_key": ("JELLYFIN_API_KEY", ""),
     "jellyfin.anime_library_ids": ("JELLYFIN_ANIME_LIBRARY_IDS", "[]"),
+    "jellyfin.watch_sync_enabled": ("JELLYFIN_WATCH_SYNC_ENABLED", "false"),
     "sonarr.url": ("SONARR_URL", ""),
     "sonarr.api_key": ("SONARR_API_KEY", ""),
     "sonarr.anime_root_folder": ("SONARR_ANIME_ROOT_FOLDER", ""),
@@ -375,11 +381,15 @@ def load_config_from_db_settings(
             url=r("plex.url"),
             token=r("plex.token"),
             anime_library_keys=_parse_json_list(r("plex.anime_library_keys")),
+            watch_sync_enabled=r("plex.watch_sync_enabled").lower()
+            in ("true", "1", "yes"),
         ),
         jellyfin=JellyfinConfig(
             url=r("jellyfin.url"),
             api_key=r("jellyfin.api_key"),
             anime_library_ids=_parse_json_list(r("jellyfin.anime_library_ids")),
+            watch_sync_enabled=r("jellyfin.watch_sync_enabled").lower()
+            in ("true", "1", "yes"),
         ),
         sonarr=SonarrConfig(
             url=r("sonarr.url"),

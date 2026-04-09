@@ -1581,6 +1581,85 @@ class DatabaseManager:
         )
 
     # ------------------------------------------------------------------
+    # Watch Sync Log (Plex / Jellyfin)
+    # ------------------------------------------------------------------
+
+    async def insert_watch_sync_log_entry(
+        self,
+        source: str,
+        user_id: str,
+        anilist_id: int,
+        show_title: str,
+        before_status: str,
+        before_progress: int,
+        after_status: str,
+        after_progress: int,
+    ) -> int:
+        """Insert one watch_sync_log row. Returns the new row id."""
+        cursor = await self.execute(
+            """INSERT INTO watch_sync_log
+                   (source, user_id, anilist_id, show_title, before_status,
+                    before_progress, after_status, after_progress)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                source,
+                user_id,
+                anilist_id,
+                show_title,
+                before_status,
+                before_progress,
+                after_status,
+                after_progress,
+            ),
+        )
+        await self.db.commit()
+        return cursor.lastrowid or 0
+
+    async def get_watch_sync_log(
+        self,
+        source: str | None = None,
+        user_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Return recent watch_sync_log entries, newest first."""
+        if source and user_id:
+            return await self.fetch_all(
+                "SELECT * FROM watch_sync_log WHERE source=? AND user_id=?"
+                " ORDER BY applied_at DESC LIMIT ?",
+                (source, user_id, limit),
+            )
+        if source:
+            return await self.fetch_all(
+                "SELECT * FROM watch_sync_log WHERE source=?"
+                " ORDER BY applied_at DESC LIMIT ?",
+                (source, limit),
+            )
+        if user_id:
+            return await self.fetch_all(
+                "SELECT * FROM watch_sync_log WHERE user_id=?"
+                " ORDER BY applied_at DESC LIMIT ?",
+                (user_id, limit),
+            )
+        return await self.fetch_all(
+            "SELECT * FROM watch_sync_log ORDER BY applied_at DESC LIMIT ?",
+            (limit,),
+        )
+
+    async def get_watch_sync_log_entry(self, log_id: int) -> dict[str, Any] | None:
+        """Return a single watch_sync_log row."""
+        return await self.fetch_one(
+            "SELECT * FROM watch_sync_log WHERE id=?", (log_id,)
+        )
+
+    async def mark_watch_sync_log_undone(self, log_id: int) -> None:
+        """Set undone_at timestamp on a watch_sync_log entry."""
+        await self.execute(
+            "UPDATE watch_sync_log SET undone_at=datetime('now') WHERE id=?",
+            (log_id,),
+        )
+        await self.db.commit()
+
+    # ------------------------------------------------------------------
     # Download Requests (P4)
     # ------------------------------------------------------------------
 

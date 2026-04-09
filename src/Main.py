@@ -300,6 +300,9 @@ async def main() -> None:
         cfg = app.state.config
         if not cfg.jellyfin.url or not cfg.jellyfin.api_key:
             return
+        if not cfg.jellyfin.watch_sync_enabled:
+            logger.debug("Jellyfin watch sync is disabled — skipping scheduled run")
+            return
         from src.Clients.JellyfinClient import JellyfinClient as _JF
 
         jf = _JF(url=cfg.jellyfin.url, api_key=cfg.jellyfin.api_key)
@@ -307,13 +310,16 @@ async def main() -> None:
             syncer = JellyfinWatchSyncer(
                 db=db, anilist_client=app.state.anilist_client, jellyfin_client=jf
             )
-            await syncer.sync_to_anilist()
+            await syncer.sync_to_anilist(live_check=True)
         finally:
             await jf.close()
 
     async def _plex_watch_sync() -> None:
         cfg = app.state.config
         if not cfg.plex.url or not cfg.plex.token:
+            return
+        if not cfg.plex.watch_sync_enabled:
+            logger.debug("Plex watch sync is disabled — skipping scheduled run")
             return
         from src.Clients.PlexClient import PlexClient as _Plex
 
@@ -322,7 +328,7 @@ async def main() -> None:
             syncer = PlexWatchSyncer(
                 db=db, anilist_client=app.state.anilist_client, plex_client=plex
             )
-            await syncer.sync_to_anilist()
+            await syncer.sync_to_anilist(live_check=True)
         finally:
             await plex.close()
 

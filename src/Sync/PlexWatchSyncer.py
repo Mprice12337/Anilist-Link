@@ -21,6 +21,7 @@ from typing import Any
 from src.Clients.AnilistClient import AniListClient
 from src.Clients.PlexClient import PlexClient
 from src.Database.Connection import DatabaseManager
+from src.Sync.WatchlistRefresh import watchlist_refresh_task
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +43,13 @@ class PlexWatchSyncer:
     # Plex → AniList
     # ==================================================================
 
-    async def sync_to_anilist(self) -> dict[str, int]:
+    async def sync_to_anilist(self, live_check: bool = False) -> dict[str, int]:
         """Read Plex watch state and update AniList.
+
+        Args:
+            live_check: When True (scheduled/auto runs), refresh the AniList
+                watchlist cache before processing so status checks use fresh
+                data rather than potentially stale cached values.
 
         Returns a summary dict with keys ``checked``, ``updated``,
         ``skipped``, ``errors``.
@@ -61,9 +67,13 @@ class PlexWatchSyncer:
             return results
 
         logger.info(
-            "Starting Plex → AniList sync for Plex user '%s'",
+            "Starting Plex → AniList sync for Plex user '%s'%s",
             plex_user["plex_username"],
+            " (live check)" if live_check else "",
         )
+
+        if live_check:
+            await watchlist_refresh_task(self._db, self._anilist)
 
         anilist_user = (
             await self._db.get_user(plex_user["anilist_user_id"])
@@ -151,6 +161,7 @@ class PlexWatchSyncer:
             watched_count,
             total_episodes,
             results,
+            show_title=mapping.get("anilist_title") or mapping.get("source_title", ""),
         )
 
     async def _maybe_update_anilist(
@@ -162,12 +173,25 @@ class PlexWatchSyncer:
         watched_count: int,
         total_episodes: int,
         results: dict[str, int],
+        show_title: str = "",
     ) -> None:
         """Compare with sync_state and update AniList if progress changed."""
         sync_state = await self._db.get_sync_state(anilist_user_id, mapping_id)
         last_episode = sync_state["last_episode"] if sync_state else 0
+        last_status = sync_state["status"] if sync_state else ""
 
         if watched_count <= last_episode:
+            results["skipped"] += 1
+            return
+
+        # Don't downgrade a show the user has already marked as completed on AniList.
+        # Any other status (CURRENT, DROPPED, PAUSED, PLANNING) is fine to overwrite
+        # — if they're watching more episodes, that's the ground truth.
+        cached = await self._db.get_watchlist_entry(anilist_user_id, anilist_id)
+        if cached and cached.get("list_status") == "COMPLETED":
+            logger.debug(
+                "Skipping AniList #%d — already COMPLETED on AniList", anilist_id
+            )
             results["skipped"] += 1
             return
 
@@ -198,6 +222,16 @@ class PlexWatchSyncer:
                 media_mapping_id=mapping_id,
                 last_episode=watched_count,
                 status=status,
+            )
+            await self._db.insert_watch_sync_log_entry(
+                source="plex",
+                user_id=anilist_user_id,
+                anilist_id=anilist_id,
+                show_title=show_title,
+                before_status=last_status,
+                before_progress=last_episode,
+                after_status=status,
+                after_progress=watched_count,
             )
             results["updated"] += 1
         except Exception:
@@ -254,7 +288,7 @@ class PlexWatchSyncer:
 
         for entry in watchlist:
             try:
-                await self._push_anilist_entry_to_plex(entry, results)
+                await self._push_anilist_entry_to_plex(entry, anilist_user_id, results)
             except Exception:
                 logger.exception(
                     "Error pushing AniList entry #%s to Plex",
@@ -275,6 +309,7 @@ class PlexWatchSyncer:
     async def _push_anilist_entry_to_plex(
         self,
         entry: dict[str, Any],
+        anilist_user_id: str,
         results: dict[str, int],
     ) -> None:
         """Push one AniList entry's progress into Plex."""
@@ -293,6 +328,7 @@ class PlexWatchSyncer:
 
         results["checked"] += 1
         for mapping in plex_mappings:
+            mapping_id: int = mapping["id"]
             source_id: str = mapping["source_id"]
 
             if ":S" in source_id:
@@ -315,6 +351,17 @@ class PlexWatchSyncer:
                 if ep.view_count == 0:
                     await self._plex.mark_episode_watched(ep.rating_key)
                     marked += 1
+
+            # Record the baseline in sync_state regardless of whether we marked
+            # new episodes.  Without this, the forward sync would see the
+            # Plex-played episodes as "new" progress and write them back to
+            # AniList unnecessarily.
+            await self._db.upsert_sync_state(
+                user_id=anilist_user_id,
+                media_mapping_id=mapping_id,
+                last_episode=progress,
+                status=entry.get("list_status", ""),
+            )
 
             if marked:
                 logger.info(

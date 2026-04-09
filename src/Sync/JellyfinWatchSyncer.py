@@ -15,6 +15,7 @@ from typing import Any
 from src.Clients.AnilistClient import AniListClient
 from src.Clients.JellyfinClient import JellyfinClient
 from src.Database.Connection import DatabaseManager
+from src.Sync.WatchlistRefresh import watchlist_refresh_task
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +37,13 @@ class JellyfinWatchSyncer:
     # Jellyfin → AniList
     # ==================================================================
 
-    async def sync_to_anilist(self) -> dict[str, int]:
+    async def sync_to_anilist(self, live_check: bool = False) -> dict[str, int]:
         """Read Jellyfin watch state and update AniList.
+
+        Args:
+            live_check: When True (scheduled/auto runs), refresh the AniList
+                watchlist cache before processing so status checks use fresh
+                data rather than potentially stale cached values.
 
         Returns a summary dict with keys ``checked``, ``updated``,
         ``skipped``, ``errors``.
@@ -57,8 +63,13 @@ class JellyfinWatchSyncer:
         jf_user_id: str = jf_user["jf_user_id"]
         jf_username: str = jf_user["jf_username"]
         logger.info(
-            "Starting Jellyfin → AniList sync for Jellyfin user '%s'", jf_username
+            "Starting Jellyfin → AniList sync for Jellyfin user '%s'%s",
+            jf_username,
+            " (live check)" if live_check else "",
         )
+
+        if live_check:
+            await watchlist_refresh_task(self._db, self._anilist)
 
         anilist_user = (
             await self._db.get_user(jf_user["anilist_user_id"])
@@ -153,6 +164,9 @@ class JellyfinWatchSyncer:
                 watched_count=total_eps,
                 total_episodes=total_eps,
                 results=results,
+                show_title=(
+                    mapping.get("anilist_title") or mapping.get("source_title", "")
+                ),
             )
             return
 
@@ -199,6 +213,7 @@ class JellyfinWatchSyncer:
             watched_count,
             total_episodes=len(episodes),
             results=results,
+            show_title=mapping.get("anilist_title") or mapping.get("source_title", ""),
         )
 
     async def _process_structure_b(
@@ -266,6 +281,7 @@ class JellyfinWatchSyncer:
                 watched_count,
                 total_episodes=total,
                 results=results,
+                show_title=entry.get("display_title", ""),
             )
 
     async def _get_or_create_mapping_id(
@@ -292,12 +308,25 @@ class JellyfinWatchSyncer:
         watched_count: int,
         total_episodes: int,
         results: dict[str, int],
+        show_title: str = "",
     ) -> None:
         """Compare with sync_state and update AniList if progress changed."""
         sync_state = await self._db.get_sync_state(anilist_user_id, mapping_id)
         last_episode = sync_state["last_episode"] if sync_state else 0
+        last_status = sync_state["status"] if sync_state else ""
 
         if watched_count <= last_episode:
+            results["skipped"] += 1
+            return
+
+        # Don't downgrade a show the user has already marked as completed on AniList.
+        # Any other status (CURRENT, DROPPED, PAUSED, PLANNING) is fine to overwrite
+        # — if they're watching more episodes, that's the ground truth.
+        cached = await self._db.get_watchlist_entry(anilist_user_id, anilist_id)
+        if cached and cached.get("list_status") == "COMPLETED":
+            logger.debug(
+                "Skipping AniList #%d — already COMPLETED on AniList", anilist_id
+            )
             results["skipped"] += 1
             return
 
@@ -329,6 +358,16 @@ class JellyfinWatchSyncer:
                 media_mapping_id=mapping_id,
                 last_episode=watched_count,
                 status=status,
+            )
+            await self._db.insert_watch_sync_log_entry(
+                source="jellyfin",
+                user_id=anilist_user_id,
+                anilist_id=anilist_id,
+                show_title=show_title,
+                before_status=last_status,
+                before_progress=last_episode,
+                after_status=status,
+                after_progress=watched_count,
             )
             results["updated"] += 1
         except Exception:
@@ -389,7 +428,9 @@ class JellyfinWatchSyncer:
 
         for entry in watchlist:
             try:
-                await self._push_anilist_entry_to_jellyfin(entry, jf_user_id, results)
+                await self._push_anilist_entry_to_jellyfin(
+                    entry, jf_user_id, anilist_user_id, results
+                )
             except Exception:
                 logger.exception(
                     "Error pushing AniList entry #%s to Jellyfin",
@@ -411,6 +452,7 @@ class JellyfinWatchSyncer:
         self,
         entry: dict[str, Any],
         jf_user_id: str,
+        anilist_user_id: str,
         results: dict[str, int],
     ) -> None:
         """Push one AniList entry's progress into Jellyfin."""
@@ -424,8 +466,8 @@ class JellyfinWatchSyncer:
         # Find the Jellyfin mapping — either a direct mapping or via series group.
         # Sequels don't have their own media_mappings row; their parent series
         # does, linked through series_group_entries.
-        series_id, season_number, mapping_title = await self._resolve_jellyfin_target(
-            anilist_id
+        series_id, season_number, mapping_title, mapping_id = (
+            await self._resolve_jellyfin_target(anilist_id)
         )
         if series_id is None:
             logger.debug("AniList #%d has no Jellyfin mapping — skipping", anilist_id)
@@ -458,6 +500,13 @@ class JellyfinWatchSyncer:
                 jf_item.get("Name", series_id),
                 anilist_id,
             )
+            if mapping_id:
+                await self._db.upsert_sync_state(
+                    user_id=anilist_user_id,
+                    media_mapping_id=mapping_id,
+                    last_episode=progress,
+                    status=entry.get("list_status", "COMPLETED"),
+                )
             results["updated"] += 1
             return
 
@@ -506,6 +555,18 @@ class JellyfinWatchSyncer:
                 await self._jellyfin.mark_episode_played(ep["Id"], jf_user_id)
                 marked += 1
 
+        # Always record the baseline in sync_state — even if all episodes were
+        # already played (marked=0).  This prevents the forward sync from
+        # seeing those Jellyfin-played episodes as "new" and writing them back
+        # to AniList unnecessarily.
+        if mapping_id:
+            await self._db.upsert_sync_state(
+                user_id=anilist_user_id,
+                media_mapping_id=mapping_id,
+                last_episode=progress,
+                status=entry.get("list_status", ""),
+            )
+
         if marked:
             logger.info(
                 "Marked %d episodes played in Jellyfin for AniList #%d (%s)",
@@ -528,11 +589,13 @@ class JellyfinWatchSyncer:
 
     async def _resolve_jellyfin_target(
         self, anilist_id: int
-    ) -> tuple[str | None, int | None, str]:
+    ) -> tuple[str | None, int | None, str, int]:
         """Find the Jellyfin series ID and season number for an AniList entry.
 
-        Returns ``(series_id, season_number, title)`` where season_number is
-        None for single-season shows (no series group).
+        Returns ``(series_id, season_number, title, mapping_id)`` where
+        season_number is None for single-season shows (no series group) and
+        mapping_id matches the key used by sync_state so the backfill and
+        forward sync share the same baseline record.
 
         Handles two cases:
         1. Direct mapping: the AniList entry has its own media_mappings row.
@@ -551,7 +614,7 @@ class JellyfinWatchSyncer:
             candidate_id: str = m["source_id"]
             item = await self._jellyfin.get_item(candidate_id)
             if item is not None:
-                return candidate_id, None, m.get("anilist_title", "")
+                return candidate_id, None, m.get("anilist_title", ""), m["id"]
             logger.debug(
                 "Mapping source_id=%s for AniList #%d is stale — skipping",
                 candidate_id,
@@ -565,19 +628,19 @@ class JellyfinWatchSyncer:
             (anilist_id,),
         )
         if not sge_row:
-            return None, None, ""
+            return None, None, "", 0
 
         group_id: int = sge_row["group_id"]
         season_number_sq: int = sge_row["season_order"]
 
         parent_mapping = await self._db.fetch_one(
-            """SELECT source_id, anilist_title FROM media_mappings
+            """SELECT id, source_id, anilist_title FROM media_mappings
                WHERE source='jellyfin' AND series_group_id=?
                LIMIT 1""",
             (group_id,),
         )
         if not parent_mapping:
-            return None, None, ""
+            return None, None, "", 0
 
         parent_id: str = parent_mapping["source_id"]
         parent_item = await self._jellyfin.get_item(parent_id)
@@ -587,12 +650,16 @@ class JellyfinWatchSyncer:
                 parent_id,
                 anilist_id,
             )
-            return None, None, ""
+            return None, None, "", 0
 
+        # Synthetic mapping_id mirrors _get_or_create_mapping_id so forward
+        # sync and backfill share the same sync_state row.
+        synth_id = parent_mapping["id"] * 1000 + season_number_sq
         return (
             parent_id,
             season_number_sq,
             parent_mapping.get("anilist_title", ""),
+            synth_id,
         )
 
     async def _build_season_id_map(self, series_id: str) -> dict[int, str]:

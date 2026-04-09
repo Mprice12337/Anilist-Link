@@ -537,6 +537,21 @@ TABLES: dict[str, str] = {
             cr_sync_preview_id INTEGER
         )
     """,
+    "watch_sync_log": """
+        CREATE TABLE IF NOT EXISTS watch_sync_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL DEFAULT '',
+            user_id TEXT NOT NULL DEFAULT '',
+            anilist_id INTEGER NOT NULL DEFAULT 0,
+            show_title TEXT NOT NULL DEFAULT '',
+            before_status TEXT NOT NULL DEFAULT '',
+            before_progress INTEGER NOT NULL DEFAULT 0,
+            after_status TEXT NOT NULL DEFAULT '',
+            after_progress INTEGER NOT NULL DEFAULT 0,
+            applied_at TEXT NOT NULL DEFAULT (datetime('now')),
+            undone_at TEXT
+        )
+    """,
     "download_requests": """
         CREATE TABLE IF NOT EXISTS download_requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -694,6 +709,9 @@ INDEXES: list[str] = [
     # cr_sync
     "CREATE INDEX IF NOT EXISTS idx_cr_sync_preview_run" " ON cr_sync_preview(run_id)",
     "CREATE INDEX IF NOT EXISTS idx_cr_sync_log_anilist" " ON cr_sync_log(anilist_id)",
+    "CREATE INDEX IF NOT EXISTS idx_watch_sync_log_anilist"
+    " ON watch_sync_log(anilist_id)",
+    "CREATE INDEX IF NOT EXISTS idx_watch_sync_log_source" " ON watch_sync_log(source)",
     # download_requests
     "CREATE INDEX IF NOT EXISTS idx_download_requests_anilist"
     " ON download_requests(anilist_id)",

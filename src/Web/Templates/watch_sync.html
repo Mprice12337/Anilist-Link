@@ -31,6 +31,21 @@
       Syncing as <strong>{{ jellyfin_user.jf_username }}</strong>
       <span class="text-muted">(ID: {{ jellyfin_user.jf_user_id }})</span>
     </p>
+
+    {# Auto-sync toggle #}
+    <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1rem">
+      <label class="form-label" style="margin:0;font-weight:500">Auto-sync (scheduled):</label>
+      <label class="toggle-switch" title="Enable or disable automatic scheduled sync">
+        <input type="checkbox" id="jf-autosync-toggle"
+               {% if jellyfin_watch_sync_enabled %}checked{% endif %}
+               onchange="toggleJellyfinAutoSync(this.checked)">
+        <span class="toggle-slider"></span>
+      </label>
+      <span id="jf-autosync-label" class="text-muted" style="font-size:0.85rem">
+        {% if jellyfin_watch_sync_enabled %}Enabled{% else %}Disabled{% endif %}
+      </span>
+    </div>
+
     <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
       <button class="btn btn-primary" onclick="runJellyfinSync()">
         ↑ Jellyfin → AniList
@@ -80,6 +95,21 @@
     <p style="margin:0 0 1rem">
       Syncing as <strong>{{ plex_user.plex_username }}</strong>
     </p>
+
+    {# Auto-sync toggle #}
+    <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1rem">
+      <label class="form-label" style="margin:0;font-weight:500">Auto-sync (scheduled):</label>
+      <label class="toggle-switch" title="Enable or disable automatic scheduled sync">
+        <input type="checkbox" id="plex-autosync-toggle"
+               {% if plex_watch_sync_enabled %}checked{% endif %}
+               onchange="togglePlexAutoSync(this.checked)">
+        <span class="toggle-slider"></span>
+      </label>
+      <span id="plex-autosync-label" class="text-muted" style="font-size:0.85rem">
+        {% if plex_watch_sync_enabled %}Enabled{% else %}Disabled{% endif %}
+      </span>
+    </div>
+
     <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
       <button class="btn btn-primary" onclick="runPlexSync()">
         ↑ Plex → AniList
@@ -112,6 +142,75 @@
   </div>
 </div>
 
+{# ── Sync History ─────────────────────────────────────────────────────── #}
+<div class="card" style="margin-bottom:1.5rem">
+  <div class="card-header" style="display:flex;align-items:center;gap:0.75rem">
+    <h2 style="margin:0;font-size:1.1rem">Sync History</h2>
+    <span class="text-muted" style="font-size:0.85rem">(Plex &amp; Jellyfin — last 100)</span>
+  </div>
+  <div class="card-body" style="padding:0">
+    {% if sync_log %}
+    <div style="overflow-x:auto">
+      <table class="data-table" style="margin:0">
+        <thead>
+          <tr>
+            <th>Source</th>
+            <th>Title</th>
+            <th>Before</th>
+            <th>After</th>
+            <th>Applied</th>
+            <th style="width:90px"></th>
+          </tr>
+        </thead>
+        <tbody id="sync-log-tbody">
+          {% for entry in sync_log %}
+          <tr id="log-row-{{ entry.id }}" {% if entry.undone_at %}class="text-muted" style="opacity:0.55"{% endif %}>
+            <td>
+              <span class="badge {% if entry.source == 'plex' %}badge-orange{% else %}badge-blue{% endif %}">
+                {{ entry.source|title }}
+              </span>
+            </td>
+            <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                title="{{ entry.show_title }}">
+              {{ entry.show_title or '—' }}
+            </td>
+            <td style="white-space:nowrap">
+              {% if entry.before_status %}
+              <span class="text-muted">{{ entry.before_status }}</span> ep {{ entry.before_progress }}
+              {% else %}
+              <span class="text-muted">new</span>
+              {% endif %}
+            </td>
+            <td style="white-space:nowrap">
+              <strong>{{ entry.after_status }}</strong> ep {{ entry.after_progress }}
+            </td>
+            <td style="white-space:nowrap;font-size:0.8rem" class="text-muted">
+              {{ entry.applied_at[:16] if entry.applied_at else '—' }}
+            </td>
+            <td>
+              {% if entry.undone_at %}
+              <span class="text-muted" style="font-size:0.8rem">Undone</span>
+              {% else %}
+              <button class="btn btn-sm btn-danger"
+                      onclick="undoEntry({{ entry.id }})"
+                      id="undo-btn-{{ entry.id }}">
+                Undo
+              </button>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="text-muted" style="margin:1rem;font-size:0.9rem">
+      No sync history yet. Run a Plex or Jellyfin → AniList sync to see entries here.
+    </p>
+    {% endif %}
+  </div>
+</div>
+
 {# ── How it works ─────────────────────────────────────────────────────── #}
 <div class="card">
   <div class="card-header">
@@ -121,11 +220,52 @@
     <ul style="margin:0;padding-left:1.25rem;line-height:1.8">
       <li><strong>Media server → AniList:</strong> reads watched episodes and updates your AniList progress. Only moves progress forward; won't decrease a count that's higher on AniList.</li>
       <li><strong>AniList → Media server:</strong> pushes your AniList progress back into Plex/Jellyfin by marking episodes as played. Useful for initial backfill.</li>
-      <li>Sync runs automatically every 15 minutes when an account is linked. You can also trigger it manually above.</li>
+      <li><strong>Auto-sync:</strong> disabled by default. Enable the toggle above to run automatically every 15 minutes.</li>
+      <li><strong>Undo:</strong> each sync entry in the history can be individually reverted, restoring the previous AniList status and progress.</li>
       <li>Requires that shows are already matched to AniList entries (run a Plex/Jellyfin metadata scan first).</li>
     </ul>
   </div>
 </div>
+
+<style>
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 42px;
+  height: 22px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--border-color, #ccc);
+  border-radius: 22px;
+  transition: background 0.2s;
+}
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  left: 3px;
+  top: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+.toggle-switch input:checked + .toggle-slider {
+  background: var(--accent, #6366f1);
+}
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(20px);
+}
+</style>
 
 <script>
 (function () {
@@ -213,6 +353,24 @@
     showAlert(data.message || (data.error || "Error"), data.ok ? "success" : "error");
   };
 
+  window.toggleJellyfinAutoSync = async function (enabled) {
+    var label = document.getElementById("jf-autosync-label");
+    var data = await apiFetch("/api/watch-sync/jellyfin/toggle", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: enabled }),
+    });
+    if (data.ok) {
+      if (label) label.textContent = enabled ? "Enabled" : "Disabled";
+      showAlert("Jellyfin auto-sync " + (enabled ? "enabled" : "disabled"), "success");
+    } else {
+      showAlert("Error: " + (data.error || "unknown"), "error");
+      // Revert toggle
+      var toggle = document.getElementById("jf-autosync-toggle");
+      if (toggle) toggle.checked = !enabled;
+    }
+  };
+
   // ── Plex ─────────────────────────────────────────────────────────── //
 
   window.loadPlexAccounts = async function () {
@@ -228,15 +386,12 @@
     var accounts = data.accounts || [];
     sel.innerHTML = '<option value="">— select account —</option>';
 
-    // If no home accounts returned, Plex is single-user — offer admin option
     if (accounts.length === 0) {
       var opt = document.createElement("option");
       opt.value = JSON.stringify({ id: "1", name: "Admin" });
       opt.textContent = "Admin (single-user Plex)";
       sel.appendChild(opt);
-      showAlert(
-        "No Plex Home accounts found. Using admin account.", "info"
-      );
+      showAlert("No Plex Home accounts found. Using admin account.", "info");
       return;
     }
     accounts.forEach(function (a) {
@@ -291,6 +446,47 @@
     showAlert("AniList → Plex sync started…", "info");
     var data = await apiFetch("/api/watch-sync/plex/push", { method: "POST" });
     showAlert(data.message || (data.error || "Error"), data.ok ? "success" : "error");
+  };
+
+  window.togglePlexAutoSync = async function (enabled) {
+    var label = document.getElementById("plex-autosync-label");
+    var data = await apiFetch("/api/watch-sync/plex/toggle", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: enabled }),
+    });
+    if (data.ok) {
+      if (label) label.textContent = enabled ? "Enabled" : "Disabled";
+      showAlert("Plex auto-sync " + (enabled ? "enabled" : "disabled"), "success");
+    } else {
+      showAlert("Error: " + (data.error || "unknown"), "error");
+      var toggle = document.getElementById("plex-autosync-toggle");
+      if (toggle) toggle.checked = !enabled;
+    }
+  };
+
+  // ── Undo ─────────────────────────────────────────────────────────── //
+
+  window.undoEntry = async function (logId) {
+    if (!confirm("Revert this sync entry on AniList?")) return;
+    var btn = document.getElementById("undo-btn-" + logId);
+    if (btn) { btn.disabled = true; btn.textContent = "Undoing…"; }
+    var data = await apiFetch("/api/watch-sync/undo/" + logId, { method: "POST" });
+    if (data.ok) {
+      var row = document.getElementById("log-row-" + logId);
+      if (row) {
+        row.style.opacity = "0.55";
+        row.classList.add("text-muted");
+      }
+      if (btn) btn.replaceWith(Object.assign(
+        document.createElement("span"),
+        { textContent: "Undone", className: "text-muted", style: "font-size:0.8rem" }
+      ));
+      showAlert("Reverted successfully.", "success");
+    } else {
+      if (btn) { btn.disabled = false; btn.textContent = "Undo"; }
+      showAlert("Error: " + (data.error || "unknown"), "error");
+    }
   };
 
 })();

@@ -315,10 +315,12 @@ async def trigger_plex_push(request: Request) -> JSONResponse:
 async def watch_sync_page(request: Request):  # type: ignore[return]
     """Render the watch sync account linking and status page."""
     db = request.app.state.db
+    config = request.app.state.config
     templates = request.app.state.templates
 
     jellyfin_user = await db.get_jellyfin_user()
     plex_user = await db.get_plex_user()
+    sync_log = await db.get_watch_sync_log(limit=100)
 
     return templates.TemplateResponse(
         "watch_sync.html",
@@ -326,5 +328,117 @@ async def watch_sync_page(request: Request):  # type: ignore[return]
             "request": request,
             "jellyfin_user": jellyfin_user,
             "plex_user": plex_user,
+            "plex_watch_sync_enabled": config.plex.watch_sync_enabled,
+            "jellyfin_watch_sync_enabled": config.jellyfin.watch_sync_enabled,
+            "sync_log": sync_log,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Enable / disable toggles
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/watch-sync/plex/toggle")
+async def toggle_plex_watch_sync(request: Request) -> JSONResponse:
+    """Enable or disable the scheduled Plex → AniList watch sync."""
+    db = request.app.state.db
+    body = await request.json()
+    enabled: bool = bool(body.get("enabled", False))
+    value = "true" if enabled else "false"
+    await db.set_setting("plex.watch_sync_enabled", value)
+    # Refresh in-memory config
+    db_settings = await db.get_all_settings()
+    from src.Utils.Config import load_config_from_db_settings
+
+    request.app.state.config = load_config_from_db_settings(db_settings)
+    logger.info("Plex watch sync %s", "enabled" if enabled else "disabled")
+    return JSONResponse({"ok": True, "enabled": enabled})
+
+
+@router.post("/api/watch-sync/jellyfin/toggle")
+async def toggle_jellyfin_watch_sync(request: Request) -> JSONResponse:
+    """Enable or disable the scheduled Jellyfin → AniList watch sync."""
+    db = request.app.state.db
+    body = await request.json()
+    enabled: bool = bool(body.get("enabled", False))
+    value = "true" if enabled else "false"
+    await db.set_setting("jellyfin.watch_sync_enabled", value)
+    db_settings = await db.get_all_settings()
+    from src.Utils.Config import load_config_from_db_settings
+
+    request.app.state.config = load_config_from_db_settings(db_settings)
+    logger.info("Jellyfin watch sync %s", "enabled" if enabled else "disabled")
+    return JSONResponse({"ok": True, "enabled": enabled})
+
+
+# ---------------------------------------------------------------------------
+# Watch sync log (history + undo)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/watch-sync/log")
+async def get_watch_sync_log(
+    request: Request,
+    source: str = "",
+    limit: int = 200,
+) -> JSONResponse:
+    """Return watch_sync_log entries, optionally filtered by source."""
+    db = request.app.state.db
+    entries = await db.get_watch_sync_log(
+        source=source or None,
+        limit=min(limit, 500),
+    )
+    return JSONResponse({"ok": True, "entries": entries})
+
+
+@router.post("/api/watch-sync/undo/{log_id}")
+async def undo_watch_sync_entry(request: Request, log_id: int) -> JSONResponse:
+    """Undo a single watch_sync_log entry by reverting progress/status on AniList."""
+    db = request.app.state.db
+    anilist_client = request.app.state.anilist_client
+
+    entry = await db.get_watch_sync_log_entry(log_id)
+    if not entry:
+        return JSONResponse(
+            {"ok": False, "error": "Log entry not found"}, status_code=404
+        )
+
+    if entry.get("undone_at"):
+        return JSONResponse({"ok": False, "error": "Already undone"}, status_code=400)
+
+    users = await db.get_users_by_service("anilist")
+    user = next((u for u in users if u["user_id"] == entry["user_id"]), None)
+    if not user:
+        # Fall back to first linked account
+        user = users[0] if users else None
+    if not user:
+        return JSONResponse({"ok": False, "error": "User not found"}, status_code=404)
+
+    access_token = user["access_token"]
+    before_status = entry["before_status"]
+    before_progress = entry["before_progress"]
+    anilist_id = entry["anilist_id"]
+
+    try:
+        if not before_status:
+            resp = await anilist_client.update_anime_progress(
+                anilist_id, access_token, 0, "PLANNING"
+            )
+        else:
+            resp = await anilist_client.update_anime_progress(
+                anilist_id, access_token, before_progress, before_status
+            )
+
+        if resp:
+            await db.mark_watch_sync_log_undone(log_id)
+            return JSONResponse({"ok": True})
+        else:
+            return JSONResponse(
+                {"ok": False, "error": "AniList update failed"}, status_code=500
+            )
+
+    except Exception as exc:
+        logger.exception("Undo failed for watch_sync_log id %s", log_id)
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)

@@ -214,7 +214,8 @@ Move to `/docs` when:
 - **Crunchyroll Preview Runner**: Preview/approve/undo pipeline for CR sync [implemented]
 - **Download Manager**: Orchestrates AniList→Sonarr/Radarr add requests [implemented]
 - **Download Syncer**: Periodic AniList watchlist → Sonarr/Radarr auto-add [implemented]
-- **Plex Watch Syncer**: Plex→AniList watch sync via polling/webhooks [planned — P1]
+- **Plex Watch Syncer**: Plex↔AniList bidirectional watch sync with COMPLETED guard, circular sync fix, and undo log [implemented]
+- **Jellyfin Watch Syncer**: Jellyfin↔AniList bidirectional watch sync (same feature set as Plex) [implemented]
 - **Onboarding Wizard**: 4-step first-run setup wizard with service configuration [implemented]
 - **Floating Progress Widget**: In-page background task monitor polling `/api/progress` [implemented]
 
@@ -354,7 +355,7 @@ Application-specific variables:
 
 ## Database
 
-### Schema Overview (v17)
+### Schema Overview (v4)
 Current tables:
 - `media_mappings` - Maps media server library items to AniList IDs with confidence scores, match method, and optional series group reference
 - `users` - Linked AniList accounts with OAuth tokens
@@ -367,16 +368,20 @@ Current tables:
 - `series_groups` - Groups of AniList entries connected by SEQUEL/PREQUEL relations
 - `series_group_entries` - Individual entries within a series group, ordered chronologically
 - `restructure_log` - File move operation audit trail
+- `restructure_plans` - Saved restructure plans with summary and status (v3)
 - `jellyfin_media` - Persistent Jellyfin library item snapshot
 - `libraries` - Local library definitions (name, paths)
 - `library_items` - Items in a local library with match data
-- `plex_users` - Per-user Plex tokens for watch tracking (P1)
-- `jellyfin_users` - Per-user Jellyfin credentials (P1)
+- `plex_users` - Per-user Plex tokens for watch tracking
+- `jellyfin_users` - Per-user Jellyfin credentials
 - `cr_sync_preview` - Pending Crunchyroll sync changes awaiting approval
 - `cr_sync_log` - Applied CR sync changes with undo support
+- `watch_sync_log` - Plex/Jellyfin sync audit trail with undo support (v4)
 - `download_requests` - Sonarr/Radarr add request tracking
 - `anilist_sonarr_mapping` - AniList↔Sonarr series mappings
 - `anilist_radarr_mapping` - AniList↔Radarr movie mappings
+- `anilist_sonarr_season_mapping` - Per-season Sonarr series mappings
+- `anilist_arr_skip` - Entries skipped from auto-download
 - `sonarr_series_cache` - Cached Sonarr series data (by TVDB ID)
 - `radarr_movie_cache` - Cached Radarr movie data (by TMDB ID)
 - `user_watchlist` - Cached AniList watchlist per linked user
@@ -438,15 +443,16 @@ Current tables:
 - **Jellyfin Metadata Scan**: Periodic scan of Jellyfin libraries [triggered manually via UI]
 - **Download Sync**: Periodic AniList watchlist → Sonarr/Radarr auto-add [implemented]
 - **Watchlist Refresh**: Periodic refresh of `user_watchlist` cache from AniList for all linked users [implemented]
-- **Plex Watch Sync**: Periodic Plex→AniList watch sync [planned — P1]
-- **Jellyfin Watch Sync**: Periodic Jellyfin→AniList watch sync [planned — P1]
+- **Plex Watch Sync**: Periodic Plex↔AniList watch sync [implemented — default disabled]
+- **Jellyfin Watch Sync**: Periodic Jellyfin↔AniList watch sync [implemented — default disabled]
 
 #### Important Job Classes
 - `crunchyroll_sync` - Scheduled Crunchyroll watch sync at configurable interval [implemented]
 - `download_sync` - Periodic AniList watchlist → Sonarr/Radarr sync [implemented]
 - `watchlist_refresh` - Refreshes `user_watchlist` for all linked AniList users; every 30 min, on startup, and post-CR-sync [implemented]
 - `plex_metadata_scan` - Plex library scan and metadata application [planned for scheduling]
-- `plex_watch_sync` - Plex watch progress polling [planned — P1]
+- `plex_watch_sync` - Plex watch progress polling [implemented — default disabled]
+- `jellyfin_watch_sync` - Jellyfin watch progress polling [implemented — default disabled]
 
 ---
 
@@ -686,12 +692,14 @@ alias alstop='docker-compose down'           # Stop Anilist-Link
 - Manual overrides UI at `/mappings` (list, add, delete)
 - Deferred (non-blocking): staff/credits writing to Plex, GUID-based high-confidence matching
 
-**P1 — Watch Sync**: Crunchyroll done, Plex/Jellyfin planned
+**P1 — Watch Sync**: Crunchyroll, Plex, and Jellyfin all implemented
 - Crunchyroll→AniList sync with preview/approve/undo pipeline (CrunchyrollPreviewRunner) ✅
-- `plex_users` and `jellyfin_users` tables created (v10) ✅
-- Plex watch sync (polling + webhook) not yet implemented
-- Jellyfin watch sync not yet implemented
-- AniList backfill syncer (AniList→media server) not yet implemented
+- PlexWatchSyncer and JellyfinWatchSyncer — bidirectional sync (polling) ✅
+- Enable/disable toggles per source, default disabled (`plex.watch_sync_enabled`, `jellyfin.watch_sync_enabled`) ✅
+- COMPLETED status protection: never downgrades AniList entries already marked COMPLETED ✅
+- Circular sync fix: backfill always writes `sync_state` to prevent false forward-sync updates ✅
+- `watch_sync_log` table (v4): full audit trail with per-entry undo from the Watch Sync UI ✅
+- Plex/Jellyfin webhook handler (real-time sync) not yet implemented
 - AniList token auto-refresh not yet wired up
 
 **P4 — Downloads**: ✅ Complete

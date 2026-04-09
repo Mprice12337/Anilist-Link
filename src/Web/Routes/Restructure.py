@@ -150,15 +150,17 @@ async def _run_analysis_background(
 
         # Persist plan to DB so it appears in history regardless of whether applied.
         # Store a group-level summary (not per-file) for the history view.
-        _plan_summary = json.dumps([
-            {
-                "title": g.display_title,
-                "source": ", ".join(os.path.basename(s) for s in g.source_folders),
-                "target": os.path.basename(g.target_folder),
-                "files": len(g.file_moves),
-            }
-            for g in plan.groups
-        ])
+        _plan_summary = json.dumps(
+            [
+                {
+                    "title": g.display_title,
+                    "source": ", ".join(os.path.basename(s) for s in g.source_folders),
+                    "target": os.path.basename(g.target_folder),
+                    "files": len(g.file_moves),
+                }
+                for g in plan.groups
+            ]
+        )
         _tmpl = templates or {}
         _plan_id = await db.save_restructure_plan(
             source_dirs=json.dumps(source_dirs),
@@ -267,6 +269,7 @@ async def _run_execution(app_state: object) -> None:
         # Mark the plan as applied now that files have been moved.
         if pending_plan_id:
             from datetime import datetime, timezone
+
             _applied_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
             await db.update_restructure_plan_status(
                 pending_plan_id, "applied", applied_at=_applied_at

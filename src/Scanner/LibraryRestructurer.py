@@ -1362,9 +1362,7 @@ class LibraryRestructurer:
             # named using the root show's title rather than a per-season
             # series-group entry title (e.g. flat JJK folder where every
             # file starts with "Jujutsu Kaisen (2020)" even for S03Exx).
-            _sg_root_title = self._san(
-                _resolve_display_title(si, self._title_pref)
-            )
+            _sg_root_title = self._san(_resolve_display_title(si, self._title_pref))
             _sg_root_prefix = (
                 f"{_sg_root_title} ({si.year})" if si.year else _sg_root_title
             )
