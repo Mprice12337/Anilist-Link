@@ -375,7 +375,7 @@ async def _auto_link_sonarr_siblings(
                 exc,
             )
 
-        # Load watchlist for title lookups
+        # Load watchlist and cache for title lookups
         users = await db.get_users_by_service("anilist")
         if not users:
             return
@@ -386,6 +386,14 @@ async def _auto_link_sonarr_siblings(
         )
         watchlist_titles: dict[int, str] = {
             row["anilist_id"]: (row["anilist_title"] or "") for row in watchlist_rows
+        }
+        # Cache titles as fallback for chain entries not in the user's watchlist
+        cache_rows = await db.fetch_all(
+            "SELECT anilist_id, title_romaji, title_english FROM anilist_cache"
+        )
+        cache_titles: dict[int, str] = {
+            row["anilist_id"]: (row["title_romaji"] or row["title_english"] or "")
+            for row in cache_rows
         }
 
         # Fetch episode counts for each chain entry (used for cumulative matching).
@@ -514,11 +522,11 @@ async def _auto_link_sonarr_siblings(
                     )
                 continue
 
-            # Only insert new mappings for watchlist entries
-            if related_id not in watchlist_titles:
-                continue
-
-            title = watchlist_titles[related_id]
+            # Link all chain siblings regardless of watchlist membership so every
+            # season shows as "in Sonarr" in the UI and post-processor can route them.
+            title = (
+                watchlist_titles.get(related_id) or cache_titles.get(related_id) or ""
+            )
             await db.execute(
                 """INSERT INTO anilist_sonarr_mapping
                        (anilist_id, tvdb_id, sonarr_id, sonarr_title, sonarr_season,
@@ -546,13 +554,14 @@ async def _auto_link_sonarr_siblings(
                 root_anilist_id,
             )
 
-        # Populate anilist_sonarr_season_mapping for the post-processor
+        # Populate anilist_sonarr_season_mapping for the post-processor.
+        # Use INSERT OR REPLACE so re-adding a series always corrects stale mappings.
         mapped_count = 0
         for aid in chain:
             s_num = season_map.get(aid)
             if s_num is not None:
                 await db.execute(
-                    """INSERT OR IGNORE INTO anilist_sonarr_season_mapping
+                    """INSERT OR REPLACE INTO anilist_sonarr_season_mapping
                        (sonarr_id, season_number, anilist_id)
                        VALUES (?, ?, ?)""",
                     (sonarr_id, s_num, aid),

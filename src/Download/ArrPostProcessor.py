@@ -658,7 +658,17 @@ class ArrPostProcessor:
         if row:
             return int(row["anilist_id"])
 
-        # Fall back to series-level mapping (covers 1:1 TVDB:AniList case)
+        # If season-specific mappings exist for this series but none matched,
+        # don't fall back — routing to the wrong AniList entry is worse than
+        # skipping. Only use the series-level mapping for 1:1 shows (no season table).
+        any_season = await self._db.fetch_one(
+            "SELECT 1 FROM anilist_sonarr_season_mapping WHERE sonarr_id=? LIMIT 1",
+            (sonarr_id,),
+        )
+        if any_season:
+            return None
+
+        # Fall back to series-level mapping (covers 1:1 TVDB:AniList shows)
         row = await self._db.fetch_one(
             "SELECT anilist_id FROM anilist_sonarr_mapping WHERE sonarr_id=?",
             (sonarr_id,),

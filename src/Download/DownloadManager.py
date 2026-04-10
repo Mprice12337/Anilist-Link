@@ -159,7 +159,7 @@ class DownloadManager:
                     )
                     for season_idx, chain_aid in enumerate(chain):
                         await self._db.execute(
-                            """INSERT OR IGNORE INTO anilist_sonarr_season_mapping
+                            """INSERT OR REPLACE INTO anilist_sonarr_season_mapping
                                (sonarr_id, season_number, anilist_id)
                                VALUES (?, ?, ?)""",
                             (external_id, season_idx + 1, chain_aid),
