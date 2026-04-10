@@ -339,6 +339,26 @@ def _format_episode_number(ep_str: str) -> str:
     return f"{int(ep_str):02d}"
 
 
+def _cumulative_episodes_before(
+    season: int,
+    shows_in_group: list[dict],
+) -> int | None:
+    """Sum AniList episode counts for all group entries before *season*.
+
+    Returns None if any prior entry has an unknown episode count (None or 0),
+    since we cannot safely compute the absolute-to-relative offset in that case.
+    """
+    total = 0
+    for entry in shows_in_group:
+        if entry["tv_season_order"] >= season:
+            continue
+        ep_count = entry.get("episodes")
+        if not ep_count:  # None or 0 — unknown, bail out
+            return None
+        total += ep_count
+    return total
+
+
 def standardize_episode_filename(
     filename: str, show_title: str, season_num: int
 ) -> str:
@@ -1090,6 +1110,39 @@ class LibraryRestructurer:
                                     or f"Season {effective_season:02d}"
                                 )
                                 file_dest_dir = os.path.join(target_folder, alt_folder)
+                            # Absolute-to-season-relative episode translation.
+                            # Only fires when:
+                            #   - file has no SxxExx tag (source_season is None)
+                            #   - file is in S2 or later
+                            #   - all prior-season episode counts are known
+                            #   - episode number exceeds the cumulative prior count
+                            #     (unambiguous signature of absolute numbering)
+                            if ep_info.source_season is None and file_season > 1:
+                                prior_eps = _cumulative_episodes_before(
+                                    file_season, shows_in_group
+                                )
+                                if prior_eps is not None:
+                                    try:
+                                        ep_int = int(float(ep_info.number))
+                                    except ValueError:
+                                        ep_int = 0
+                                    if ep_int > prior_eps:
+                                        relative = ep_int - prior_eps
+                                        logger.debug(
+                                            "Absolute ep translation: '%s' "
+                                            "ep %s in S%02d → ep %02d "
+                                            "(cumulative prior seasons: %d eps)",
+                                            filename,
+                                            ep_info.number,
+                                            file_season,
+                                            relative,
+                                            prior_eps,
+                                        )
+                                        ep_info = EpisodeInfo(
+                                            number=str(relative),
+                                            source_season=None,
+                                            variant=ep_info.variant,
+                                        )
                             tokens = _build_file_tokens(
                                 group_si,
                                 file_season,
