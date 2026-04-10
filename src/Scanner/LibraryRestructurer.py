@@ -339,6 +339,77 @@ def _format_episode_number(ep_str: str) -> str:
     return f"{int(ep_str):02d}"
 
 
+def _cumulative_episodes_before(
+    season: int,
+    shows_in_group: list[dict],
+) -> int | None:
+    """Sum AniList episode counts for all group entries before *season*.
+
+    Returns None if any prior entry has an unknown episode count (None or 0),
+    since we cannot safely compute the absolute-to-relative offset in that case.
+    """
+    seen_seasons: set[int] = set()
+    total = 0
+    for entry in shows_in_group:
+        order = entry["tv_season_order"]
+        if order >= season or order in seen_seasons:
+            continue
+        ep_count = entry.get("episodes")
+        if not ep_count:  # None or 0 — unknown, bail out
+            return None
+        seen_seasons.add(order)
+        total += ep_count
+    return total
+
+
+_NON_TV_FORMATS: frozenset[str] = frozenset({"MOVIE", "OVA", "SPECIAL"})
+
+
+def _build_tv_season_map(
+    full_group_entries: list[dict],
+) -> dict[int, dict]:
+    """Map 1-based TV season number to its series group entry.
+
+    Skips MOVIE/OVA/SPECIAL entries so that on-disk season directory numbers
+    (Season 1/, Season 2/, …) map correctly to AniList entries even when
+    movies appear between seasons in the relation graph.
+
+    Example — JJK series group has season_order 1=S1, 2=JJK0(movie), 3=S2, 4=S3.
+    tv_season_map → {1: S1-entry, 2: S2-entry, 3: S3-entry}
+    """
+    tv_num = 0
+    result: dict[int, dict] = {}
+    for entry in sorted(full_group_entries, key=lambda e: e["season_order"]):
+        fmt = (entry.get("format") or "").upper()
+        if fmt in _NON_TV_FORMATS:
+            continue
+        tv_num += 1
+        result[tv_num] = entry
+    return result
+
+
+def _cumulative_tv_episodes(
+    before_tv_season: int,
+    tv_season_map: dict[int, dict],
+) -> int | None:
+    """Sum episode counts for all TV seasons before *before_tv_season*.
+
+    Uses the tv_season_map built by ``_build_tv_season_map`` (movies excluded).
+    Returns None if any prior TV season has an unknown episode count or is
+    missing from the map.
+    """
+    total = 0
+    for n in range(1, before_tv_season):
+        entry = tv_season_map.get(n)
+        if entry is None:
+            return None
+        ep_count = entry.get("episodes")
+        if not ep_count:
+            return None
+        total += ep_count
+    return total
+
+
 def standardize_episode_filename(
     filename: str, show_title: str, season_num: int
 ) -> str:
@@ -438,6 +509,35 @@ def _match_subdir_to_entry(
     return None
 
 
+def _entry_dict_to_show_input(entry: dict) -> ShowInput:
+    """Construct a minimal ShowInput from a series_group_entries row dict.
+
+    Used when building file tokens for season-subdir files whose AniList entry
+    is not locally matched (and therefore not in ``show_by_anilist``).
+    """
+    display_title = entry.get("display_title") or ""
+    start_date = entry.get("start_date") or ""
+    year = 0
+    if start_date:
+        try:
+            year = int(start_date[:4])
+        except (ValueError, IndexError):
+            year = 0
+    return ShowInput(
+        title=display_title,
+        local_path="",
+        source_id="",
+        anilist_id=entry.get("anilist_id", 0),
+        anilist_title=display_title,
+        year=year,
+        # series_group_entries doesn't store separate romaji/english titles;
+        # _resolve_display_title will fall back to .title (display_title).
+        anilist_title_romaji="",
+        anilist_title_english="",
+        anilist_format=entry.get("format") or "",
+    )
+
+
 def _build_file_tokens(
     show: ShowInput,
     season_num: int,
@@ -531,8 +631,14 @@ def _log_analysis_summary(
         if g.target_folder:
             lines.append(f"    -> {g.target_folder}")
         for fm in g.file_moves:
-            if fm.original_filename != fm.renamed_filename:
-                lines.append(f"    {fm.original_filename} -> {fm.renamed_filename}")
+            # Show destination relative to the group target folder so season
+            # subfolders are visible (e.g. "Season 02/Show - S02E01.mkv").
+            if g.target_folder and fm.destination.startswith(g.target_folder):
+                rel_dest = fm.destination[len(g.target_folder) :].lstrip(os.sep)
+            else:
+                rel_dest = fm.renamed_filename
+            if fm.original_filename != rel_dest:
+                lines.append(f"    {fm.original_filename} -> {rel_dest}")
             else:
                 lines.append(f"    {fm.original_filename} (unchanged)")
 
@@ -795,6 +901,8 @@ class LibraryRestructurer:
         # Track which series group (if any) each anilist_id belongs to, so
         # standalone shows can still carry their group_id for library seeding.
         standalone_group_id: dict[int, int] = {}
+        # Full series group entries keyed by group_id, used for tv_season_map
+        all_group_entries: dict[int, list[dict]] = {}
         skipped: list[tuple[str, str]] = []  # (title, reason)
 
         for si in shows:
@@ -823,6 +931,10 @@ class LibraryRestructurer:
                 # Standalone entry — process separately
                 standalone_shows.append(si)
                 continue
+
+            # Store full entries once per group for tv_season_map lookups
+            if group_id not in all_group_entries:
+                all_group_entries[group_id] = entries
 
             if group_id not in group_shows:
                 group_shows[group_id] = []
@@ -873,6 +985,12 @@ class LibraryRestructurer:
                 continue
 
             shows_in_group.sort(key=lambda s: s["season_order"])
+
+            # Build a TV-only season map so on-disk Season X/ directories
+            # map correctly even when movies/OVAs sit between TV seasons in
+            # the AniList relation graph.
+            full_entries = all_group_entries.get(group_id, [])
+            tv_season_map = _build_tv_season_map(full_entries)
 
             group_info = await self._db.fetch_one(
                 "SELECT display_title, root_anilist_id FROM series_groups WHERE id=?",
@@ -1079,19 +1197,69 @@ class LibraryRestructurer:
                             file_season = effective_season
                             if effective_season == season_num:
                                 file_dest_dir = season_dir
+                                file_si = group_si
                             else:
-                                alt_tokens = {
-                                    "season": f"{effective_season:02d}",
-                                    "season.name": self._san(season_name),
-                                    "year": season_year,
-                                }
-                                alt_folder = (
-                                    self._season_tmpl.render(alt_tokens)
-                                    or f"Season {effective_season:02d}"
+                                # Use the TV-season-aware entry for folder
+                                # naming so movies/OVAs in the group don't
+                                # shift Season 2/ → wrong AniList title.
+                                alt_entry = tv_season_map.get(effective_season)
+                                alt_folder = self._render_season_folder(
+                                    effective_season, alt_entry or group_si
                                 )
                                 file_dest_dir = os.path.join(target_folder, alt_folder)
+                                # File tokens should use the alt-season entry's
+                                # title/year so filenames reflect the correct
+                                # season, not the locally-matched S1 entry.
+                                if alt_entry:
+                                    file_si = show_by_anilist.get(
+                                        alt_entry.get("anilist_id", 0), None
+                                    ) or _entry_dict_to_show_input(alt_entry)
+                                else:
+                                    file_si = group_si
+                            # Absolute-to-season-relative episode translation.
+                            # Only fires when:
+                            #   - file has no SxxExx tag (source_season is None)
+                            #   - file is in S2 or later
+                            #   - all prior-season episode counts are known
+                            #   - episode number exceeds the cumulative prior count
+                            #     (unambiguous signature of absolute numbering)
+                            if ep_info.source_season is None and file_season > 1:
+                                # Prefer the full-group TV map (excludes movies,
+                                # works even when a season has no local folder).
+                                # Fall back to locally-matched shows only.
+                                prior_eps = (
+                                    _cumulative_tv_episodes(
+                                        file_season, tv_season_map
+                                    )
+                                    if tv_season_map
+                                    else _cumulative_episodes_before(
+                                        file_season, shows_in_group
+                                    )
+                                )
+                                if prior_eps is not None:
+                                    try:
+                                        ep_int = int(float(ep_info.number))
+                                    except ValueError:
+                                        ep_int = 0
+                                    if ep_int > prior_eps:
+                                        relative = ep_int - prior_eps
+                                        logger.debug(
+                                            "Absolute ep translation: '%s' "
+                                            "ep %s in S%02d → ep %02d "
+                                            "(cumulative prior seasons: %d eps)",
+                                            filename,
+                                            ep_info.number,
+                                            file_season,
+                                            relative,
+                                            prior_eps,
+                                        )
+                                        ep_info = EpisodeInfo(
+                                            number=str(relative),
+                                            source_season=None,
+                                            variant=ep_info.variant,
+                                        )
                             tokens = _build_file_tokens(
-                                group_si,
+                                file_si,
                                 file_season,
                                 ep_info,
                                 filename,

@@ -1068,7 +1068,9 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
     };
 
     /* ── Helpers ───────────────────────────────────────────── */
-    var esc = window.escHtml;
+    var esc = window.escHtml || function (s) {
+        return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    };
 
     function showEl(id) { document.getElementById(id).classList.remove('hidden'); }
     function hideEl(id) { document.getElementById(id).classList.add('hidden'); }
