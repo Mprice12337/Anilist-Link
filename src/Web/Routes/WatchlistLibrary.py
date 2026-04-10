@@ -1685,6 +1685,44 @@ async def push_alt_titles_endpoint(request: Request) -> JSONResponse:
         await client.close()
 
 
+@router.post("/api/library/unlink-from-sonarr")
+async def unlink_from_sonarr(request: Request) -> JSONResponse:
+    """Remove our DB mapping for an AniList entry regardless of Sonarr state.
+
+    Use when the Sonarr series was deleted externally and the entry is stuck
+    showing as 'in Sonarr' with no way to re-add it.  Does NOT call the
+    Sonarr API — purely a local DB cleanup.
+
+    Body JSON: { anilist_id }
+    """
+    db = request.app.state.db
+    body = await request.json()
+    anilist_id: int | None = body.get("anilist_id")
+    if not anilist_id:
+        return JSONResponse({"error": "anilist_id required"}, status_code=400)
+
+    # Look up sonarr_id before deleting so we can clean season mappings too
+    row = await db.fetch_one(
+        "SELECT sonarr_id FROM anilist_sonarr_mapping WHERE anilist_id=?",
+        (anilist_id,),
+    )
+    sonarr_id = row["sonarr_id"] if row else None
+
+    await db.execute(
+        "DELETE FROM anilist_sonarr_mapping WHERE anilist_id=?", (anilist_id,)
+    )
+    if sonarr_id:
+        await db.execute(
+            "DELETE FROM anilist_sonarr_season_mapping"
+            " WHERE sonarr_id=? AND anilist_id=?",
+            (sonarr_id, anilist_id),
+        )
+    logger.info(
+        "Unlinked anilist_id=%d from Sonarr (sonarr_id=%s)", anilist_id, sonarr_id
+    )
+    return JSONResponse({"ok": True, "anilist_id": anilist_id})
+
+
 @router.post("/api/library/backfill-sonarr-siblings")
 async def backfill_sonarr_siblings(request: Request) -> JSONResponse:
     """One-shot backfill: walk every mapped Sonarr entry, run full BFS chain

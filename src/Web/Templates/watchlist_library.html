@@ -561,7 +561,8 @@ var arr_enabled = {{ 'true' if arr_enabled else 'false' }};
       html += '<button class="btn btn-primary btn-xs" onclick="closeWatchlistDetail(); openReleaseModal(' + entry.anilist_id + ', \'' + _escJs(entry.anilist_title||'') + '\', \'' + (entry.arr_service||'sonarr') + '\')">Search Releases</button> ';
       if (entry.arr_service === 'sonarr' && entry.sonarr_id) {
         html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); reprocessEntry(\'sonarr\',' + entry.sonarr_id + ',this,false)" title="Move downloaded files into your library folder">Move to Library</button> ';
-        html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); reprocessEntry(\'sonarr\',' + entry.sonarr_id + ',this,true)" title="Preview what files would be moved and where">Preview Move</button>';
+        html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); reprocessEntry(\'sonarr\',' + entry.sonarr_id + ',this,true)" title="Preview what files would be moved and where">Preview Move</button> ';
+        html += '<button class="btn btn-danger btn-xs" onclick="unlinkFromSonarr(' + entry.anilist_id + ', \'' + _escJs(entry.anilist_title||'') + '\')" title="Remove Sonarr link from our database (use if series was deleted from Sonarr)">Unlink</button>';
       } else if (entry.arr_service === 'radarr' && entry.radarr_id) {
         html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); reprocessEntry(\'radarr\',' + entry.radarr_id + ',this,false)" title="Move downloaded file into your library folder">Move to Library</button> ';
         html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); reprocessEntry(\'radarr\',' + entry.radarr_id + ',this,true)" title="Preview what file would be moved and where">Preview Move</button>';
@@ -1421,6 +1422,27 @@ var arr_enabled = {{ 'true' if arr_enabled else 'false' }};
         btn.disabled = false;
         btn.textContent = 'Add to Sonarr';
       });
+  };
+
+  window.unlinkFromSonarr = async function(anilistId, title) {
+    if (!confirm('Remove the Sonarr link for "' + title + '" from our database?\n\nThis only clears our records — it does not affect Sonarr itself.')) return;
+    try {
+      var resp = await fetch('/api/library/unlink-from-sonarr', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({anilist_id: anilistId})
+      });
+      var data = await resp.json();
+      if (data.ok) {
+        closeWatchlistDetail();
+        showToast('Unlinked "' + title + '" from Sonarr — you can now re-add it.');
+        setTimeout(function() { loadWatchlist(); }, 600);
+      } else {
+        alert('Unlink failed: ' + (data.error || 'unknown error'));
+      }
+    } catch(e) {
+      alert('Unlink failed: ' + e);
+    }
   };
 
   window.reprocessEntry = async function(service, arrId, btn, dryRun) {
