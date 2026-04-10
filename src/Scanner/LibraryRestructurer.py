@@ -509,6 +509,35 @@ def _match_subdir_to_entry(
     return None
 
 
+def _entry_dict_to_show_input(entry: dict) -> ShowInput:
+    """Construct a minimal ShowInput from a series_group_entries row dict.
+
+    Used when building file tokens for season-subdir files whose AniList entry
+    is not locally matched (and therefore not in ``show_by_anilist``).
+    """
+    display_title = entry.get("display_title") or ""
+    start_date = entry.get("start_date") or ""
+    year = 0
+    if start_date:
+        try:
+            year = int(start_date[:4])
+        except (ValueError, IndexError):
+            year = 0
+    return ShowInput(
+        title=display_title,
+        local_path="",
+        source_id="",
+        anilist_id=entry.get("anilist_id", 0),
+        anilist_title=display_title,
+        year=year,
+        # series_group_entries doesn't store separate romaji/english titles;
+        # _resolve_display_title will fall back to .title (display_title).
+        anilist_title_romaji="",
+        anilist_title_english="",
+        anilist_format=entry.get("format") or "",
+    )
+
+
 def _build_file_tokens(
     show: ShowInput,
     season_num: int,
@@ -1168,6 +1197,7 @@ class LibraryRestructurer:
                             file_season = effective_season
                             if effective_season == season_num:
                                 file_dest_dir = season_dir
+                                file_si = group_si
                             else:
                                 # Use the TV-season-aware entry for folder
                                 # naming so movies/OVAs in the group don't
@@ -1177,6 +1207,15 @@ class LibraryRestructurer:
                                     effective_season, alt_entry or group_si
                                 )
                                 file_dest_dir = os.path.join(target_folder, alt_folder)
+                                # File tokens should use the alt-season entry's
+                                # title/year so filenames reflect the correct
+                                # season, not the locally-matched S1 entry.
+                                if alt_entry:
+                                    file_si = show_by_anilist.get(
+                                        alt_entry.get("anilist_id", 0), None
+                                    ) or _entry_dict_to_show_input(alt_entry)
+                                else:
+                                    file_si = group_si
                             # Absolute-to-season-relative episode translation.
                             # Only fires when:
                             #   - file has no SxxExx tag (source_season is None)
@@ -1220,7 +1259,7 @@ class LibraryRestructurer:
                                             variant=ep_info.variant,
                                         )
                             tokens = _build_file_tokens(
-                                group_si,
+                                file_si,
                                 file_season,
                                 ep_info,
                                 filename,

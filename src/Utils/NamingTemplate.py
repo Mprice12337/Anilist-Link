@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 _RE_RESOLUTION = re.compile(r"\b(2160p|1080p|720p|480p|4K)\b", re.IGNORECASE)
 _RE_SOURCE = re.compile(
-    r"\b(BluRay|Blu-?Ray|BDRip|WEB-DL|WEBRip|WEB|HDTV|DVDRip)\b", re.IGNORECASE
+    r"\b(BluRay|Blu-?Ray|BDRip|BD|WEB-DL|WEBRip|WEB|HDTV|DVDRip)\b", re.IGNORECASE
 )
 _RE_CODEC = re.compile(r"\b(x265|H\.?265|HEVC|x264|H\.?264|AV1|AVC)\b", re.IGNORECASE)
 
@@ -19,6 +19,7 @@ _SOURCE_NORMALIZE: dict[str, str] = {
     "blu-ray": "BluRay",
     "bluray": "BluRay",
     "bdrip": "BluRay",
+    "bd": "BluRay",
     "web-dl": "WEB-DL",
     "webrip": "WEBRip",
     "web": "WEB",
