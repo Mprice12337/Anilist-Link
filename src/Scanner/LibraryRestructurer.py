@@ -362,6 +362,54 @@ def _cumulative_episodes_before(
     return total
 
 
+_NON_TV_FORMATS: frozenset[str] = frozenset({"MOVIE", "OVA", "SPECIAL"})
+
+
+def _build_tv_season_map(
+    full_group_entries: list[dict],
+) -> dict[int, dict]:
+    """Map 1-based TV season number to its series group entry.
+
+    Skips MOVIE/OVA/SPECIAL entries so that on-disk season directory numbers
+    (Season 1/, Season 2/, …) map correctly to AniList entries even when
+    movies appear between seasons in the relation graph.
+
+    Example — JJK series group has season_order 1=S1, 2=JJK0(movie), 3=S2, 4=S3.
+    tv_season_map → {1: S1-entry, 2: S2-entry, 3: S3-entry}
+    """
+    tv_num = 0
+    result: dict[int, dict] = {}
+    for entry in sorted(full_group_entries, key=lambda e: e["season_order"]):
+        fmt = (entry.get("format") or "").upper()
+        if fmt in _NON_TV_FORMATS:
+            continue
+        tv_num += 1
+        result[tv_num] = entry
+    return result
+
+
+def _cumulative_tv_episodes(
+    before_tv_season: int,
+    tv_season_map: dict[int, dict],
+) -> int | None:
+    """Sum episode counts for all TV seasons before *before_tv_season*.
+
+    Uses the tv_season_map built by ``_build_tv_season_map`` (movies excluded).
+    Returns None if any prior TV season has an unknown episode count or is
+    missing from the map.
+    """
+    total = 0
+    for n in range(1, before_tv_season):
+        entry = tv_season_map.get(n)
+        if entry is None:
+            return None
+        ep_count = entry.get("episodes")
+        if not ep_count:
+            return None
+        total += ep_count
+    return total
+
+
 def standardize_episode_filename(
     filename: str, show_title: str, season_num: int
 ) -> str:
@@ -824,6 +872,8 @@ class LibraryRestructurer:
         # Track which series group (if any) each anilist_id belongs to, so
         # standalone shows can still carry their group_id for library seeding.
         standalone_group_id: dict[int, int] = {}
+        # Full series group entries keyed by group_id, used for tv_season_map
+        all_group_entries: dict[int, list[dict]] = {}
         skipped: list[tuple[str, str]] = []  # (title, reason)
 
         for si in shows:
@@ -852,6 +902,10 @@ class LibraryRestructurer:
                 # Standalone entry — process separately
                 standalone_shows.append(si)
                 continue
+
+            # Store full entries once per group for tv_season_map lookups
+            if group_id not in all_group_entries:
+                all_group_entries[group_id] = entries
 
             if group_id not in group_shows:
                 group_shows[group_id] = []
@@ -902,6 +956,12 @@ class LibraryRestructurer:
                 continue
 
             shows_in_group.sort(key=lambda s: s["season_order"])
+
+            # Build a TV-only season map so on-disk Season X/ directories
+            # map correctly even when movies/OVAs sit between TV seasons in
+            # the AniList relation graph.
+            full_entries = all_group_entries.get(group_id, [])
+            tv_season_map = _build_tv_season_map(full_entries)
 
             group_info = await self._db.fetch_one(
                 "SELECT display_title, root_anilist_id FROM series_groups WHERE id=?",
@@ -1109,14 +1169,12 @@ class LibraryRestructurer:
                             if effective_season == season_num:
                                 file_dest_dir = season_dir
                             else:
-                                alt_tokens = {
-                                    "season": f"{effective_season:02d}",
-                                    "season.name": self._san(season_name),
-                                    "year": season_year,
-                                }
-                                alt_folder = (
-                                    self._season_tmpl.render(alt_tokens)
-                                    or f"Season {effective_season:02d}"
+                                # Use the TV-season-aware entry for folder
+                                # naming so movies/OVAs in the group don't
+                                # shift Season 2/ → wrong AniList title.
+                                alt_entry = tv_season_map.get(effective_season)
+                                alt_folder = self._render_season_folder(
+                                    effective_season, alt_entry or group_si
                                 )
                                 file_dest_dir = os.path.join(target_folder, alt_folder)
                             # Absolute-to-season-relative episode translation.
@@ -1127,8 +1185,17 @@ class LibraryRestructurer:
                             #   - episode number exceeds the cumulative prior count
                             #     (unambiguous signature of absolute numbering)
                             if ep_info.source_season is None and file_season > 1:
-                                prior_eps = _cumulative_episodes_before(
-                                    file_season, shows_in_group
+                                # Prefer the full-group TV map (excludes movies,
+                                # works even when a season has no local folder).
+                                # Fall back to locally-matched shows only.
+                                prior_eps = (
+                                    _cumulative_tv_episodes(
+                                        file_season, tv_season_map
+                                    )
+                                    if tv_season_map
+                                    else _cumulative_episodes_before(
+                                        file_season, shows_in_group
+                                    )
                                 )
                                 if prior_eps is not None:
                                     try:
