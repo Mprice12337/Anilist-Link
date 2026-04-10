@@ -119,6 +119,7 @@ class DownloadManager:
                 monitored=monitored,
                 monitor_strategy=monitor_strategy,
                 search_immediately=search_immediately,
+                season_folder=False,
             )
             external_id = sonarr_data.get("id")
             result = AddResult(

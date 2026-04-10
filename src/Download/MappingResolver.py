@@ -113,6 +113,7 @@ class MappingResolver:
                 monitor_strategy=monitor_strategy,
                 search_immediately=search_immediately,
                 series_type="anime",
+                season_folder=False,
                 tags=tags,
             )
             arr_id = result.get("id")

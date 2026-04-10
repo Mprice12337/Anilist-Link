@@ -47,6 +47,10 @@ _GENERIC_FOLDER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Season subfolders with generic names (Season 1, Season 2, …) are not useful
+# as AniList search terms — fall back to the parent show folder name instead.
+_GENERIC_SEASON_RE = re.compile(r"^season\s*\d+$", re.IGNORECASE)
+
 
 def _clean_filename_for_search(name: str) -> str:
     """Strip extension, resolution tags, and bracketed quality from a filename."""
@@ -104,7 +108,17 @@ def _derive_folder_name(show: object) -> str:  # type: ignore[type-arg]
             return cleaned
         return parent or show.name
 
-    # Path is a directory
+    # Path is a directory — if the folder name is a generic "Season N", use the
+    # parent directory (the show folder) as the search term instead.
+    if _GENERIC_SEASON_RE.match(basename.strip()):
+        parent = os.path.basename(os.path.dirname(path))
+        if parent:
+            logger.debug(
+                "Generic season folder '%s' — using parent '%s' for AniList matching",
+                basename,
+                parent,
+            )
+            return parent
     return basename or show.name
 
 

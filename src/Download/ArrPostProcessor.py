@@ -79,16 +79,24 @@ class ArrPostProcessor:
         safe_dir = await self._get_folder_name(show_info)
         season_dir = await self._get_season_folder_name(season_number, season_info)
 
-        # Use library output path as target root; fall back to Sonarr series path
-        library_path = await self._get_library_output_path()
-        target_root = library_path or series_path
-
         # Path prefix translation for Docker/remote setups
         arr_prefix = self._config.sonarr.path_prefix
         local_prefix = self._config.sonarr.local_path_prefix
         local_current = self._to_local(current_path, arr_prefix, local_prefix)
-        local_root = self._to_local(target_root, arr_prefix, local_prefix)
-        local_target = str(Path(local_root) / safe_dir / season_dir / filename)
+
+        # When a library path is configured it is the library root — the show
+        # folder (safe_dir) is appended beneath it.  When falling back to
+        # series_path, that IS already the show-level folder; appending safe_dir
+        # again would create a nested structure (show/show/Season N).
+        library_path = await self._get_library_output_path()
+        if library_path:
+            local_series = str(
+                Path(self._to_local(library_path, arr_prefix, local_prefix)) / safe_dir
+            )
+        else:
+            local_series = self._to_local(series_path, arr_prefix, local_prefix)
+
+        local_target = str(Path(local_series) / season_dir / filename)
 
         if Path(local_target).resolve() == Path(local_current).resolve():
             logger.debug("Sonarr file already at target path: %s", current_path)
@@ -97,20 +105,27 @@ class ArrPostProcessor:
         if not self._move_file(local_current, local_target):
             return
 
-        # Update series path and trigger rescan so Sonarr discovers the moved file
-        local_series = str(Path(local_root) / safe_dir)
         arr_series_path = self._to_arr(local_series, arr_prefix, local_prefix)
+        arr_target_path = self._to_arr(local_target, arr_prefix, local_prefix)
+        relative_path = str(Path(local_target).relative_to(local_series))
 
         sonarr = SonarrClient(
             url=self._config.sonarr.url, api_key=self._config.sonarr.api_key
         )
         try:
-            await sonarr.update_series_path(sonarr_id, arr_series_path)
+            # Only update the series path when it has actually changed (e.g. first
+            # episode after add, or library root moved) — skip on subsequent downloads
+            # where Sonarr already points at the right show folder.
+            if arr_series_path != series_path:
+                await sonarr.update_series_path(sonarr_id, arr_series_path)
+                logger.info(
+                    "Sonarr series id=%d path updated → %s", sonarr_id, arr_series_path
+                )
+            # Tell Sonarr exactly where this file landed — no full rescan needed.
+            await sonarr.update_episode_file(file_id, relative_path, arr_target_path)
             logger.info(
-                "Sonarr series id=%d path updated → %s", sonarr_id, arr_series_path
+                "Sonarr episode file id=%d path updated → %s", file_id, arr_target_path
             )
-            await sonarr.rescan_series(sonarr_id)
-            logger.info("Sonarr rescan triggered for series id=%d", sonarr_id)
         except Exception as exc:
             logger.error(
                 "Failed to update Sonarr after move for id=%d: %s", sonarr_id, exc
@@ -251,10 +266,19 @@ class ArrPostProcessor:
             if not series_path:
                 return {"ok": False, "error": "Series has no path in Sonarr"}
 
-            # Use library output path as target root; fall back to Sonarr series path
+            # When library_path is set it is the library root — safe_dir is appended.
+            # When absent, series_path IS the show folder; don't nest safe_dir under it.
             library_path = await self._get_library_output_path()
-            target_root = library_path or series_path
-            local_target_root = self._to_local(target_root, arr_prefix, local_prefix)
+            if library_path:
+                local_target_root: str | None = self._to_local(
+                    library_path, arr_prefix, local_prefix
+                )
+                local_series_fallback: str | None = None
+            else:
+                local_target_root = None
+                local_series_fallback = self._to_local(
+                    series_path, arr_prefix, local_prefix
+                )
 
             # Build episodeFileId → (seasonNumber, episodeNumber) map
             episodes = await sonarr.get_episodes(sonarr_id)
@@ -302,9 +326,11 @@ class ArrPostProcessor:
                     local_current = self._to_local(
                         arr_current_path, arr_prefix, local_prefix
                     )
-                    local_target = str(
-                        Path(local_target_root) / safe_dir / season_dir / filename
-                    )
+                    if local_target_root:
+                        local_series_dry = str(Path(local_target_root) / safe_dir)
+                    else:
+                        local_series_dry = local_series_fallback or ""
+                    local_target = str(Path(local_series_dry) / season_dir / filename)
                     arr_target = self._to_arr(local_target, arr_prefix, local_prefix)
 
                     already_at_target = (
@@ -333,11 +359,10 @@ class ArrPostProcessor:
 
             moved = skipped = errors = 0
 
-            # Update series path in Sonarr to the library show folder.
-            # Do this once before processing files so Sonarr tracks the
-            # new location even if all files are already at target.
-            if episode_files:
-                # Resolve show folder from the first mappable file
+            # When a library path is configured, update the Sonarr series path once
+            # upfront so it points at the correct show folder in our library.
+            # When falling back to series_path, it is already the show folder — skip.
+            if local_target_root and episode_files:
                 for _probe in episode_files:
                     _probe_fid = _probe.get("id", 0)
                     _probe_sn = file_season.get(_probe_fid, 1)
@@ -355,22 +380,23 @@ class ArrPostProcessor:
                                 arr_prefix,
                                 local_prefix,
                             )
-                            try:
-                                await sonarr.update_series_path(
-                                    sonarr_id, arr_series_path
-                                )
-                                series_path = arr_series_path
-                                logger.info(
-                                    "Sonarr series id=%d path → %s",
-                                    sonarr_id,
-                                    arr_series_path,
-                                )
-                            except Exception as exc:
-                                logger.warning(
-                                    "Failed to update series path for id=%d: %s",
-                                    sonarr_id,
-                                    exc,
-                                )
+                            if arr_series_path != series_path:
+                                try:
+                                    await sonarr.update_series_path(
+                                        sonarr_id, arr_series_path
+                                    )
+                                    series_path = arr_series_path
+                                    logger.info(
+                                        "Sonarr series id=%d path → %s",
+                                        sonarr_id,
+                                        arr_series_path,
+                                    )
+                                except Exception as exc:
+                                    logger.warning(
+                                        "Failed to update series path for id=%d: %s",
+                                        sonarr_id,
+                                        exc,
+                                    )
                             break
                     break
 
@@ -420,9 +446,11 @@ class ArrPostProcessor:
                 local_current = self._to_local(
                     arr_current_path, arr_prefix, local_prefix
                 )
-                local_target = str(
-                    Path(local_target_root) / safe_dir / season_dir / filename
-                )
+                if local_target_root:
+                    local_series_for_file = str(Path(local_target_root) / safe_dir)
+                else:
+                    local_series_for_file = local_series_fallback or ""
+                local_target = str(Path(local_series_for_file) / season_dir / filename)
 
                 if Path(local_target).resolve() == Path(local_current).resolve():
                     skipped += 1
@@ -438,16 +466,21 @@ class ArrPostProcessor:
                     continue
                 moved += 1
 
-            # Always rescan so Sonarr discovers files at their current paths
-            try:
-                await sonarr.rescan_series(sonarr_id)
-                logger.info("Sonarr rescan triggered for series id=%d", sonarr_id)
-            except Exception as exc:
-                logger.warning(
-                    "Failed to trigger Sonarr rescan for id=%d: %s",
-                    sonarr_id,
-                    exc,
+                # Tell Sonarr exactly where this file landed — no rescan needed.
+                arr_target_path = self._to_arr(local_target, arr_prefix, local_prefix)
+                relative_path = str(
+                    Path(local_target).relative_to(local_series_for_file)
                 )
+                try:
+                    await sonarr.update_episode_file(
+                        file_id, relative_path, arr_target_path
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to update episode file id=%d in Sonarr: %s",
+                        file_id,
+                        exc,
+                    )
 
             return {"ok": True, "moved": moved, "skipped": skipped, "errors": errors}
         finally:
