@@ -348,13 +348,16 @@ def _cumulative_episodes_before(
     Returns None if any prior entry has an unknown episode count (None or 0),
     since we cannot safely compute the absolute-to-relative offset in that case.
     """
+    seen_seasons: set[int] = set()
     total = 0
     for entry in shows_in_group:
-        if entry["tv_season_order"] >= season:
+        order = entry["tv_season_order"]
+        if order >= season or order in seen_seasons:
             continue
         ep_count = entry.get("episodes")
         if not ep_count:  # None or 0 — unknown, bail out
             return None
+        seen_seasons.add(order)
         total += ep_count
     return total
 
@@ -551,8 +554,14 @@ def _log_analysis_summary(
         if g.target_folder:
             lines.append(f"    -> {g.target_folder}")
         for fm in g.file_moves:
-            if fm.original_filename != fm.renamed_filename:
-                lines.append(f"    {fm.original_filename} -> {fm.renamed_filename}")
+            # Show destination relative to the group target folder so season
+            # subfolders are visible (e.g. "Season 02/Show - S02E01.mkv").
+            if g.target_folder and fm.destination.startswith(g.target_folder):
+                rel_dest = fm.destination[len(g.target_folder) :].lstrip(os.sep)
+            else:
+                rel_dest = fm.renamed_filename
+            if fm.original_filename != rel_dest:
+                lines.append(f"    {fm.original_filename} -> {rel_dest}")
             else:
                 lines.append(f"    {fm.original_filename} (unchanged)")
 
