@@ -254,11 +254,22 @@ class RestructureProgress:
 
 # Primary pattern: SxxExx — tried first to avoid false matches from numeric titles
 _EP_PRIMARY = re.compile(r"S(\d{1,2})E(\d{1,3}(?:\.\d(?!\d))?)")
-# Fallback patterns: Episode keyword, " - NN", bare number
+# Fallback patterns: Episode keyword, " - NN", bracket-enclosed NN, bare number
 _EP_FALLBACK = re.compile(
-    r"[Ee](?:pisode)?\.?\s*(\d{1,3}(?:\.\d(?!\d))?)"
-    r"|\s-\s(\d{2,3}(?:\.\d(?!\d))?)(?:\s|$|\[)"
-    r"|(?:^|[\s_\]])(\d{2,3})(?:v\d)?(?:[\s_.\[(\-]|$)"
+    r"[Ee](?:pisode)?\.?\s*(\d{1,3}(?:\.\d(?!\d))?)"  # E05 / Episode 5
+    r"|\s-\s(\d{2,3}(?:\.\d(?!\d))?)(?:\s|$|\[)"  # " - 05 " format
+    r"|\](\d{2,3})(?:v\d)?\["  # [05][ fansub bracket
+    r"|(?:^|[\s_\]])(\d{2,3})(?:v\d)?(?:[\s_.\[(\-]|$)"  # bare number
+)
+
+# Specials/extras: S##OVA## or S##S## (e.g. "S01OVA03", "S02S06")
+_EP_SPECIAL = re.compile(r"S(\d{1,2})(?:OVA|S)(\d{1,3})", re.IGNORECASE)
+
+# Creditless OP/ED and similar extras that have no episode number
+_EP_EXTRAS_ONLY = re.compile(
+    r"\b(NC(?:OP|ED)\d*|Creditless\s+(?:Opening|Ending)|Clean\s+(?:OP|ED)"
+    r"|(?:Opening|Ending)\s+(?:Theme|Animation)|Textless)\b",
+    re.IGNORECASE,
 )
 
 _VARIANT_RE = re.compile(
@@ -292,6 +303,12 @@ def _extract_episode_info(filename: str) -> EpisodeInfo | None:
 
     Tries SxxExx first (anywhere in the filename) to avoid false positives
     from numeric titles like "86 Eighty Six" or "91 Days".
+
+    Special handling:
+    - S##OVA## / S##S## patterns → routed to S00 (specials)
+    - Creditless OP/ED and similar no-number extras → routed to S00 with
+      ep number "00" so they land in a specials folder without a rename
+    - [##][ fansub bracket notation → extracted as bare episode number
     """
     source_season: int | None = None
 
@@ -301,18 +318,26 @@ def _extract_episode_info(filename: str) -> EpisodeInfo | None:
         source_season = int(m_primary.group(1))
         ep_str = m_primary.group(2)
     else:
-        # Fall back to looser patterns only when SxxExx is absent
-        match = _EP_FALLBACK.search(filename)
-        if not match:
-            return None
-        if match.group(1) is not None:
-            ep_str = match.group(1)
-        elif match.group(2) is not None:
-            ep_str = match.group(2)
-        elif match.group(3) is not None:
-            ep_str = match.group(3)
+        # S##OVA## or S##S## → treat as specials (S00)
+        m_special = _EP_SPECIAL.search(filename)
+        if m_special:
+            ep_str = m_special.group(2)
+            source_season = 0
         else:
-            return None
+            # Fall back to looser patterns only when SxxExx is absent
+            match = _EP_FALLBACK.search(filename)
+            if not match:
+                # No numeric episode — check for known no-number extras
+                # (NCOP, NCED, Creditless Opening/Ending, etc.)
+                if _EP_EXTRAS_ONLY.search(filename):
+                    return EpisodeInfo(number="00", source_season=0)
+                return None
+            # Groups: 1=E##, 2=" - ##", 3=][##][, 4=bare
+            ep_str = (
+                match.group(1) or match.group(2) or match.group(3) or match.group(4)
+            )
+            if ep_str is None:
+                return None
 
     # If no season from SxxExx, check for title-based season indicators
     # like "2nd Season", "Season 2", "Part 2"
@@ -1228,9 +1253,7 @@ class LibraryRestructurer:
                                 # works even when a season has no local folder).
                                 # Fall back to locally-matched shows only.
                                 prior_eps = (
-                                    _cumulative_tv_episodes(
-                                        file_season, tv_season_map
-                                    )
+                                    _cumulative_tv_episodes(file_season, tv_season_map)
                                     if tv_season_map
                                     else _cumulative_episodes_before(
                                         file_season, shows_in_group
@@ -1241,7 +1264,19 @@ class LibraryRestructurer:
                                         ep_int = int(float(ep_info.number))
                                     except ValueError:
                                         ep_int = 0
-                                    if ep_int > prior_eps:
+                                    # Only translate if the episode number
+                                    # exceeds both the prior-season cumulative
+                                    # AND the current season's own episode count.
+                                    # If ep_int fits within the current season's
+                                    # count it is almost certainly relative
+                                    # numbering (e.g. S2 E13-of-13), not
+                                    # absolute — applying the offset would
+                                    # produce a collision with E01.
+                                    cur_season_eps = file_si.episodes or 0
+                                    is_absolute = ep_int > prior_eps and (
+                                        not cur_season_eps or ep_int > cur_season_eps
+                                    )
+                                    if is_absolute:
                                         relative = ep_int - prior_eps
                                         logger.debug(
                                             "Absolute ep translation: '%s' "
@@ -2532,8 +2567,18 @@ class LibraryRestructurer:
             if os.path.isdir(group.target_folder):
                 _media_exts = frozenset(
                     {
-                        ".mkv", ".mp4", ".avi", ".m4v", ".mov", ".wmv",
-                        ".ts", ".flv", ".webm", ".m2ts", ".mpg", ".mpeg",
+                        ".mkv",
+                        ".mp4",
+                        ".avi",
+                        ".m4v",
+                        ".mov",
+                        ".wmv",
+                        ".ts",
+                        ".flv",
+                        ".webm",
+                        ".m2ts",
+                        ".mpg",
+                        ".mpeg",
                     }
                 )
 

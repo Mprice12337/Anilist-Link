@@ -10,7 +10,7 @@ from src.Database.Models import INDEXES, TABLES
 
 logger = logging.getLogger(__name__)
 
-LATEST_VERSION = 4
+LATEST_VERSION = 5
 
 
 async def run_migrations(db: aiosqlite.Connection) -> None:
@@ -39,6 +39,10 @@ async def run_migrations(db: aiosqlite.Connection) -> None:
 
     if current < 4:
         await _apply_v4(db)
+        current = 4
+
+    if current < 5:
+        await _apply_v5(db)
 
 
 async def _get_current_version(db: aiosqlite.Connection) -> int:
@@ -115,6 +119,8 @@ async def _apply_column_guards(db: aiosqlite.Connection) -> None:
         ("library_items", "year", "INTEGER NOT NULL DEFAULT 0"),
         ("user_watchlist", "title_romaji", "TEXT NOT NULL DEFAULT ''"),
         ("user_watchlist", "title_english", "TEXT NOT NULL DEFAULT ''"),
+        ("series_group_entries", "title_romaji", "TEXT NOT NULL DEFAULT ''"),
+        ("series_group_entries", "title_english", "TEXT NOT NULL DEFAULT ''"),
     ]
 
     added: list[str] = []
@@ -231,3 +237,29 @@ async def _apply_v4(db: aiosqlite.Connection) -> None:
     await db.execute("INSERT INTO schema_version (version) VALUES (?)", (4,))
     await db.commit()
     logger.info("Migration v4 applied: watch_sync_log table added")
+
+
+async def _apply_v5(db: aiosqlite.Connection) -> None:
+    """Add title_romaji and title_english columns to series_group_entries.
+
+    These columns allow _render_season_folder() to honour the user's
+    title_pref (romaji/english) when building season folder names for
+    entries that were resolved via the series-group dict path (i.e. S2+
+    shows whose files live inside the S1 source folder).  Without them
+    the fallback was display_title, which is stored english-preferred.
+    """
+    logger.info(
+        "Applying migration v5: adding title_romaji/title_english "
+        "to series_group_entries"
+    )
+    for col in ("title_romaji", "title_english"):
+        try:
+            await db.execute(
+                f"ALTER TABLE series_group_entries ADD COLUMN {col} "
+                "TEXT NOT NULL DEFAULT ''"
+            )
+        except aiosqlite.OperationalError:
+            pass  # Already present on fresh DBs created after Models.py update
+    await db.execute("INSERT INTO schema_version (version) VALUES (?)", (5,))
+    await db.commit()
+    logger.info("Migration v5 applied: series_group_entries title columns added")

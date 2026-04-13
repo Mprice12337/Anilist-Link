@@ -473,6 +473,8 @@ TABLES: dict[str, str] = {
             anilist_id INTEGER NOT NULL,
             season_order INTEGER NOT NULL DEFAULT 0,
             display_title TEXT NOT NULL DEFAULT '',
+            title_romaji TEXT NOT NULL DEFAULT '',
+            title_english TEXT NOT NULL DEFAULT '',
             format TEXT NOT NULL DEFAULT '',
             episodes INTEGER,
             start_date TEXT NOT NULL DEFAULT '',

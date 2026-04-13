@@ -583,6 +583,8 @@ class DatabaseManager:
         anilist_id: int,
         season_order: int,
         display_title: str = "",
+        title_romaji: str = "",
+        title_english: str = "",
         format: str = "",
         episodes: int | None = None,
         start_date: str = "",
@@ -591,11 +593,13 @@ class DatabaseManager:
         await self.execute(
             """INSERT INTO series_group_entries
                    (group_id, anilist_id, season_order, display_title,
-                    format, episodes, start_date)
-               VALUES (?, ?, ?, ?, ?, ?, ?)
+                    title_romaji, title_english, format, episodes, start_date)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(group_id, anilist_id) DO UPDATE SET
                    season_order=excluded.season_order,
                    display_title=excluded.display_title,
+                   title_romaji=excluded.title_romaji,
+                   title_english=excluded.title_english,
                    format=excluded.format,
                    episodes=excluded.episodes,
                    start_date=excluded.start_date
@@ -605,6 +609,8 @@ class DatabaseManager:
                 anilist_id,
                 season_order,
                 display_title,
+                title_romaji,
+                title_english,
                 format,
                 episodes,
                 start_date,

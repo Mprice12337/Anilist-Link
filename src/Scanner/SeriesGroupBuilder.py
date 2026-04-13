@@ -116,14 +116,16 @@ class SeriesGroupBuilder:
         await self._db.clear_series_group_entries(group_id)
         for order, entry in enumerate(collected, start=1):
             entry_title_obj = entry.get("title") or {}
-            entry_display = (
-                entry_title_obj.get("english") or entry_title_obj.get("romaji") or ""
-            )
+            entry_romaji = entry_title_obj.get("romaji") or ""
+            entry_english = entry_title_obj.get("english") or ""
+            entry_display = entry_english or entry_romaji
             await self._db.upsert_series_group_entry(
                 group_id=group_id,
                 anilist_id=entry["id"],
                 season_order=order,
                 display_title=entry_display,
+                title_romaji=entry_romaji,
+                title_english=entry_english,
                 format=entry.get("format") or "",
                 episodes=entry.get("episodes"),
                 start_date=_format_start_date(entry.get("startDate")),
