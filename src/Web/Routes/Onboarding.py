@@ -1205,12 +1205,36 @@ async def onboarding_restructure_analyze(request: Request) -> JSONResponse:
     request.app.state.restructure_progress = progress
 
     try:
+        # Pre-count total folders across all source dirs so the progress
+        # widget shows a stable, accurate total throughout the scan.
+        total_items = 0
+        for src_dir in source_dirs:
+            try:
+                total_items += sum(
+                    1
+                    for name in os.listdir(src_dir)
+                    if not name.startswith(".")
+                    and os.path.isdir(os.path.join(src_dir, name))
+                )
+            except OSError:
+                pass
+        progress.total = total_items
+        progress.processed = 0
+
+        # Shared name-cache across all source dirs: same folder name in
+        # multiple sources reuses the first match without hitting the API again.
+        name_cache: dict = {}
+
         all_shows = []
         for src_dir in source_dirs:
             progress.phase = f"Scanning {src_dir}"
             logger.info("Onboarding scan: starting directory %r", src_dir)
             shows = await scanner.scan_directory(
-                src_dir, progress, force_rescan=force_rescan
+                src_dir,
+                progress,
+                force_rescan=force_rescan,
+                manage_total=False,
+                _name_cache=name_cache,
             )
             matched = sum(1 for s in shows if s.anilist_id)
             unmatched = len(shows) - matched

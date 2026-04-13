@@ -37,6 +37,7 @@ class LocalDirectoryScanner:
         progress: RestructureProgress,
         force_rescan: bool = False,
         manage_total: bool = True,
+        _name_cache: dict | None = None,
     ) -> list[ShowInput]:
         """Scan a directory for show folders and match each to AniList.
 
@@ -49,6 +50,12 @@ class LocalDirectoryScanner:
         When *manage_total* is False, the caller is responsible for setting
         ``progress.total`` before calling.  This prevents the per-directory
         reset that causes incorrect fractions when scanning multiple dirs.
+
+        *_name_cache* is an optional dict shared across multiple ``scan_directory``
+        calls.  When provided, a folder name that already produced a successful
+        AniList match in a previous call is re-used without hitting the API again.
+        Pass the same dict for every call in a multi-source scan to avoid burning
+        rate-limit tokens on identical folder names in different source dirs.
         """
         progress.phase = "Scanning directory"
         results: list[ShowInput] = []
@@ -131,46 +138,69 @@ class LocalDirectoryScanner:
             # Extract year hint from folder name (e.g. "[2020]" or "(2022)")
             folder_year = extract_year_from_name(folder_name)
 
-            # Search AniList and fuzzy-match (two-pass: specific then broad)
-            # Pass 1: search with full title (only strip [year] tags)
-            specific_query = strip_bracket_tags(folder_name)
-            if not specific_query.strip():
-                specific_query = folder_name
-
-            match_result = None
-            try:
-                candidates = await self._anilist.search_anime(
-                    specific_query, page=1, per_page=10
+            # Name-cache hit: same folder name already matched in this scan
+            # session (e.g. identical show in two source dirs).  Re-use the
+            # result without making another API call.
+            if _name_cache is not None and folder_name in _name_cache:
+                cached_entry = _name_cache[folder_name]
+                logger.debug(
+                    "LocalDirectoryScanner: name-cache hit %r -> id=%s",
+                    folder_name,
+                    cached_entry.get("id"),
                 )
-                if candidates:
-                    match_result = self._matcher.find_best_match_with_season(
-                        folder_name,
-                        candidates,
-                        target_season=1,
-                        year_hint=folder_year,
-                        include_all_formats=True,
-                    )
-            except Exception:
-                logger.debug("Specific search failed for '%s'", folder_name)
+                match_result = (cached_entry, cached_entry.get("_score", 0.0), 1)
+            else:
+                match_result = None
 
-            # Pass 2: if no match, try with season qualifiers stripped
+            # Search AniList and fuzzy-match (two-pass: specific then broad).
+            # Skipped entirely when a name-cache hit already populated match_result.
             if match_result is None:
-                broad_query = clean_title_for_search(folder_name)
-                if broad_query.strip() and broad_query != specific_query:
-                    try:
-                        candidates = await self._anilist.search_anime(
-                            broad_query, page=1, per_page=10
+                # Pass 1: search with full title (only strip [year] tags)
+                specific_query = strip_bracket_tags(folder_name)
+                if not specific_query.strip():
+                    specific_query = folder_name
+
+                try:
+                    candidates = await self._anilist.search_anime(
+                        specific_query, page=1, per_page=10
+                    )
+                    if candidates:
+                        match_result = self._matcher.find_best_match_with_season(
+                            folder_name,
+                            candidates,
+                            target_season=1,
+                            year_hint=folder_year,
+                            include_all_formats=True,
                         )
-                        if candidates:
-                            match_result = self._matcher.find_best_match_with_season(
-                                folder_name,
-                                candidates,
-                                target_season=1,
-                                year_hint=folder_year,
-                                include_all_formats=True,
+                except Exception:
+                    logger.debug("Specific search failed for '%s'", folder_name)
+
+                # Pass 2: if no match, try with season qualifiers stripped
+                if match_result is None:
+                    broad_query = clean_title_for_search(folder_name)
+                    if broad_query.strip() and broad_query != specific_query:
+                        try:
+                            candidates = await self._anilist.search_anime(
+                                broad_query, page=1, per_page=10
                             )
-                    except Exception:
-                        logger.warning("AniList search failed for '%s'", folder_name)
+                            if candidates:
+                                match_result = (
+                                    self._matcher.find_best_match_with_season(
+                                        folder_name,
+                                        candidates,
+                                        target_season=1,
+                                        year_hint=folder_year,
+                                        include_all_formats=True,
+                                    )
+                                )
+                        except Exception:
+                            logger.warning(
+                                "AniList search failed for '%s'", folder_name
+                            )
+
+            # Define specific_query for the warning log below (needed if name-cache hit)
+            else:
+                specific_query = strip_bracket_tags(folder_name) or folder_name
 
             if match_result is None:
                 logger.warning(
@@ -205,6 +235,11 @@ class LocalDirectoryScanner:
             english = title_obj.get("english") or ""
             anilist_format = matched_entry.get("format", "") or ""
             anilist_episodes = matched_entry.get("episodes")
+
+            # Store score on the entry so the name-cache can replay it.
+            matched_entry["_score"] = score
+            if _name_cache is not None:
+                _name_cache.setdefault(folder_name, matched_entry)
 
             # Cache AniList metadata (cover, description, etc.) so that
             # library seeding can populate cover images without an extra
