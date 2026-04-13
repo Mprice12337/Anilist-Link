@@ -163,7 +163,7 @@
       data-status="{{ ls }}"
       data-local="{{ entry.local_status }}"
       data-arr="{{ entry.arr_status }}"
-      data-title="{{ entry.anilist_title | lower }}"
+      data-title="{{ entry.anilist_title | lower }} {{ (entry.title_romaji or '') | lower }} {{ (entry.title_english or '') | lower }}"
       data-sort-title="{{ entry.anilist_title | lower }}"
       data-sort-format="{{ (entry.anilist_format or '') | lower }}"
       data-sort-year="{{ entry.start_year or 0 }}"
@@ -295,7 +295,7 @@
        data-status="{{ ls }}"
        data-local="{{ entry.local_status }}"
        data-arr="{{ entry.arr_status }}"
-       data-title="{{ entry.anilist_title | lower }}"
+       data-title="{{ entry.anilist_title | lower }} {{ (entry.title_romaji or '') | lower }} {{ (entry.title_english or '') | lower }}"
        data-idx="{{ loop.index0 }}"
        onclick="openWatchlistDetail(this.dataset.idx)"
        style="cursor:pointer">
