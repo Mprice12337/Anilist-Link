@@ -757,7 +757,15 @@ class ArrPostProcessor:
     def _move_file(src: str, dst: str) -> bool:
         """Move src to dst, creating parent directories as needed. True on success."""
         try:
-            Path(dst).parent.mkdir(parents=True, exist_ok=True)
+            parent = Path(dst).parent
+            parent.mkdir(parents=True, exist_ok=True)
+            # Ensure the directory (and all parents we just created) are group-writable
+            # so that other containers sharing the same GID (e.g. Sonarr) can write.
+            for p in [parent, *parent.parents]:
+                try:
+                    p.chmod(p.stat().st_mode | 0o775)
+                except Exception:
+                    break  # Stop at the first directory we don't own
             shutil.move(src, dst)
             logger.info("Moved %s → %s", src, dst)
             return True

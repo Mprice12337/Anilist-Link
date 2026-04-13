@@ -1659,7 +1659,12 @@ class LibraryRestructurer:
                             renamed = (
                                 self._san(self._movie_file_tmpl.render(tokens)) + ext
                             )
-                            file_dest_dir = _get_season_dir(0)  # Specials folder
+                            # Place the bundled movie flat in the series root
+                            # rather than a Specials subfolder.  The flat layout
+                            # is already established by the episode files; adding
+                            # a "Specials/" subdir would break idempotency (the
+                            # file would be proposed for re-move on every run).
+                            file_dest_dir = target_folder
                         else:
                             renamed = filename
                             file_dest_dir = _get_season_dir(1)
@@ -2519,6 +2524,40 @@ class LibraryRestructurer:
                     logger.warning(
                         "Could not remove source folder %s: %s", src_folder, exc
                     )
+
+            # Prune media-free subdirectories within the target folder.
+            # Handles cases like an old "Season 1/" subfolder whose files were
+            # all moved out flat — leaving only cover art / metadata behind.
+            # Never removes the target root itself.
+            if os.path.isdir(group.target_folder):
+                _media_exts = frozenset(
+                    {
+                        ".mkv", ".mp4", ".avi", ".m4v", ".mov", ".wmv",
+                        ".ts", ".flv", ".webm", ".m2ts", ".mpg", ".mpeg",
+                    }
+                )
+
+                def _subdir_has_media(dirpath: str) -> bool:
+                    for _root, _, _files in os.walk(dirpath):
+                        if any(
+                            os.path.splitext(f)[1].lower() in _media_exts
+                            for f in _files
+                        ):
+                            return True
+                    return False
+
+                for _entry in os.listdir(group.target_folder):
+                    _sub = os.path.join(group.target_folder, _entry)
+                    if not os.path.isdir(_sub):
+                        continue
+                    if not _subdir_has_media(_sub):
+                        try:
+                            shutil.rmtree(_sub)
+                            logger.info("Pruned media-free subfolder: %s", _sub)
+                        except OSError as _exc:
+                            logger.warning(
+                                "Could not prune subfolder %s: %s", _sub, _exc
+                            )
 
             # Write tvshow.nfo so Jellyfin classifies this folder as a TV show
             # rather than grouping its contents as movie versions.

@@ -923,8 +923,25 @@ var arr_enabled = {{ 'true' if arr_enabled else 'false' }};
   var _preview = { anilistId: null, btn: null, service: 'sonarr', tvdbId: null, tmdbId: null, title: '' };
   var _disambig = { anilistId: null, btn: null, service: 'sonarr', selectedTvdbId: null, searchTimer: null };
 
-  function onAddSuccess(anilistId, service, btn) {
+  function onAddSuccess(anilistId, service, btn, arrId) {
     showToast('Added to ' + service + ' successfully', 'success');
+
+    // Update the in-memory ENTRIES array so the detail modal reflects the new state
+    for (var i = 0; i < ENTRIES.length; i++) {
+      if (ENTRIES[i].anilist_id === anilistId) {
+        ENTRIES[i].arr_status = 'monitored';
+        ENTRIES[i].arr_service = service;
+        if (service === 'sonarr') {
+          ENTRIES[i].sonarr_id = arrId || null;
+          ENTRIES[i].radarr_id = null;
+        } else {
+          ENTRIES[i].radarr_id = arrId || null;
+          ENTRIES[i].sonarr_id = null;
+        }
+        ENTRIES[i].local_status = 'arr';
+        break;
+      }
+    }
 
     // Update the row in-place instead of reloading
     // Find table row by scanning for the add button's anilist_id
@@ -1113,7 +1130,7 @@ var arr_enabled = {{ 'true' if arr_enabled else 'false' }};
       .then(function(data) {
         document.getElementById('matchPreviewModal').classList.add('hidden');
         if (data.ok) {
-          onAddSuccess(_preview.anilistId, data.service, _preview.btn);
+          onAddSuccess(_preview.anilistId, data.service, _preview.btn, data.arr_id);
         } else {
           showToast('Error: ' + (data.error || 'unknown'), 'error');
           if (_preview.btn) {
@@ -1240,7 +1257,7 @@ var arr_enabled = {{ 'true' if arr_enabled else 'false' }};
       .then(function(data) {
         document.getElementById('disambigModal').classList.add('hidden');
         if (data.ok) {
-          onAddSuccess(_disambig.anilistId, data.service, _disambig.btn);
+          onAddSuccess(_disambig.anilistId, data.service, _disambig.btn, data.arr_id);
         } else {
           showToast('Error: ' + (data.error || 'unknown'), 'error');
           if (_disambig.btn) {
