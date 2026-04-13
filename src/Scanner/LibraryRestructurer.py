@@ -258,7 +258,7 @@ _EP_PRIMARY = re.compile(r"S(\d{1,2})E(\d{1,3}(?:\.\d(?!\d))?)")
 _EP_FALLBACK = re.compile(
     r"[Ee](?:pisode)?\.?\s*(\d{1,3}(?:\.\d(?!\d))?)"  # E05 / Episode 5
     r"|\s-\s(\d{2,3}(?:\.\d(?!\d))?)(?:\s|$|\[)"  # " - 05 " format
-    r"|\](\d{2,3})(?:v\d)?\["  # [05][ fansub bracket
+    r"|\]\[(\d{2,3})(?:v\d)?\]\["  # ][05][ fansub bracket format
     r"|(?:^|[\s_\]])(\d{2,3})(?:v\d)?(?:[\s_.\[(\-]|$)"  # bare number
 )
 
@@ -548,6 +548,8 @@ def _entry_dict_to_show_input(entry: dict) -> ShowInput:
             year = int(start_date[:4])
         except (ValueError, IndexError):
             year = 0
+    romaji = entry.get("title_romaji") or ""
+    english = entry.get("title_english") or ""
     return ShowInput(
         title=display_title,
         local_path="",
@@ -555,11 +557,10 @@ def _entry_dict_to_show_input(entry: dict) -> ShowInput:
         anilist_id=entry.get("anilist_id", 0),
         anilist_title=display_title,
         year=year,
-        # series_group_entries doesn't store separate romaji/english titles;
-        # _resolve_display_title will fall back to .title (display_title).
-        anilist_title_romaji="",
-        anilist_title_english="",
+        anilist_title_romaji=romaji,
+        anilist_title_english=english,
         anilist_format=entry.get("format") or "",
+        anilist_episodes=entry.get("episodes"),
     )
 
 
