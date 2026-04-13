@@ -1272,7 +1272,7 @@ class LibraryRestructurer:
                                     # numbering (e.g. S2 E13-of-13), not
                                     # absolute — applying the offset would
                                     # produce a collision with E01.
-                                    cur_season_eps = file_si.episodes or 0
+                                    cur_season_eps = file_si.anilist_episodes or 0
                                     is_absolute = ep_int > prior_eps and (
                                         not cur_season_eps or ep_int > cur_season_eps
                                     )
