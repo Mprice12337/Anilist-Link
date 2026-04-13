@@ -549,6 +549,8 @@ class AniListClient:
                             or title_obj.get("native")
                             or ""
                         ),
+                        "title_romaji": title_obj.get("romaji") or "",
+                        "title_english": title_obj.get("english") or "",
                         "format": media.get("format", ""),
                         "episodes": media.get("episodes"),
                         "airing_status": media.get("status", ""),

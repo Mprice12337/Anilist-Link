@@ -650,6 +650,8 @@ TABLES: dict[str, str] = {
             progress INTEGER NOT NULL DEFAULT 0,
             score REAL NOT NULL DEFAULT 0,
             anilist_title TEXT NOT NULL DEFAULT '',
+            title_romaji TEXT NOT NULL DEFAULT '',
+            title_english TEXT NOT NULL DEFAULT '',
             anilist_format TEXT NOT NULL DEFAULT '',
             anilist_episodes INTEGER,
             cover_image TEXT NOT NULL DEFAULT '',

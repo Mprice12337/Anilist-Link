@@ -1293,6 +1293,8 @@ class DatabaseManager:
         progress: int = 0,
         score: float = 0.0,
         anilist_title: str = "",
+        title_romaji: str = "",
+        title_english: str = "",
         anilist_format: str = "",
         anilist_episodes: int | None = None,
         cover_image: str = "",
@@ -1303,14 +1305,17 @@ class DatabaseManager:
         await self.execute(
             """INSERT INTO user_watchlist
                    (user_id, anilist_id, list_status, progress, score,
-                    anilist_title, anilist_format, anilist_episodes,
+                    anilist_title, title_romaji, title_english,
+                    anilist_format, anilist_episodes,
                     cover_image, airing_status, start_year, last_synced_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
                ON CONFLICT(user_id, anilist_id) DO UPDATE SET
                    list_status=excluded.list_status,
                    progress=excluded.progress,
                    score=excluded.score,
                    anilist_title=excluded.anilist_title,
+                   title_romaji=excluded.title_romaji,
+                   title_english=excluded.title_english,
                    anilist_format=excluded.anilist_format,
                    anilist_episodes=excluded.anilist_episodes,
                    cover_image=excluded.cover_image,
@@ -1325,6 +1330,8 @@ class DatabaseManager:
                 progress,
                 score,
                 anilist_title,
+                title_romaji,
+                title_english,
                 anilist_format,
                 anilist_episodes,
                 cover_image,
@@ -1345,6 +1352,8 @@ class DatabaseManager:
                 progress=entry.get("progress", 0),
                 score=entry.get("score", 0.0),
                 anilist_title=entry.get("title", ""),
+                title_romaji=entry.get("title_romaji", ""),
+                title_english=entry.get("title_english", ""),
                 anilist_format=entry.get("format", ""),
                 anilist_episodes=entry.get("episodes"),
                 cover_image=entry.get("cover_image", ""),
@@ -1358,29 +1367,18 @@ class DatabaseManager:
         user_id: str,
         list_statuses: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Return watchlist entries for a user, optionally filtered by status.
-
-        Joins anilist_cache so that title_romaji and title_english are
-        available on every row (used by the search/filter UI).
-        """
-        base = (
-            "SELECT w.*,"
-            " COALESCE(ac.title_romaji,'') AS title_romaji,"
-            " COALESCE(ac.title_english,'') AS title_english"
-            " FROM user_watchlist w"
-            " LEFT JOIN anilist_cache ac ON ac.anilist_id = w.anilist_id"
-        )
+        """Return watchlist entries for a user, optionally filtered by status."""
         if list_statuses:
             placeholders = ",".join("?" for _ in list_statuses)
             return await self.fetch_all(
-                f"{base} WHERE w.user_id=?"
-                f" AND w.list_status IN ({placeholders})"
-                f" ORDER BY w.anilist_title COLLATE NOCASE",
+                f"SELECT * FROM user_watchlist WHERE user_id=?"
+                f" AND list_status IN ({placeholders})"
+                f" ORDER BY anilist_title COLLATE NOCASE",
                 tuple([user_id] + list(list_statuses)),
             )
         return await self.fetch_all(
-            f"{base} WHERE w.user_id=?"
-            " ORDER BY w.anilist_title COLLATE NOCASE",
+            "SELECT * FROM user_watchlist WHERE user_id=?"
+            " ORDER BY anilist_title COLLATE NOCASE",
             (user_id,),
         )
 
