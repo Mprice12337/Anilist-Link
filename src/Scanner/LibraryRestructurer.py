@@ -1838,7 +1838,7 @@ class LibraryRestructurer:
         """L1/L2: folder + season folder rename (optionally files)."""
         progress.phase = "Analyzing shows for renaming"
         skipped: list[tuple[str, str]] = []
-        seen_targets: set[str] = set()  # guard against duplicate destinations
+        seen_targets: dict[str, int] = {}  # target_folder → plan.groups index
 
         for si in shows:
             progress.current_item = si.title
@@ -2178,20 +2178,32 @@ class LibraryRestructurer:
             target_folder = os.path.join(parent_dir, rendered_folder)
 
             if target_folder in seen_targets:
-                skipped.append(
-                    (
-                        si.title,
-                        f"duplicate destination '{rendered_folder}' — "
-                        f"another source folder already targets this path",
-                    )
+                # Merge into the existing plan group instead of skipping.
+                # This handles multi-source layouts where S1 lives in one
+                # source dir and S2+ live in another but all share the same
+                # AniList root ID and thus the same output folder.
+                existing_idx = seen_targets[target_folder]
+                existing_group = plan.groups[existing_idx]
+                if si.local_path not in existing_group.source_folders:
+                    existing_group.source_folders.append(si.local_path)
+                existing_group.file_moves.extend(file_moves)
+                if si.source_id not in existing_group.source_rating_keys:
+                    existing_group.source_rating_keys.append(si.source_id)
+                existing_group.season_count = max(
+                    existing_group.season_count, detected_season_count
                 )
-                logger.warning(
-                    "Skipping duplicate rename target '%s' for source '%s'",
+                existing_group.warnings.extend(warnings)
+                existing_group.season_dir_anilist_map.update(season_dir_anilist_map)
+                # Upgrade op_type if this folder contributes file moves
+                if file_moves and existing_group.operation_type == "rename_folder":
+                    existing_group.operation_type = "rename_file"
+                logger.debug(
+                    "Merged duplicate rename target '%s': source '%s' folded into existing group",
                     target_folder,
                     si.local_path,
                 )
                 continue
-            seen_targets.add(target_folder)
+            seen_targets[target_folder] = len(plan.groups)
 
             op_type = "rename_file" if file_moves else "rename_folder"
 
