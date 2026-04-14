@@ -263,11 +263,14 @@ _EP_FALLBACK = re.compile(
 )
 
 # Specials/extras: S##OVA## or S##S## (e.g. "S01OVA03", "S02S06")
-_EP_SPECIAL = re.compile(r"S(\d{1,2})(?:OVA|S)(\d{1,3})", re.IGNORECASE)
+# Group 1=season, group 2=type ("OVA"/"S"), group 3=episode number
+_EP_SPECIAL = re.compile(r"S(\d{1,2})(OVA|S)(\d{1,3})", re.IGNORECASE)
 
 # Bare OAD/OVA specials: "OAD 01", "OVA 01", "OVA01" (no S## prefix)
-# These carry a real episode number so we preserve it but route to S00.
-_EP_OAD_PREFIX = re.compile(r"\bOAD\s*(\d{1,3})\b|\bOVA\s*(\d{1,3})\b", re.IGNORECASE)
+# Group 1=keyword, group 2=OAD episode; group 3=keyword, group 4=OVA episode
+_EP_OAD_PREFIX = re.compile(
+    r"\b(OAD)\s*(\d{1,3})\b|\b(OVA)\s*(\d{1,3})\b", re.IGNORECASE
+)
 
 # Creditless OP/ED and similar extras that have no episode number
 _EP_EXTRAS_ONLY = re.compile(
@@ -323,24 +326,38 @@ def _extract_episode_info(filename: str) -> EpisodeInfo | None:
         ep_str = m_primary.group(2)
     else:
         # S##OVA## or S##S## → treat as specials (S00)
+        # groups: 1=season, 2=type, 3=episode
         m_special = _EP_SPECIAL.search(filename)
         if m_special:
-            ep_str = m_special.group(2)
+            ep_str = m_special.group(3)
             source_season = 0
+            special_type = m_special.group(2).upper()
+            # "S" suffix means a short/special; expand to a readable label
+            special_variant = special_type if special_type != "S" else "Special"
+            return EpisodeInfo(
+                number=ep_str, source_season=0, variant=special_variant
+            )
         else:
             # "OAD 01" / "OVA 01" prefix (no S## wrapper) → route to S00
+            # groups: 1=OAD keyword, 2=OAD ep, 3=OVA keyword, 4=OVA ep
             m_oad = _EP_OAD_PREFIX.search(filename)
             if m_oad:
-                ep_str = m_oad.group(1) or m_oad.group(2)
-                source_season = 0
+                ep_str = m_oad.group(2) or m_oad.group(4)
+                keyword = (m_oad.group(1) or m_oad.group(3)).upper()
+                return EpisodeInfo(number=ep_str, source_season=0, variant=keyword)
             else:
                 # Fall back to looser patterns only when SxxExx is absent
                 match = _EP_FALLBACK.search(filename)
                 if not match:
                     # No numeric episode — check for known no-number extras
                     # (NCOP, NCED, Creditless Opening/Ending, etc.)
-                    if _EP_EXTRAS_ONLY.search(filename):
-                        return EpisodeInfo(number="00", source_season=0)
+                    m_extras = _EP_EXTRAS_ONLY.search(filename)
+                    if m_extras:
+                        return EpisodeInfo(
+                            number="00",
+                            source_season=0,
+                            variant=m_extras.group(1),
+                        )
                     return None
                 # Groups: 1=E##, 2=" - ##", 3=][##][, 4=bare
                 ep_str = (
