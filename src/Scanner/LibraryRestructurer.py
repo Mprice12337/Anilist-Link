@@ -265,6 +265,10 @@ _EP_FALLBACK = re.compile(
 # Specials/extras: S##OVA## or S##S## (e.g. "S01OVA03", "S02S06")
 _EP_SPECIAL = re.compile(r"S(\d{1,2})(?:OVA|S)(\d{1,3})", re.IGNORECASE)
 
+# Bare OAD/OVA specials: "OAD 01", "OVA 01", "OVA01" (no S## prefix)
+# These carry a real episode number so we preserve it but route to S00.
+_EP_OAD_PREFIX = re.compile(r"\bOAD\s*(\d{1,3})\b|\bOVA\s*(\d{1,3})\b", re.IGNORECASE)
+
 # Creditless OP/ED and similar extras that have no episode number
 _EP_EXTRAS_ONLY = re.compile(
     r"\b(NC(?:OP|ED)\d*|Creditless\s+(?:Opening|Ending)|Clean\s+(?:OP|ED)"
@@ -324,18 +328,24 @@ def _extract_episode_info(filename: str) -> EpisodeInfo | None:
             ep_str = m_special.group(2)
             source_season = 0
         else:
-            # Fall back to looser patterns only when SxxExx is absent
-            match = _EP_FALLBACK.search(filename)
-            if not match:
-                # No numeric episode — check for known no-number extras
-                # (NCOP, NCED, Creditless Opening/Ending, etc.)
-                if _EP_EXTRAS_ONLY.search(filename):
-                    return EpisodeInfo(number="00", source_season=0)
-                return None
-            # Groups: 1=E##, 2=" - ##", 3=][##][, 4=bare
-            ep_str = (
-                match.group(1) or match.group(2) or match.group(3) or match.group(4)
-            )
+            # "OAD 01" / "OVA 01" prefix (no S## wrapper) → route to S00
+            m_oad = _EP_OAD_PREFIX.search(filename)
+            if m_oad:
+                ep_str = m_oad.group(1) or m_oad.group(2)
+                source_season = 0
+            else:
+                # Fall back to looser patterns only when SxxExx is absent
+                match = _EP_FALLBACK.search(filename)
+                if not match:
+                    # No numeric episode — check for known no-number extras
+                    # (NCOP, NCED, Creditless Opening/Ending, etc.)
+                    if _EP_EXTRAS_ONLY.search(filename):
+                        return EpisodeInfo(number="00", source_season=0)
+                    return None
+                # Groups: 1=E##, 2=" - ##", 3=][##][, 4=bare
+                ep_str = (
+                    match.group(1) or match.group(2) or match.group(3) or match.group(4)
+                )
             if ep_str is None:
                 return None
 
@@ -918,6 +928,15 @@ class LibraryRestructurer:
         Also handles standalone entries (single-season shows, movies, OVAs).
         """
         from typing import Any
+
+        # Pre-seed the session cache so subsequent get_or_build_group() calls
+        # hit the fast path for every group already stored in the DB — avoids
+        # one DB round-trip and potentially several AniList API calls per show.
+        seeded = await self._group_builder.preseed_session_cache_from_db()
+        if seeded:
+            logger.info(
+                "Full-restructure: pre-seeded session cache with %d anilist_ids", seeded
+            )
 
         group_shows: dict[int, list[dict[str, Any]]] = {}
         # Keep a mapping from anilist_id to ShowInput for template token building
@@ -1574,6 +1593,10 @@ class LibraryRestructurer:
             file_moves = []
             standalone_warnings: list[str] = []
             dest_filenames_s: dict[str, str] = {}
+            # Tracks how many keyword-only extras (NCOP, NCED, etc.) have been
+            # assigned so far — incremented each time ep=="00" (extras_only) is
+            # encountered so each extra gets a unique sequential number.
+            _extras_seq: int = 0
 
             for full_src, filename, dir_season_num in source_files:
                 _name, ext = os.path.splitext(filename)
@@ -1599,10 +1622,10 @@ class LibraryRestructurer:
                         # (overrides the S01 in filename which restarts per
                         # season dir). Otherwise use the file's SxxExx season
                         # or default to S01 for absolute-numbered files.
-                        # S00 in source filenames is a download-convention
-                        # artifact for standalone entries — treat it the same
-                        # as "no season encoded" and default to season 1.
-                        if dir_season_num is not None and (
+                        if ep_info.source_season == 0:
+                            # Explicit specials: S00Exx, S##OVA##, OAD ##
+                            file_season = 0
+                        elif dir_season_num is not None and (
                             ep_info.source_season is None or ep_info.source_season <= 1
                         ):
                             file_season = dir_season_num
@@ -1614,6 +1637,17 @@ class LibraryRestructurer:
                         else:
                             file_season = 1
                         file_dest_dir = _get_season_dir(file_season)
+                        # Keyword-only extras (NCOP, NCED, Creditless, etc.) all
+                        # return ep="00". When multiple extras are present they
+                        # would all collide on S00E00; assign sequential numbers
+                        # (S00E01, S00E02, …) instead.
+                        if ep_info.number == "00":
+                            _extras_seq += 1
+                            ep_info = EpisodeInfo(
+                                number=str(_extras_seq),
+                                source_season=ep_info.source_season,
+                                variant=ep_info.variant,
+                            )
                         # For multi-season Sonarr structures, use the AniList
                         # entry for this season so filenames use the right title
                         # and year (e.g. "Code Geass R2 (2008) - S02E01").
@@ -2007,6 +2041,7 @@ class LibraryRestructurer:
                     use_movie_naming = self._is_single_item_entry(
                         si.anilist_format, video_count
                     )
+                    _extras_seq_l2: int = 0
 
                     for full_src, filename, subdir, dir_season_num in rename_files:
                         _name, ext = os.path.splitext(filename)
@@ -2023,6 +2058,15 @@ class LibraryRestructurer:
                                 file_season = dir_season_num
                             else:
                                 file_season = season_num
+
+                            # Sequential numbering for keyword-only extras
+                            if ep_info.number == "00":
+                                _extras_seq_l2 += 1
+                                ep_info = EpisodeInfo(
+                                    number=str(_extras_seq_l2),
+                                    source_season=ep_info.source_season,
+                                    variant=ep_info.variant,
+                                )
 
                             # Use per-season AniList entry data if available
                             token_si = si

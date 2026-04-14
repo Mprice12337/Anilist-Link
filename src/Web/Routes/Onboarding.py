@@ -1253,18 +1253,45 @@ async def onboarding_restructure_analyze(request: Request) -> JSONResponse:
                         )
             all_shows.extend(shows)
 
+        # Deduplicate matched shows by anilist_id so that the same AniList
+        # series appearing in multiple source directories is only processed
+        # once by the restructurer. Unmatched shows (anilist_id=0) are kept
+        # as-is (each unmatched folder is still a separate item to analyse).
+        seen_anilist_ids: set[int] = set()
+        deduped_shows = []
+        for s in all_shows:
+            if s.anilist_id:
+                if s.anilist_id in seen_anilist_ids:
+                    logger.debug(
+                        "Onboarding analyze: skipping duplicate anilist_id=%d (%r)",
+                        s.anilist_id,
+                        s.title,
+                    )
+                    continue
+                seen_anilist_ids.add(s.anilist_id)
+            deduped_shows.append(s)
+
+        if len(deduped_shows) < len(all_shows):
+            logger.info(
+                "Onboarding analyze: deduplicated %d → %d shows"
+                " (%d duplicates removed)",
+                len(all_shows),
+                len(deduped_shows),
+                len(all_shows) - len(deduped_shows),
+            )
+
         logger.info(
             "Onboarding analyze: total shows=%d (matched=%d, unmatched=%d), "
             "calling restructurer.analyze level=%r output_dir=%r",
-            len(all_shows),
-            sum(1 for s in all_shows if s.anilist_id),
-            sum(1 for s in all_shows if not s.anilist_id),
+            len(deduped_shows),
+            sum(1 for s in deduped_shows if s.anilist_id),
+            sum(1 for s in deduped_shows if not s.anilist_id),
             level,
             output_dir or "(alongside source)",
         )
 
         plan = await restructurer.analyze(
-            all_shows, progress, level=level, output_dir=output_dir or None
+            deduped_shows, progress, level=level, output_dir=output_dir or None
         )
         request.app.state.onboarding_restructure_plan = plan
 

@@ -644,6 +644,24 @@ class DatabaseManager:
             (group_id,),
         )
 
+    async def get_all_fresh_series_group_entries(
+        self, max_age_hours: int = 168
+    ) -> list[dict[str, Any]]:
+        """Return all entries across all fresh series groups in one query.
+
+        Used to pre-seed SeriesGroupBuilder._session_cache at the start of a
+        restructure analysis pass, avoiding per-show DB + API lookups for
+        groups already in the database.
+        """
+        return await self.fetch_all(
+            """SELECT sge.*, sg.id AS group_id
+               FROM series_groups sg
+               JOIN series_group_entries sge ON sge.group_id = sg.id
+               WHERE sg.updated_at > datetime('now', ? || ' hours')
+               ORDER BY sg.id, sge.season_order""",
+            (f"-{max_age_hours}",),
+        )
+
     async def clear_series_group_entries(self, group_id: int) -> None:
         """Delete all entries for a series group (before re-populating)."""
         await self.execute(

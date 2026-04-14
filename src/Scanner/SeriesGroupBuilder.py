@@ -57,6 +57,39 @@ class SeriesGroupBuilder:
         # during this builder instance's lifetime.
         self._session_cache: dict[int, tuple[int, list[dict[str, Any]]]] = {}
 
+    async def preseed_session_cache_from_db(self) -> int:
+        """Bulk-load all fresh series groups from the DB into the session cache.
+
+        A single JOIN query fetches every entry for every fresh group, avoiding
+        per-show DB round-trips during a restructure analysis pass.  Returns
+        the number of distinct AniList IDs seeded.
+        """
+        rows = await self._db.get_all_fresh_series_group_entries(self._max_age_hours)
+        if not rows:
+            return 0
+
+        # Group rows by group_id preserving season_order
+        groups: dict[int, list[dict[str, Any]]] = {}
+        for row in rows:
+            gid = row["group_id"]
+            groups.setdefault(gid, []).append(row)
+
+        seeded = 0
+        for gid, entries in groups.items():
+            result: tuple[int, list[dict[str, Any]]] = (gid, entries)
+            for entry in entries:
+                aid = entry["anilist_id"]
+                if aid not in self._session_cache:
+                    self._session_cache[aid] = result
+                    seeded += 1
+
+        logger.debug(
+            "Preseeded session cache from DB: %d groups, %d anilist_ids",
+            len(groups),
+            seeded,
+        )
+        return seeded
+
     async def get_or_build_group(
         self, anilist_id: int
     ) -> tuple[int, list[dict[str, Any]]]:
