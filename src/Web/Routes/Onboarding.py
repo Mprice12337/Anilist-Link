@@ -1253,28 +1253,31 @@ async def onboarding_restructure_analyze(request: Request) -> JSONResponse:
                         )
             all_shows.extend(shows)
 
-        # Deduplicate matched shows by anilist_id so that the same AniList
-        # series appearing in multiple source directories is only processed
-        # once by the restructurer. Unmatched shows (anilist_id=0) are kept
-        # as-is (each unmatched folder is still a separate item to analyse).
-        seen_anilist_ids: set[int] = set()
+        # Deduplicate by local_path so that the same physical directory is
+        # never passed to the restructurer twice (e.g. when two source_dirs
+        # overlap).  Deduplication by anilist_id would be wrong here: the
+        # same series legitimately lives in multiple distinct folders when a
+        # flat S1 folder and a multi-season (S2+) folder both match the same
+        # root anilist_id — both must be analysed separately.
+        seen_paths: set[str] = set()
         deduped_shows = []
         for s in all_shows:
-            if s.anilist_id:
-                if s.anilist_id in seen_anilist_ids:
-                    logger.debug(
-                        "Onboarding analyze: skipping duplicate anilist_id=%d (%r)",
-                        s.anilist_id,
-                        s.title,
-                    )
-                    continue
-                seen_anilist_ids.add(s.anilist_id)
+            key = os.path.realpath(s.local_path) if s.local_path else ""
+            if key and key in seen_paths:
+                logger.debug(
+                    "Onboarding analyze: skipping duplicate path %r (%r)",
+                    s.local_path,
+                    s.title,
+                )
+                continue
+            if key:
+                seen_paths.add(key)
             deduped_shows.append(s)
 
         if len(deduped_shows) < len(all_shows):
             logger.info(
                 "Onboarding analyze: deduplicated %d → %d shows"
-                " (%d duplicates removed)",
+                " (%d duplicate paths removed)",
                 len(all_shows),
                 len(deduped_shows),
                 len(all_shows) - len(deduped_shows),
