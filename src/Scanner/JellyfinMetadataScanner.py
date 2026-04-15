@@ -11,6 +11,7 @@ from typing import Any
 
 from src.Clients.AnilistClient import AniListClient
 from src.Clients.JellyfinClient import JellyfinClient, JellyfinSeason
+from src.Clients.TVMazeClient import TVMazeClient
 from src.Database.Connection import DatabaseManager
 from src.Matching.Normalizer import clean_title_for_search
 from src.Matching.TitleMatcher import TitleMatcher, get_primary_title
@@ -133,6 +134,7 @@ class JellyfinMetadataScanner:
         jellyfin_client: JellyfinClient,
         config: AppConfig,
         group_builder: SeriesGroupBuilder | None = None,
+        tvmaze_client: TVMazeClient | None = None,
     ) -> None:
         self._db = db
         self._anilist = anilist_client
@@ -140,6 +142,7 @@ class JellyfinMetadataScanner:
         self._jellyfin = jellyfin_client
         self._config = config
         self._group_builder = group_builder
+        self._tvmaze = tvmaze_client or TVMazeClient()
         self._path_translator_ready = False
 
     async def run_scan(
@@ -959,6 +962,11 @@ class JellyfinMetadataScanner:
         parent_tags: list[str] = sorted(
             {t for t in [p_romaji, p_english, p_native] if t}
         )
+        # Provider IDs sourced from our TVMaze cache — used in tvshow.nfo so
+        # TMDB/OMDB can still resolve per-episode metadata after restructure
+        # renames folders away from names those providers would match on their own.
+        p_imdb_id = parent_meta.get("imdb_id") or ""
+        p_tvdb_id = parent_meta.get("tvdb_id") or ""
 
         if dry_run:
             logger.info(
@@ -1014,6 +1022,8 @@ class JellyfinMetadataScanner:
             status=p_status,
             anilist_id=effective_parent_id,
             tags=parent_tags,
+            imdb_id=p_imdb_id or None,
+            tvdb_id=p_tvdb_id or None,
         )
 
         # Write season.nfo when this item IS a season folder (Structure A).
@@ -1073,6 +1083,8 @@ class JellyfinMetadataScanner:
                 },
                 "status": cached.get("status", ""),
                 "seasonYear": cached.get("year", 0),
+                "imdb_id": cached.get("imdb_id") or "",
+                "tvdb_id": cached.get("tvdb_id") or "",
             }
 
         metadata = await self._anilist.get_anime_by_id(anilist_id)
@@ -1087,6 +1099,16 @@ class JellyfinMetadataScanner:
         cached_rating = round(raw_score / 10, 1) if raw_score else None
         studios_nodes = (metadata.get("studios") or {}).get("nodes") or []
         cached_studio = studios_nodes[0].get("name") or "" if studios_nodes else ""
+
+        # TVMaze lookup for IMDB/TVDB IDs — runs once per entry on cache miss.
+        # Try English title first (more likely to match TVMaze), fall back to romaji.
+        tvmaze_title = (
+            title_obj.get("english") or title_obj.get("romaji") or ""
+        )
+        tvmaze_ids = await self._tvmaze.search_show(tvmaze_title)
+        imdb_id = (tvmaze_ids or {}).get("imdb_id") or ""
+        tvdb_id = (tvmaze_ids or {}).get("tvdb_id") or ""
+
         await self._db.set_cached_metadata(
             anilist_id=anilist_id,
             title_romaji=title_obj.get("romaji") or "",
@@ -1100,5 +1122,11 @@ class JellyfinMetadataScanner:
             year=year,
             rating=cached_rating,
             studio=cached_studio,
+            imdb_id=imdb_id,
+            tvdb_id=tvdb_id,
         )
+        # Attach IDs to the live metadata dict so the caller has them without
+        # a second cache read.
+        metadata["imdb_id"] = imdb_id
+        metadata["tvdb_id"] = tvdb_id
         return metadata

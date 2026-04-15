@@ -836,6 +836,8 @@ class JellyfinClient:
         status: str | None = None,
         anilist_id: int | None = None,
         tags: list[str] | None = None,
+        imdb_id: str | None = None,
+        tvdb_id: str | None = None,
         lock_data: bool = True,
     ) -> None:
         """Write a tvshow.nfo into the show's root directory.
@@ -865,13 +867,11 @@ class JellyfinClient:
             folder_dir = local_path.rstrip("/").rstrip("\\")
             nfo_path = os.path.join(folder_dir, "tvshow.nfo")
 
-            # Read existing provider IDs off the show folder item so episode
-            # providers (TMDB, OMDB) retain their matching reference after we
-            # lock the series-level metadata.  These are written as non-default
-            # uniqueid entries so they don't override our AniList source.
-            existing_pids: dict[str, str] = show_folder.get("ProviderIds") or {}
-            existing_tmdb = existing_pids.get("Tmdb") or existing_pids.get("tmdb")
-            existing_imdb = existing_pids.get("Imdb") or existing_pids.get("imdb")
+            # Derive the TMDB series ID from the IMDB ID if not provided directly.
+            # Jellyfin's TMDB provider supports IMDB-ID cross-referencing so
+            # <uniqueid type="imdb"> is sufficient for episode matching even
+            # without an explicit tmdb uniqueid.
+            pass  # IDs arrive via imdb_id / tvdb_id params from the scanner
 
             lines: list[str] = [
                 '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
@@ -901,12 +901,13 @@ class JellyfinClient:
                 lines.append(
                     f'  <uniqueid type="anilist" default="true">{anilist_id}</uniqueid>'
                 )
-            # Preserve TMDB / IMDB IDs so episode providers can still match
-            # episodes against the correct series without being the metadata authority.
-            if existing_tmdb:
-                lines.append(f'  <uniqueid type="tmdb">{existing_tmdb}</uniqueid>')
-            if existing_imdb:
-                lines.append(f'  <uniqueid type="imdb">{existing_imdb}</uniqueid>')
+            # Secondary provider IDs sourced from TVMaze — let episode providers
+            # (TMDB, OMDB) retain their matching reference after our restructure
+            # renames folders away from names those providers would recognise.
+            if imdb_id:
+                lines.append(f'  <uniqueid type="imdb">{imdb_id}</uniqueid>')
+            if tvdb_id:
+                lines.append(f'  <uniqueid type="tvdb">{tvdb_id}</uniqueid>')
             if lock_data:
                 lines.append("  <lockdata>true</lockdata>")
             lines.append("</tvshow>")

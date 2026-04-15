@@ -278,13 +278,15 @@ class DatabaseManager:
         year: int = 0,
         rating: float | None = None,
         studio: str = "",
+        imdb_id: str = "",
+        tvdb_id: str = "",
     ) -> None:
         await self.execute(
             """INSERT INTO anilist_cache
                    (anilist_id, title_romaji, title_english, title_native,
                     episodes, cover_image, description, genres, status, year,
-                    rating, studio)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    rating, studio, imdb_id, tvdb_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(anilist_id) DO UPDATE SET
                    title_romaji=excluded.title_romaji,
                    title_english=excluded.title_english,
@@ -297,6 +299,8 @@ class DatabaseManager:
                    year=excluded.year,
                    rating=excluded.rating,
                    studio=excluded.studio,
+                   imdb_id=excluded.imdb_id,
+                   tvdb_id=excluded.tvdb_id,
                    cached_at=datetime('now'),
                    expires_at=datetime('now', '+7 days')
             """,
@@ -313,6 +317,8 @@ class DatabaseManager:
                 year or 0,
                 rating,
                 studio or "",
+                imdb_id or "",
+                tvdb_id or "",
             ),
         )
 
