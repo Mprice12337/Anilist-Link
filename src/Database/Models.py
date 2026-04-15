@@ -87,6 +87,7 @@ class AniListCache:
     studio: str = ""
     imdb_id: str = ""
     tvdb_id: str = ""
+    tvmaze_id: str = ""
     cached_at: str = ""
     expires_at: str = ""
 
@@ -341,6 +342,7 @@ TABLES: dict[str, str] = {
             studio TEXT NOT NULL DEFAULT '',
             imdb_id TEXT NOT NULL DEFAULT '',
             tvdb_id TEXT NOT NULL DEFAULT '',
+            tvmaze_id TEXT NOT NULL DEFAULT '',
             cached_at TEXT NOT NULL DEFAULT (datetime('now')),
             expires_at TEXT NOT NULL DEFAULT (datetime('now', '+7 days'))
         )

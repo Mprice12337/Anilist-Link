@@ -125,6 +125,7 @@ async def _apply_column_guards(db: aiosqlite.Connection) -> None:
         ("anilist_cache", "studio", "TEXT NOT NULL DEFAULT ''"),
         ("anilist_cache", "imdb_id", "TEXT NOT NULL DEFAULT ''"),
         ("anilist_cache", "tvdb_id", "TEXT NOT NULL DEFAULT ''"),
+        ("anilist_cache", "tvmaze_id", "TEXT NOT NULL DEFAULT ''"),
     ]
 
     added: list[str] = []

@@ -686,6 +686,15 @@ class JellyfinMetadataScanner:
         """
         from collections import defaultdict
 
+        # Fetch root-entry metadata once to get series-level provider IDs for
+        # all season.nfo writes in this loop.
+        root_meta = await self._get_anilist_metadata(
+            tv_entries[0]["anilist_id"], force_refresh=force_refresh
+        ) or {}
+        s_imdb_id = root_meta.get("imdb_id") or None
+        s_tvdb_id = root_meta.get("tvdb_id") or None
+        s_tvmaze_id = root_meta.get("tvmaze_id") or None
+
         # Build index → [seasons] map (stable order within each index preserved)
         seasons_by_index: dict[int, list] = defaultdict(list)
         for s in real_seasons:
@@ -704,6 +713,9 @@ class JellyfinMetadataScanner:
                     dry_run,
                     force_refresh=force_refresh,
                     season_number=pos + 1,
+                    series_imdb_id=s_imdb_id,
+                    series_tvdb_id=s_tvdb_id,
+                    series_tvmaze_id=s_tvmaze_id,
                 )
                 total_applied += 1
 
@@ -734,6 +746,9 @@ class JellyfinMetadataScanner:
         dry_run: bool,
         force_refresh: bool = False,
         season_number: int | None = None,
+        series_imdb_id: str | None = None,
+        series_tvdb_id: str | None = None,
+        series_tvmaze_id: str | None = None,
     ) -> None:
         """Write title, poster, and season.nfo to a single Jellyfin Season item.
 
@@ -827,6 +842,9 @@ class JellyfinMetadataScanner:
                     studio=season_studio,
                     rating=season_rating,
                     tags=season_tags,
+                    series_imdb_id=series_imdb_id,
+                    series_tvdb_id=series_tvdb_id,
+                    series_tvmaze_id=series_tvmaze_id,
                 )
             logger.info(
                 "  [season] Updated Jellyfin season %s -> '%s'",
@@ -962,11 +980,12 @@ class JellyfinMetadataScanner:
         parent_tags: list[str] = sorted(
             {t for t in [p_romaji, p_english, p_native] if t}
         )
-        # Provider IDs sourced from our TVMaze cache — used in tvshow.nfo so
-        # TMDB/OMDB can still resolve per-episode metadata after restructure
-        # renames folders away from names those providers would match on their own.
+        # Provider IDs sourced from our TVMaze cache — written into tvshow.nfo
+        # and season.nfo so all installed plugins (TMDB, TVDB, OMDB, TVMaze)
+        # can resolve per-episode metadata after restructure renames folders.
         p_imdb_id = parent_meta.get("imdb_id") or ""
         p_tvdb_id = parent_meta.get("tvdb_id") or ""
+        p_tvmaze_id = parent_meta.get("tvmaze_id") or ""
 
         if dry_run:
             logger.info(
@@ -1024,6 +1043,7 @@ class JellyfinMetadataScanner:
             tags=parent_tags,
             imdb_id=p_imdb_id or None,
             tvdb_id=p_tvdb_id or None,
+            tvmaze_id=p_tvmaze_id or None,
         )
 
         # Write season.nfo when this item IS a season folder (Structure A).
@@ -1042,6 +1062,9 @@ class JellyfinMetadataScanner:
                 studio=studio_name,
                 rating=rating,
                 tags=item_tags,
+                series_imdb_id=p_imdb_id or None,
+                series_tvdb_id=p_tvdb_id or None,
+                series_tvmaze_id=p_tvmaze_id or None,
             )
 
         logger.info("  [applied] Jellyfin metadata written to '%s'", jellyfin_title)
@@ -1085,6 +1108,7 @@ class JellyfinMetadataScanner:
                 "seasonYear": cached.get("year", 0),
                 "imdb_id": cached.get("imdb_id") or "",
                 "tvdb_id": cached.get("tvdb_id") or "",
+                "tvmaze_id": cached.get("tvmaze_id") or "",
             }
 
         metadata = await self._anilist.get_anime_by_id(anilist_id)
@@ -1108,6 +1132,7 @@ class JellyfinMetadataScanner:
         tvmaze_ids = await self._tvmaze.search_show(tvmaze_title)
         imdb_id = (tvmaze_ids or {}).get("imdb_id") or ""
         tvdb_id = (tvmaze_ids or {}).get("tvdb_id") or ""
+        tvmaze_id = (tvmaze_ids or {}).get("tvmaze_id") or ""
 
         await self._db.set_cached_metadata(
             anilist_id=anilist_id,
@@ -1124,9 +1149,11 @@ class JellyfinMetadataScanner:
             studio=cached_studio,
             imdb_id=imdb_id,
             tvdb_id=tvdb_id,
+            tvmaze_id=tvmaze_id,
         )
         # Attach IDs to the live metadata dict so the caller has them without
         # a second cache read.
         metadata["imdb_id"] = imdb_id
         metadata["tvdb_id"] = tvdb_id
+        metadata["tvmaze_id"] = tvmaze_id
         return metadata

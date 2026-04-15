@@ -107,6 +107,26 @@ async def _run_jellyfin_live_scan(app_state: object) -> None:
         await jellyfin_client.refresh_library_and_wait(
             inactivity_timeout=120.0, library_ids=library_ids or None
         )
+
+        # Now that NFOs are read and provider IDs are set on series/season
+        # containers, trigger a recursive metadata refresh on every series in
+        # the scanned libraries.  Locked series/season items are immune
+        # (Jellyfin skips locked fields); only unlocked episode items get
+        # their metadata replaced, pulling per-episode data from TMDB, TVDB,
+        # OMDB, and TVMaze using the provider IDs we just wrote.
+        if progress:
+            progress.current_title = "Refreshing episode metadata from providers..."
+        for lib_id in (library_ids or []):
+            series_ids = await jellyfin_client.get_series_ids_in_library(lib_id)
+            logger.info(
+                "Triggering episode metadata refresh for %d series in library %s",
+                len(series_ids),
+                lib_id,
+            )
+            for series_id in series_ids:
+                await jellyfin_client.refresh_item_metadata(
+                    series_id, recursive=True, replace_all=True
+                )
     except Exception:
         logger.exception("Jellyfin live scan failed")
         progress.status = "error"
@@ -284,6 +304,21 @@ async def jellyfin_scan_apply(request: Request) -> RedirectResponse:
         await jellyfin_client.refresh_library_and_wait(
             inactivity_timeout=120.0, library_ids=scan_library_ids or None
         )
+
+        # Trigger a recursive metadata refresh on every series so episode
+        # items get per-episode data from TMDB, TVDB, OMDB, and TVMaze using
+        # the provider IDs written to the NFO files above.
+        for lib_id in (scan_library_ids or []):
+            series_ids = await jellyfin_client.get_series_ids_in_library(lib_id)
+            logger.info(
+                "Triggering episode metadata refresh for %d series in library %s",
+                len(series_ids),
+                lib_id,
+            )
+            for series_id in series_ids:
+                await jellyfin_client.refresh_item_metadata(
+                    series_id, recursive=True, replace_all=True
+                )
     except Exception:
         logger.exception("Error during Jellyfin apply")
         errors += 1

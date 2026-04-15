@@ -101,13 +101,16 @@ class TVMazeClient:
         imdb_id: str | None = externals.get("imdb") or None
         tvdb_raw = externals.get("thetvdb")
         tvdb_id: str | None = str(tvdb_raw) if tvdb_raw is not None else None
+        tvmaze_raw = show.get("id")
+        tvmaze_id: str | None = str(tvmaze_raw) if tvmaze_raw is not None else None
 
         logger.info(
-            "TVMaze matched '%s' → '%s' (score=%d) imdb=%s tvdb=%s",
+            "TVMaze matched '%s' → '%s' (score=%d) imdb=%s tvdb=%s tvmaze=%s",
             title,
             show_name,
             score,
             imdb_id,
             tvdb_id,
+            tvmaze_id,
         )
-        return {"imdb_id": imdb_id, "tvdb_id": tvdb_id}
+        return {"imdb_id": imdb_id, "tvdb_id": tvdb_id, "tvmaze_id": tvmaze_id}

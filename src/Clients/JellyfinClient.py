@@ -446,6 +446,76 @@ class JellyfinClient:
         except Exception:
             logger.debug("Failed to trigger image refresh for item %s", item_id)
 
+    async def get_series_ids_in_library(self, library_id: str) -> list[str]:
+        """Return the Jellyfin item IDs of all Series in a library.
+
+        Used to collect targets for a post-scan episode metadata refresh so
+        we can call ``refresh_item_metadata`` on each series rather than on
+        the virtual-folder container (which may not cascade correctly).
+        """
+        try:
+            resp = await self._http.get(
+                "/Items",
+                params={
+                    "ParentId": library_id,
+                    "IncludeItemTypes": "Series",
+                    "Recursive": "true",
+                    "Fields": "Id",
+                    "Limit": "5000",
+                },
+            )
+            resp.raise_for_status()
+            return [
+                item["Id"]
+                for item in resp.json().get("Items", [])
+                if item.get("Id")
+            ]
+        except Exception as exc:
+            logger.warning(
+                "Could not fetch series IDs for library %s: %s", library_id, exc
+            )
+            return []
+
+    async def refresh_item_metadata(
+        self,
+        item_id: str,
+        recursive: bool = False,
+        replace_all: bool = False,
+    ) -> None:
+        """Trigger a metadata (and image) refresh for a Jellyfin item.
+
+        Pass ``recursive=True`` to cascade to all child items.  Items that
+        have ``LockData=True`` (set by our NFO files) are immune — Jellyfin
+        skips locked fields even with ``replace_all=True``.  This means a
+        recursive replace-all refresh on a series container will leave our
+        locked series/season metadata untouched while fully refreshing unlocked
+        episode items from TMDB, TVDB, OMDB, and TVMaze.
+        """
+        try:
+            params: dict[str, str] = {
+                "MetadataRefreshMode": "FullRefresh",
+                "ImageRefreshMode": "FullRefresh",
+            }
+            if replace_all:
+                params["ReplaceAllMetadata"] = "true"
+                params["ReplaceAllImages"] = "true"
+            if recursive:
+                params["Recursive"] = "true"
+            resp = await self._http.post(
+                f"/Items/{item_id}/Refresh", params=params
+            )
+            resp.raise_for_status()
+            logger.info(
+                "Triggered metadata refresh for item %s (recursive=%s replace=%s)",
+                item_id,
+                recursive,
+                replace_all,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to trigger metadata refresh for item %s: %s", item_id, exc
+            )
+
     async def _find_show_root_folder(self, item_id: str) -> dict[str, Any] | None:
         """Walk the Jellyfin item hierarchy to find the top-level show folder.
 
@@ -838,6 +908,7 @@ class JellyfinClient:
         tags: list[str] | None = None,
         imdb_id: str | None = None,
         tvdb_id: str | None = None,
+        tvmaze_id: str | None = None,
         lock_data: bool = True,
     ) -> None:
         """Write a tvshow.nfo into the show's root directory.
@@ -908,6 +979,8 @@ class JellyfinClient:
                 lines.append(f'  <uniqueid type="imdb">{imdb_id}</uniqueid>')
             if tvdb_id:
                 lines.append(f'  <uniqueid type="tvdb">{tvdb_id}</uniqueid>')
+            if tvmaze_id:
+                lines.append(f'  <uniqueid type="tvmaze">{tvmaze_id}</uniqueid>')
             if lock_data:
                 lines.append("  <lockdata>true</lockdata>")
             lines.append("</tvshow>")
@@ -933,6 +1006,9 @@ class JellyfinClient:
         studio: str | None = None,
         rating: float | None = None,
         tags: list[str] | None = None,
+        series_imdb_id: str | None = None,
+        series_tvdb_id: str | None = None,
+        series_tvmaze_id: str | None = None,
         lock_data: bool = True,
     ) -> None:
         """Write a season.nfo into the item's own directory.
@@ -941,6 +1017,12 @@ class JellyfinClient:
         carries its own title, description, and AniList ID rather than
         inheriting the parent show's TVDB data.  ``<lockdata>true</lockdata>``
         prevents Jellyfin from overwriting season-level metadata on refresh.
+
+        ``series_imdb_id``, ``series_tvdb_id``, and ``series_tvmaze_id`` are
+        the parent series' provider IDs written as non-default uniqueid entries.
+        They give TMDB, TVDB, OMDB, and TVMaze enough series context to resolve
+        per-episode metadata even when the season numbering in our custom
+        arrangement diverges from what those providers use.
 
         Uses the item's own ``Path`` (no hierarchy walk) so the file lands in
         the correct season subdirectory.  Episode-level metadata remains owned
@@ -987,6 +1069,21 @@ class JellyfinClient:
             if anilist_id is not None:
                 lines.append(
                     f'  <uniqueid type="anilist" default="true">{anilist_id}</uniqueid>'
+                )
+            # Series-level provider IDs — non-default so they don't override
+            # the per-season AniList source, but give episode providers the
+            # series context they need for per-episode metadata lookups.
+            if series_imdb_id:
+                lines.append(
+                    f'  <uniqueid type="imdb">{series_imdb_id}</uniqueid>'
+                )
+            if series_tvdb_id:
+                lines.append(
+                    f'  <uniqueid type="tvdb">{series_tvdb_id}</uniqueid>'
+                )
+            if series_tvmaze_id:
+                lines.append(
+                    f'  <uniqueid type="tvmaze">{series_tvmaze_id}</uniqueid>'
                 )
             if lock_data:
                 lines.append("  <lockdata>true</lockdata>")
