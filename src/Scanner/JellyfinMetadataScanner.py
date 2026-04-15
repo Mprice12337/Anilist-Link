@@ -1084,6 +1084,30 @@ class JellyfinMetadataScanner:
         if cached:
             cached_rating = cached.get("rating")
             cached_studio = cached.get("studio") or ""
+            imdb_id = cached.get("imdb_id") or ""
+            tvdb_id = cached.get("tvdb_id") or ""
+            tvmaze_id = cached.get("tvmaze_id") or ""
+
+            # If provider IDs are missing (entry was cached before TVMaze lookup
+            # was added), run the lookup now and persist the result so subsequent
+            # runs don't need to hit TVMaze again.
+            if not imdb_id and not tvdb_id and not tvmaze_id:
+                tvmaze_title = (
+                    cached.get("title_english") or cached.get("title_romaji") or ""
+                )
+                tvmaze_ids = await self._tvmaze.search_show(tvmaze_title)
+                if tvmaze_ids:
+                    imdb_id = tvmaze_ids.get("imdb_id") or ""
+                    tvdb_id = tvmaze_ids.get("tvdb_id") or ""
+                    tvmaze_id = tvmaze_ids.get("tvmaze_id") or ""
+                    # Patch the cached row so next run skips this lookup.
+                    await self._db.execute(
+                        "UPDATE anilist_cache"
+                        " SET imdb_id=?, tvdb_id=?, tvmaze_id=?"
+                        " WHERE anilist_id=?",
+                        (imdb_id, tvdb_id, tvmaze_id, anilist_id),
+                    )
+
             return {
                 "id": anilist_id,
                 "title": {
@@ -1106,9 +1130,9 @@ class JellyfinMetadataScanner:
                 },
                 "status": cached.get("status", ""),
                 "seasonYear": cached.get("year", 0),
-                "imdb_id": cached.get("imdb_id") or "",
-                "tvdb_id": cached.get("tvdb_id") or "",
-                "tvmaze_id": cached.get("tvmaze_id") or "",
+                "imdb_id": imdb_id,
+                "tvdb_id": tvdb_id,
+                "tvmaze_id": tvmaze_id,
             }
 
         metadata = await self._anilist.get_anime_by_id(anilist_id)
