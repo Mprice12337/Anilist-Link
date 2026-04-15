@@ -267,7 +267,19 @@ async def jellyfin_apply_all(request: Request) -> RedirectResponse:
     applied = 0
     errors = 0
 
+    # Scope the refresh to the configured anime libraries if available.
+    apply_library_ids: list[str] | None = (
+        list(config.jellyfin.anime_library_ids)
+        if config.jellyfin.anime_library_ids
+        else None
+    )
+
     try:
+        # Refresh only the selected libraries so item IDs are stable.
+        await jellyfin_client.refresh_library_and_wait(
+            inactivity_timeout=120.0, library_ids=apply_library_ids
+        )
+
         for item in matched:
             try:
                 item_id = item["item_id"]
@@ -277,6 +289,7 @@ async def jellyfin_apply_all(request: Request) -> RedirectResponse:
 
                 # Build series group and detect Structure B
                 group_id = None
+                group_entries: list[dict] = []
                 tv_entries: list[dict] = []
                 is_structure_b = False
                 jf_real_seasons = []
@@ -333,6 +346,17 @@ async def jellyfin_apply_all(request: Request) -> RedirectResponse:
                     logger.info(
                         "  [structure A] '%s': single entry apply", jellyfin_title
                     )
+                    root_anilist_id = (
+                        group_entries[0]["anilist_id"] if group_entries else anilist_id
+                    )
+                    season_number: int | None = None
+                    if group_entries:
+                        for i, entry in enumerate(group_entries):
+                            if entry.get("anilist_id") == anilist_id:
+                                season_number = i + 1
+                                break
+                        if season_number is None:
+                            season_number = 1
                     await scanner._apply_anilist_metadata(
                         item_id,
                         jellyfin_title,
@@ -341,6 +365,8 @@ async def jellyfin_apply_all(request: Request) -> RedirectResponse:
                         item.get("match_method") or "manual",
                         False,
                         force_refresh=force_refresh,
+                        parent_anilist_id=root_anilist_id,
+                        season_number=season_number,
                     )
                 applied += 1
             except Exception:
@@ -348,6 +374,11 @@ async def jellyfin_apply_all(request: Request) -> RedirectResponse:
                     "Failed to apply metadata for %s", item["jellyfin_title"]
                 )
                 errors += 1
+
+        # Trigger a re-index so Jellyfin picks up the NFO files just written.
+        await jellyfin_client.refresh_library_and_wait(
+            inactivity_timeout=120.0, library_ids=apply_library_ids
+        )
     finally:
         await jellyfin_client.close()
 
@@ -392,6 +423,7 @@ async def jellyfin_apply_single(request: Request) -> JSONResponse:
     try:
         # Detect Structure B (multi-season) before applying
         group_id = None
+        group_entries: list[dict] = []
         tv_entries: list[dict] = []
         is_structure_b = False
         jf_real_seasons = []
@@ -425,6 +457,9 @@ async def jellyfin_apply_single(request: Request) -> JSONResponse:
                 item_id, jellyfin_title, jf_real_seasons, tv_entries, confidence, False
             )
         else:
+            root_anilist_id = (
+                group_entries[0]["anilist_id"] if group_entries else anilist_id
+            )
             await scanner._apply_anilist_metadata(
                 item_id,
                 jellyfin_title,
@@ -432,6 +467,7 @@ async def jellyfin_apply_single(request: Request) -> JSONResponse:
                 confidence,
                 mapping.get("match_method") or "manual",
                 False,
+                parent_anilist_id=root_anilist_id,
             )
     except Exception:
         logger.exception("Failed to apply metadata for item_id=%s", item_id)

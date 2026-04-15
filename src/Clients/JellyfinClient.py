@@ -200,7 +200,8 @@ class JellyfinClient:
                     "Ids": item_id,
                     "Fields": (
                         "Path,Overview,Genres,Studios,OriginalTitle,"
-                        "ProductionYear,LockedFields,LockData,ParentId,IsFolder"
+                        "ProductionYear,LockedFields,LockData,ParentId,"
+                        "IsFolder,ProviderIds"
                     ),
                 },
             )
@@ -808,14 +809,48 @@ class JellyfinClient:
                 "Failed to mark item %s as unplayed for user %s", item_id, user_id
             )
 
-    async def write_tvshow_nfo(self, item_id: str, title: str) -> None:
-        """Write a minimal tvshow.nfo into the show's root directory.
+    # AniList status values → Jellyfin/Kodi NFO status strings
+    _ANILIST_STATUS_TO_NFO: dict[str, str] = {
+        "FINISHED": "Ended",
+        "RELEASING": "Continuing",
+        "NOT_YET_RELEASED": "Upcoming",
+        "CANCELLED": "Ended",
+        "HIATUS": "Continuing",
+    }
 
-        Jellyfin reads this file during library scans to classify the folder as
-        a TV show, preventing mixed-library "versions" grouping of episode files.
+    @staticmethod
+    def _xml_escape(value: str) -> str:
+        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    async def write_tvshow_nfo(
+        self,
+        item_id: str,
+        title: str,
+        *,
+        original_title: str | None = None,
+        plot: str | None = None,
+        genres: list[str] | None = None,
+        studio: str | None = None,
+        rating: float | None = None,
+        year: int | None = None,
+        status: str | None = None,
+        anilist_id: int | None = None,
+        tags: list[str] | None = None,
+        lock_data: bool = True,
+    ) -> None:
+        """Write a tvshow.nfo into the show's root directory.
+
+        Writes AniList-sourced metadata so Jellyfin classifies the folder as a
+        TV show and our custom series/season arrangement is preserved.
+        ``<lockdata>true</lockdata>`` prevents Jellyfin's scheduled metadata
+        refreshes (e.g. TVDB) from overwriting show-level data.
+
         Walks up the hierarchy via ``_find_show_root_folder`` so the NFO always
         lands at the top-level show folder regardless of which child item
-        (season subfolder, episode file, etc.) triggered the metadata apply.
+        triggered the metadata apply.
+
+        Episode-level metadata is intentionally left to TVDB — this NFO only
+        covers the series container.
         """
         try:
             show_folder = await self._find_show_root_folder(item_id)
@@ -829,29 +864,179 @@ class JellyfinClient:
             local_path = self._path_translator.translate(raw_path)
             folder_dir = local_path.rstrip("/").rstrip("\\")
             nfo_path = os.path.join(folder_dir, "tvshow.nfo")
-            safe_title = (
-                title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            )
-            content = (
-                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
-                "<tvshow>\n"
-                f"  <title>{safe_title}</title>\n"
-                "</tvshow>\n"
-            )
+
+            # Read existing provider IDs off the show folder item so episode
+            # providers (TMDB, OMDB) retain their matching reference after we
+            # lock the series-level metadata.  These are written as non-default
+            # uniqueid entries so they don't override our AniList source.
+            existing_pids: dict[str, str] = show_folder.get("ProviderIds") or {}
+            existing_tmdb = existing_pids.get("Tmdb") or existing_pids.get("tmdb")
+            existing_imdb = existing_pids.get("Imdb") or existing_pids.get("imdb")
+
+            lines: list[str] = [
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+                "<tvshow>",
+                f"  <title>{self._xml_escape(title)}</title>",
+            ]
+            if original_title:
+                esc_ot = self._xml_escape(original_title)
+                lines.append(f"  <originaltitle>{esc_ot}</originaltitle>")
+            if plot:
+                lines.append(f"  <plot>{self._xml_escape(plot)}</plot>")
+            if year:
+                lines.append(f"  <year>{year}</year>")
+            if rating is not None:
+                lines.append(f"  <rating>{rating}</rating>")
+            if studio:
+                lines.append(f"  <studio>{self._xml_escape(studio)}</studio>")
+            if status:
+                nfo_status = self._ANILIST_STATUS_TO_NFO.get(status, status)
+                lines.append(f"  <status>{self._xml_escape(nfo_status)}</status>")
+            for genre in genres or []:
+                lines.append(f"  <genre>{self._xml_escape(genre)}</genre>")
+            # Deduplicated title variant tags for searchability (romaji/english/native)
+            for tag in sorted(set(tags or [])):
+                lines.append(f"  <tag>{self._xml_escape(tag)}</tag>")
+            if anilist_id is not None:
+                lines.append(
+                    f'  <uniqueid type="anilist" default="true">{anilist_id}</uniqueid>'
+                )
+            # Preserve TMDB / IMDB IDs so episode providers can still match
+            # episodes against the correct series without being the metadata authority.
+            if existing_tmdb:
+                lines.append(f'  <uniqueid type="tmdb">{existing_tmdb}</uniqueid>')
+            if existing_imdb:
+                lines.append(f'  <uniqueid type="imdb">{existing_imdb}</uniqueid>')
+            if lock_data:
+                lines.append("  <lockdata>true</lockdata>")
+            lines.append("</tvshow>")
+
+            content = "\n".join(lines) + "\n"
             with open(nfo_path, "w", encoding="utf-8") as fh:
                 fh.write(content)
             logger.info("Wrote tvshow.nfo for '%s' at %s", title, nfo_path)
         except Exception as exc:
             logger.debug("Could not write tvshow.nfo for item %s: %s", item_id, exc)
 
-    async def refresh_library(self) -> None:
-        """Trigger a full Jellyfin library refresh."""
+    async def write_season_nfo(
+        self,
+        item_id: str,
+        title: str,
+        season_number: int,
+        *,
+        original_title: str | None = None,
+        plot: str | None = None,
+        year: int | None = None,
+        anilist_id: int | None = None,
+        genres: list[str] | None = None,
+        studio: str | None = None,
+        rating: float | None = None,
+        tags: list[str] | None = None,
+        lock_data: bool = True,
+    ) -> None:
+        """Write a season.nfo into the item's own directory.
+
+        Writes AniList metadata for this specific season entry so each season
+        carries its own title, description, and AniList ID rather than
+        inheriting the parent show's TVDB data.  ``<lockdata>true</lockdata>``
+        prevents Jellyfin from overwriting season-level metadata on refresh.
+
+        Uses the item's own ``Path`` (no hierarchy walk) so the file lands in
+        the correct season subdirectory.  Episode-level metadata remains owned
+        by TVDB.
+        """
         try:
-            resp = await self._http.post("/Library/Refresh")
-            resp.raise_for_status()
-            logger.info("Triggered Jellyfin library refresh")
-        except Exception:
-            logger.debug("Failed to trigger Jellyfin library refresh")
+            item = await self.get_item(item_id)
+            if not item or not item.get("Path"):
+                logger.debug(
+                    "write_season_nfo: no path for item %s", item_id
+                )
+                return
+            raw_path: str = item["Path"]
+            local_path = self._path_translator.translate(raw_path)
+            # Path may point to a file (Movie/OVA) — use its parent directory
+            if os.path.splitext(local_path)[1]:
+                folder_dir = os.path.dirname(local_path)
+            else:
+                folder_dir = local_path.rstrip("/").rstrip("\\")
+            nfo_path = os.path.join(folder_dir, "season.nfo")
+
+            lines: list[str] = [
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+                "<season>",
+                f"  <title>{self._xml_escape(title)}</title>",
+            ]
+            if original_title:
+                esc_ot = self._xml_escape(original_title)
+                lines.append(f"  <originaltitle>{esc_ot}</originaltitle>")
+            lines.append(f"  <seasonnumber>{season_number}</seasonnumber>")
+            if plot:
+                lines.append(f"  <plot>{self._xml_escape(plot)}</plot>")
+            if year:
+                lines.append(f"  <year>{year}</year>")
+            if rating is not None:
+                lines.append(f"  <rating>{rating}</rating>")
+            if studio:
+                lines.append(f"  <studio>{self._xml_escape(studio)}</studio>")
+            for genre in genres or []:
+                lines.append(f"  <genre>{self._xml_escape(genre)}</genre>")
+            # Deduplicated title variant tags for searchability (romaji/english/native)
+            for tag in sorted(set(tags or [])):
+                lines.append(f"  <tag>{self._xml_escape(tag)}</tag>")
+            if anilist_id is not None:
+                lines.append(
+                    f'  <uniqueid type="anilist" default="true">{anilist_id}</uniqueid>'
+                )
+            if lock_data:
+                lines.append("  <lockdata>true</lockdata>")
+            lines.append("</season>")
+
+            content = "\n".join(lines) + "\n"
+            with open(nfo_path, "w", encoding="utf-8") as fh:
+                fh.write(content)
+            logger.info(
+                "Wrote season.nfo for '%s' (season %d) at %s",
+                title,
+                season_number,
+                nfo_path,
+            )
+        except Exception as exc:
+            logger.debug(
+                "Could not write season.nfo for item %s: %s", item_id, exc
+            )
+
+    async def refresh_library(
+        self, library_ids: list[str] | None = None
+    ) -> None:
+        """Trigger a Jellyfin library refresh.
+
+        If *library_ids* is provided, only those virtual-folder items are
+        refreshed (``POST /Items/{id}/Refresh?Recursive=true``).
+        Otherwise the global ``POST /Library/Refresh`` is used.
+        """
+        if library_ids:
+            for lib_id in library_ids:
+                try:
+                    resp = await self._http.post(
+                        f"/Items/{lib_id}/Refresh",
+                        params={"Recursive": "true"},
+                    )
+                    resp.raise_for_status()
+                    logger.info(
+                        "Triggered Jellyfin library refresh for %s", lib_id
+                    )
+                except Exception:
+                    logger.debug(
+                        "Failed to trigger Jellyfin library refresh for %s",
+                        lib_id,
+                    )
+        else:
+            try:
+                resp = await self._http.post("/Library/Refresh")
+                resp.raise_for_status()
+                logger.info("Triggered Jellyfin library refresh (all)")
+            except Exception:
+                logger.debug("Failed to trigger Jellyfin library refresh")
 
     async def _get_scan_task_id(self) -> str | None:
         """Return the task ID of the 'Scan Media Library' scheduled task.
@@ -887,8 +1072,12 @@ class JellyfinClient:
         self,
         poll_interval: float = 5.0,
         inactivity_timeout: float = 120.0,
+        library_ids: list[str] | None = None,
     ) -> bool:
         """Trigger a library refresh and poll until the scan task is idle.
+
+        If *library_ids* is provided, only those libraries are refreshed;
+        otherwise all libraries are refreshed.
 
         Returns True if the scan completed successfully, False if it timed out
         or the task ID could not be found.
@@ -904,7 +1093,7 @@ class JellyfinClient:
             )
             return False
 
-        await self.refresh_library()
+        await self.refresh_library(library_ids=library_ids)
         await asyncio.sleep(2.0)
 
         started_running = False

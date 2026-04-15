@@ -221,43 +221,69 @@ async def _auto_scan_media_servers(app_state: object) -> None:
     else:
         restructure_ran = False
 
-    if restructure_ran and config.plex.url and config.plex.token:
-        logger.info("Triggering Plex library refresh post-restructure")
-        plex_refresh = PlexClient(url=config.plex.url, token=config.plex.token)
-        try:
-            keys = (
-                list(config.plex.anime_library_keys)
-                if config.plex.anime_library_keys
-                else None
-            )
-            if keys:
-                for key in keys:
-                    await plex_refresh.refresh_library_and_wait(key, poll_interval=3.0)
-            else:
-                # No specific keys — attempt a refresh of all libraries
-                libs = await plex_refresh.get_libraries()
-                for lib in libs:
-                    await plex_refresh.refresh_library_and_wait(
-                        lib.key, poll_interval=3.0
-                    )
-        except Exception:
-            logger.exception("Plex post-restructure refresh failed")
-        finally:
-            await plex_refresh.close()
+    if restructure_ran:
+        # Check whether _media_server_refresh_task (spawned by Restructure.py)
+        # already handled the post-restructure media server refresh.  If it's
+        # still running, wait for it.  If it already completed, skip the refresh
+        # entirely to avoid a double-scan that shows two jobs in the UI.
+        media_refresh = getattr(app_state, "media_refresh_progress", None)
+        refresh_already_done = media_refresh is not None and getattr(
+            media_refresh, "status", ""
+        ) == "complete"
+        refresh_in_progress = media_refresh is not None and getattr(
+            media_refresh, "status", ""
+        ) == "running"
 
-    if restructure_ran and config.jellyfin.url and config.jellyfin.api_key:
-        logger.info("Triggering Jellyfin library refresh post-restructure")
-        jf_refresh = JellyfinClient(
-            url=config.jellyfin.url, api_key=config.jellyfin.api_key
-        )
-        try:
-            await jf_refresh.refresh_library_and_wait(
-                poll_interval=5.0, inactivity_timeout=120.0
+        if refresh_in_progress:
+            logger.info(
+                "Waiting for restructure media refresh to finish before scanning"
             )
-        except Exception:
-            logger.exception("Jellyfin post-restructure refresh failed")
-        finally:
-            await jf_refresh.close()
+            for _ in range(240):  # wait up to 120s
+                await asyncio.sleep(0.5)
+                if getattr(media_refresh, "status", "") != "running":
+                    break
+            logger.info("Restructure media refresh finished — proceeding with scans")
+            refresh_already_done = True
+
+        if not refresh_already_done and config.plex.url and config.plex.token:
+            logger.info("Triggering Plex library refresh post-restructure")
+            plex_refresh = PlexClient(url=config.plex.url, token=config.plex.token)
+            try:
+                keys = (
+                    list(config.plex.anime_library_keys)
+                    if config.plex.anime_library_keys
+                    else None
+                )
+                if keys:
+                    for key in keys:
+                        await plex_refresh.refresh_library_and_wait(
+                            key, poll_interval=3.0
+                        )
+                else:
+                    # No specific keys — attempt a refresh of all libraries
+                    libs = await plex_refresh.get_libraries()
+                    for lib in libs:
+                        await plex_refresh.refresh_library_and_wait(
+                            lib.key, poll_interval=3.0
+                        )
+            except Exception:
+                logger.exception("Plex post-restructure refresh failed")
+            finally:
+                await plex_refresh.close()
+
+        if not refresh_already_done and config.jellyfin.url and config.jellyfin.api_key:
+            logger.info("Triggering Jellyfin library refresh post-restructure")
+            jf_refresh = JellyfinClient(
+                url=config.jellyfin.url, api_key=config.jellyfin.api_key
+            )
+            try:
+                await jf_refresh.refresh_library_and_wait(
+                    poll_interval=5.0, inactivity_timeout=120.0
+                )
+            except Exception:
+                logger.exception("Jellyfin post-restructure refresh failed")
+            finally:
+                await jf_refresh.close()
 
     # Index local library — either run it now or wait for the background
     # scan that was kicked off when the user selected their media directory.

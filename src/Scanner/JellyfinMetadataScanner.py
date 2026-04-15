@@ -266,6 +266,18 @@ class JellyfinMetadataScanner:
         )
         for show in shows:
             folder_name = _derive_folder_name(show)
+            # Skip pathless items whose resolved name is a generic season label
+            # (e.g. "Season 1").  These are virtual Jellyfin containers with no
+            # filesystem path and cannot be matched to an AniList entry.
+            if not show.path and _GENERIC_SEASON_RE.match((folder_name or "").strip()):
+                logger.debug(
+                    "Skipping pathless generic-season item '%s' (%s)",
+                    show.name,
+                    show.media_type,
+                )
+                if progress:
+                    progress.scanned += 1
+                continue
             # Always populate jellyfin_media so the browser can display items
             try:
                 await self._db.upsert_jellyfin_media(
@@ -559,6 +571,7 @@ class JellyfinMetadataScanner:
         season containers.
         """
         group_id: int | None = None
+        group_entries: list[dict] = []
         tv_entries: list[dict] = []
         if self._group_builder:
             try:
@@ -618,14 +631,32 @@ class JellyfinMetadataScanner:
                 item_id, title, jf_real_seasons, tv_entries, confidence, dry_run
             )
         else:
-            # For flat-folder / Structure A, use the first TV entry's anilist_id
-            # so the series-level poster always shows Season 1 artwork regardless
-            # of which entry the matcher happened to match to.
-            _series_anilist_id = (
-                tv_entries[0]["anilist_id"] if tv_entries else anilist_id
+            # Structure A: each season folder is processed individually.
+            # Always write to the parent show folder, but use the series ROOT
+            # entry's data for those writes so the parent always displays S1's
+            # art and title regardless of which season item is processed last.
+            root_anilist_id = (
+                group_entries[0]["anilist_id"] if group_entries else anilist_id
             )
+            # Determine season number from this entry's position in the group
+            # (chronologically sorted, so position 0 = season 1).
+            season_number: int | None = None
+            if group_entries:
+                for i, entry in enumerate(group_entries):
+                    if entry.get("anilist_id") == anilist_id:
+                        season_number = i + 1
+                        break
+                if season_number is None:
+                    season_number = 1
             await self._apply_anilist_metadata(
-                item_id, title, _series_anilist_id, confidence, method, dry_run
+                item_id,
+                title,
+                anilist_id,
+                confidence,
+                method,
+                dry_run,
+                parent_anilist_id=root_anilist_id,
+                season_number=season_number,
             )
 
     async def _apply_structure_b_metadata(
@@ -643,17 +674,35 @@ class JellyfinMetadataScanner:
         Mirrors Plex's ``_store_structure_b_mappings`` / ``_apply_season_metadata``.
         Each Jellyfin Season item gets the poster for the corresponding series-group
         entry; the parent Series item gets the first entry's poster.
+
+        When Jellyfin has both a physical custom-named season folder (e.g.
+        "Jujutsu Kaisen: Shibuya Incident") AND a virtual "Season 2" container
+        (created from S02Exx episode numbering), both share the same IndexNumber.
+        Group by index so both receive the correct AniList entry rather than
+        the simple enumerate() letting the virtual ones push physical ones off.
         """
-        for i, season in enumerate(real_seasons):
-            entry = tv_entries[i] if i < len(tv_entries) else tv_entries[-1]
+        from collections import defaultdict
+
+        # Build index → [seasons] map (stable order within each index preserved)
+        seasons_by_index: dict[int, list] = defaultdict(list)
+        for s in real_seasons:
+            seasons_by_index[s.index].append(s)
+
+        distinct_indices = sorted(seasons_by_index.keys())
+        total_applied = 0
+        for pos, idx in enumerate(distinct_indices):
+            entry = tv_entries[pos] if pos < len(tv_entries) else tv_entries[-1]
             entry_title = entry.get("display_title") or entry.get("title_romaji") or ""
-            await self._apply_jellyfin_season_metadata(
-                season.item_id,
-                entry["anilist_id"],
-                entry_title,
-                dry_run,
-                force_refresh=force_refresh,
-            )
+            for season in seasons_by_index[idx]:
+                await self._apply_jellyfin_season_metadata(
+                    season.item_id,
+                    entry["anilist_id"],
+                    entry_title,
+                    dry_run,
+                    force_refresh=force_refresh,
+                    season_number=pos + 1,
+                )
+                total_applied += 1
 
         # Show level = first entry
         first_entry = tv_entries[0]
@@ -667,8 +716,10 @@ class JellyfinMetadataScanner:
             force_refresh=force_refresh,
         )
         logger.info(
-            "  [structure B] Applied metadata for %d seasons of '%s'",
-            len(real_seasons),
+            "  [structure B] Applied metadata for %d seasons (%d distinct indices)"
+            " of '%s'",
+            total_applied,
+            len(distinct_indices),
             series_title,
         )
 
@@ -679,8 +730,15 @@ class JellyfinMetadataScanner:
         season_title: str,
         dry_run: bool,
         force_refresh: bool = False,
+        season_number: int | None = None,
     ) -> None:
-        """Write title and poster to a single Jellyfin Season item."""
+        """Write title, poster, and season.nfo to a single Jellyfin Season item.
+
+        Each season carries its own AniList entry's full metadata so that
+        movie/OVA entries placed as numbered seasons (e.g. JJK 0 as Season 2)
+        show their own description, rating, and title rather than inheriting
+        the parent show's TVDB data.
+        """
         try:
             metadata = await self._get_anilist_metadata(
                 anilist_id, force_refresh=force_refresh
@@ -688,17 +746,37 @@ class JellyfinMetadataScanner:
 
             title_display = await self._db.get_setting("app.title_display") or "romaji"
             resolved_title = season_title
+            season_original_title: str | None = None
             cover_url = ""
+            season_plot: str | None = None
+            season_genres: list[str] = []
+            season_studio: str | None = None
+            season_rating: float | None = None
+            season_year: int | None = None
+            season_tags: list[str] = []
 
             if metadata:
                 title_obj = metadata.get("title", {})
                 romaji = title_obj.get("romaji") or ""
                 english = title_obj.get("english") or ""
+                native = title_obj.get("native") or ""
                 if title_display in ("english", "both_english_primary"):
                     resolved_title = english or romaji or season_title
+                    if romaji and romaji != resolved_title:
+                        season_original_title = romaji
                 else:
                     resolved_title = romaji or english or season_title
+                    if english and english != resolved_title:
+                        season_original_title = english
                 cover_url = (metadata.get("coverImage") or {}).get("large") or ""
+                season_plot = metadata.get("description") or None
+                season_genres = metadata.get("genres") or []
+                s_studios = (metadata.get("studios") or {}).get("nodes") or []
+                season_studio = s_studios[0]["name"] if s_studios else None
+                s_score = metadata.get("averageScore")
+                season_rating = round(s_score / 10, 1) if s_score else None
+                season_year = metadata.get("seasonYear") or None
+                season_tags = sorted({t for t in [romaji, english, native] if t})
 
             if dry_run:
                 logger.info(
@@ -712,6 +790,11 @@ class JellyfinMetadataScanner:
                 await self._jellyfin.update_item_metadata(
                     item_id=season_item_id,
                     title=resolved_title,
+                    original_title=season_original_title,
+                    summary=season_plot,
+                    genres=season_genres,
+                    rating=season_rating,
+                    studio=season_studio,
                 )
             except Exception:
                 logger.exception(
@@ -728,6 +811,20 @@ class JellyfinMetadataScanner:
                         season_item_id,
                         exc_info=True,
                     )
+            if season_number is not None:
+                await self._jellyfin.write_season_nfo(
+                    season_item_id,
+                    resolved_title,
+                    season_number,
+                    original_title=season_original_title,
+                    plot=season_plot,
+                    year=season_year,
+                    anilist_id=anilist_id,
+                    genres=season_genres,
+                    studio=season_studio,
+                    rating=season_rating,
+                    tags=season_tags,
+                )
             logger.info(
                 "  [season] Updated Jellyfin season %s -> '%s'",
                 season_item_id,
@@ -778,8 +875,17 @@ class JellyfinMetadataScanner:
         method: str,
         dry_run: bool,
         force_refresh: bool = False,
+        parent_anilist_id: int | None = None,
+        season_number: int | None = None,
     ) -> None:
-        """Fetch AniList metadata and write it to a Jellyfin item."""
+        """Fetch AniList metadata and write it to a Jellyfin item.
+
+        ``parent_anilist_id`` controls which AniList entry's art and title are
+        written to the parent show folder.  Pass the series group root's ID so
+        the parent always shows the first season's artwork regardless of which
+        season item happens to be processed last.  When omitted (or equal to
+        ``anilist_id``) the item's own metadata is used for the parent write.
+        """
         await self._ensure_path_translator()
         metadata = await self._get_anilist_metadata(
             anilist_id, force_refresh=force_refresh
@@ -792,6 +898,7 @@ class JellyfinMetadataScanner:
         title_obj = metadata.get("title", {})
         romaji = title_obj.get("romaji") or ""
         english = title_obj.get("english") or ""
+        native = title_obj.get("native") or ""
 
         al_title: str
         original_title: str | None = None
@@ -812,6 +919,46 @@ class JellyfinMetadataScanner:
         cover_url = metadata.get("coverImage", {}).get("large", "")
         studios = metadata.get("studios", {}).get("nodes", [])
         studio_name = studios[0]["name"] if studios else None
+        item_year = metadata.get("seasonYear") or None
+        # All title variants for search tags — deduplicated
+        item_tags: list[str] = sorted({t for t in [romaji, english, native] if t})
+
+        # Resolve metadata for the parent show folder write.
+        # If parent_anilist_id differs, fetch that entry's data so the parent
+        # always shows the series root (S1) art rather than whichever season
+        # happened to be processed last.
+        effective_parent_id = parent_anilist_id or anilist_id
+        if effective_parent_id != anilist_id:
+            parent_meta = await self._get_anilist_metadata(
+                effective_parent_id, force_refresh=force_refresh
+            ) or metadata
+        else:
+            parent_meta = metadata
+
+        p_title_obj = parent_meta.get("title", {})
+        p_romaji = p_title_obj.get("romaji") or ""
+        p_english = p_title_obj.get("english") or ""
+        p_native = p_title_obj.get("native") or ""
+        p_original_title: str | None = None
+        if title_display in ("english", "both_english_primary"):
+            parent_title = p_english or p_romaji or al_title
+            if p_romaji and p_romaji != parent_title:
+                p_original_title = p_romaji
+        else:
+            parent_title = p_romaji or p_english or al_title
+            if p_english and p_english != parent_title:
+                p_original_title = p_english
+        parent_cover_url = parent_meta.get("coverImage", {}).get("large", "")
+        p_studios = (parent_meta.get("studios") or {}).get("nodes") or []
+        p_studio = p_studios[0]["name"] if p_studios else None
+        p_score = parent_meta.get("averageScore")
+        p_rating = round(p_score / 10, 1) if p_score else None
+        p_year = parent_meta.get("seasonYear") or None
+        p_status = parent_meta.get("status") or None
+        p_genres = parent_meta.get("genres") or []
+        parent_tags: list[str] = sorted(
+            {t for t in [p_romaji, p_english, p_native] if t}
+        )
 
         if dry_run:
             logger.info(
@@ -846,14 +993,46 @@ class JellyfinMetadataScanner:
                 logger.warning(
                     "  Failed to upload poster for %s", jellyfin_title, exc_info=True
                 )
-            # Also set on the parent Folder container if this is a child item
-            # (mixed libraries show Folders in the grid, not the media items)
-            await self._jellyfin.upload_poster_to_parent_folder(item_id, cover_url)
 
-        # Write tvshow.nfo so Jellyfin classifies the folder as a TV show on
-        # the next library scan. This prevents mixed-library "versions" grouping
-        # where episode files are stacked as alternate cuts of one movie.
-        await self._jellyfin.write_tvshow_nfo(item_id, al_title)
+        # Write to the parent Folder/Series container.  Always uses the root
+        # entry's data so multi-season shows consistently show S1 artwork.
+        if parent_cover_url:
+            await self._jellyfin.upload_poster_to_parent_folder(
+                item_id, parent_cover_url
+            )
+        # Write tvshow.nfo with full AniList metadata so Jellyfin classifies the
+        # folder as a TV show and our series arrangement is preserved on refresh.
+        await self._jellyfin.write_tvshow_nfo(
+            item_id,
+            parent_title,
+            original_title=p_original_title,
+            plot=parent_meta.get("description") or None,
+            genres=p_genres,
+            studio=p_studio,
+            rating=p_rating,
+            year=p_year,
+            status=p_status,
+            anilist_id=effective_parent_id,
+            tags=parent_tags,
+        )
+
+        # Write season.nfo when this item IS a season folder (Structure A).
+        # Each season carries its own AniList entry's data (title, plot, rating,
+        # etc.) so e.g. a movie entry used as Season 2 shows its own metadata.
+        if season_number is not None:
+            await self._jellyfin.write_season_nfo(
+                item_id,
+                al_title,
+                season_number,
+                original_title=original_title,
+                plot=description or None,
+                year=item_year,
+                anilist_id=anilist_id,
+                genres=genres,
+                studio=studio_name,
+                rating=rating,
+                tags=item_tags,
+            )
 
         logger.info("  [applied] Jellyfin metadata written to '%s'", jellyfin_title)
 
@@ -870,6 +1049,8 @@ class JellyfinMetadataScanner:
 
         cached = await self._db.get_cached_metadata(anilist_id)
         if cached:
+            cached_rating = cached.get("rating")
+            cached_studio = cached.get("studio") or ""
             return {
                 "id": anilist_id,
                 "title": {
@@ -881,8 +1062,15 @@ class JellyfinMetadataScanner:
                 "coverImage": {"large": cached.get("cover_image", "")},
                 "description": cached.get("description", ""),
                 "genres": _safe_parse_genres(cached.get("genres", "[]")),
-                "averageScore": None,
-                "studios": {"nodes": []},
+                # Reconstruct averageScore from stored rating (rating = score/10)
+                "averageScore": (
+                    int(round(cached_rating * 10))
+                    if cached_rating is not None
+                    else None
+                ),
+                "studios": {
+                    "nodes": [{"name": cached_studio}] if cached_studio else []
+                },
                 "status": cached.get("status", ""),
                 "seasonYear": cached.get("year", 0),
             }
@@ -895,6 +1083,10 @@ class JellyfinMetadataScanner:
         year = metadata.get("seasonYear") or (
             (metadata.get("startDate") or {}).get("year") or 0
         )
+        raw_score = metadata.get("averageScore")
+        cached_rating = round(raw_score / 10, 1) if raw_score else None
+        studios_nodes = (metadata.get("studios") or {}).get("nodes") or []
+        cached_studio = studios_nodes[0].get("name") or "" if studios_nodes else ""
         await self._db.set_cached_metadata(
             anilist_id=anilist_id,
             title_romaji=title_obj.get("romaji") or "",
@@ -906,5 +1098,7 @@ class JellyfinMetadataScanner:
             genres=json.dumps(metadata.get("genres") or []),
             status=metadata.get("status") or "",
             year=year,
+            rating=cached_rating,
+            studio=cached_studio,
         )
         return metadata

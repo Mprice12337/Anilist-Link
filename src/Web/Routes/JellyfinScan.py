@@ -46,6 +46,14 @@ async def _run_jellyfin_preview_scan(app_state: object) -> None:
         library_ids = list(config.jellyfin.anime_library_ids)
 
     try:
+        # Refresh only the selected libraries so item IDs are stable before
+        # we attempt any matching or metadata writes.
+        if progress:
+            progress.current_title = "Waiting for Jellyfin library refresh..."
+        await jellyfin_client.refresh_library_and_wait(
+            inactivity_timeout=120.0, library_ids=library_ids or None
+        )
+
         results = await scanner.run_scan(
             preview=True, library_ids=library_ids, progress=progress
         )
@@ -79,10 +87,26 @@ async def _run_jellyfin_live_scan(app_state: object) -> None:
         library_ids = list(config.jellyfin.anime_library_ids)
 
     try:
+        # Refresh only the selected libraries so item IDs are stable before
+        # we attempt any matching or metadata writes.
+        if progress:
+            progress.current_title = "Waiting for Jellyfin library refresh..."
+        await jellyfin_client.refresh_library_and_wait(
+            inactivity_timeout=120.0, library_ids=library_ids or None
+        )
+
         results = await scanner.run_scan(
             preview=False, library_ids=library_ids, progress=progress
         )
         app_state.jellyfin_scan_results = results  # type: ignore[attr-defined]
+
+        # Second refresh so Jellyfin picks up the NFO files and metadata
+        # changes that were just written.
+        if progress:
+            progress.current_title = "Triggering Jellyfin re-index..."
+        await jellyfin_client.refresh_library_and_wait(
+            inactivity_timeout=120.0, library_ids=library_ids or None
+        )
     except Exception:
         logger.exception("Jellyfin live scan failed")
         progress.status = "error"
@@ -181,7 +205,19 @@ async def jellyfin_scan_apply(request: Request) -> RedirectResponse:
     applied = 0
     errors = 0
 
+    # Use the library IDs that were active during the scan (or settings fallback)
+    scan_library_ids: list[str] | None = getattr(
+        request.app.state, "jellyfin_scan_library_ids", None
+    )
+    if not scan_library_ids and config.jellyfin.anime_library_ids:
+        scan_library_ids = list(config.jellyfin.anime_library_ids)
+
     try:
+        # Refresh only the selected libraries before writing so IDs are stable.
+        await jellyfin_client.refresh_library_and_wait(
+            inactivity_timeout=120.0, library_ids=scan_library_ids or None
+        )
+
         for item_str in apply_items:
             # Format: "item_id|anilist_id|confidence|title"
             parts = str(item_str).split("|", 3)
@@ -199,10 +235,27 @@ async def jellyfin_scan_apply(request: Request) -> RedirectResponse:
                 continue
 
             group_id = None
+            group_entries: list[dict] = []
             try:
-                group_id, _entries = await group_builder.get_or_build_group(anilist_id)
+                group_id, group_entries = await group_builder.get_or_build_group(
+                    anilist_id
+                )
             except Exception:
                 logger.debug("Could not build series group for %s", title)
+
+            root_anilist_id = (
+                group_entries[0]["anilist_id"] if group_entries else anilist_id
+            )
+
+            # Determine season number from position in group (chronological order)
+            season_number: int | None = None
+            if group_entries:
+                for i, entry in enumerate(group_entries):
+                    if entry.get("anilist_id") == anilist_id:
+                        season_number = i + 1
+                        break
+                if season_number is None:
+                    season_number = 1
 
             await db.upsert_media_mapping(
                 source="jellyfin",
@@ -216,10 +269,21 @@ async def jellyfin_scan_apply(request: Request) -> RedirectResponse:
                 season_number=1,
             )
             await scanner._apply_anilist_metadata(
-                item_id, title, anilist_id, confidence, "fuzzy", False
+                item_id,
+                title,
+                anilist_id,
+                confidence,
+                "fuzzy",
+                False,
+                parent_anilist_id=root_anilist_id,
+                season_number=season_number,
             )
             applied += 1
 
+        # Trigger a re-index so Jellyfin picks up the NFO files just written.
+        await jellyfin_client.refresh_library_and_wait(
+            inactivity_timeout=120.0, library_ids=scan_library_ids or None
+        )
     except Exception:
         logger.exception("Error during Jellyfin apply")
         errors += 1
