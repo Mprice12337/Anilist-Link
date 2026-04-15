@@ -980,7 +980,7 @@ class JellyfinClient:
             if tvdb_id:
                 lines.append(f'  <uniqueid type="tvdb">{tvdb_id}</uniqueid>')
             if tvmaze_id:
-                lines.append(f'  <uniqueid type="tvmaze">{tvmaze_id}</uniqueid>')
+                lines.append(f'  <uniqueid type="TVmaze">{tvmaze_id}</uniqueid>')
             if lock_data:
                 lines.append("  <lockdata>true</lockdata>")
             lines.append("</tvshow>")
@@ -1083,7 +1083,7 @@ class JellyfinClient:
                 )
             if series_tvmaze_id:
                 lines.append(
-                    f'  <uniqueid type="tvmaze">{series_tvmaze_id}</uniqueid>'
+                    f'  <uniqueid type="TVmaze">{series_tvmaze_id}</uniqueid>'
                 )
             if lock_data:
                 lines.append("  <lockdata>true</lockdata>")
