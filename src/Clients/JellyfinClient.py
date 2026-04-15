@@ -970,7 +970,7 @@ class JellyfinClient:
                 lines.append(f"  <tag>{self._xml_escape(tag)}</tag>")
             if anilist_id is not None:
                 lines.append(
-                    f'  <uniqueid type="anilist" default="true">{anilist_id}</uniqueid>'
+                    f'  <uniqueid type="AniList" default="true">{anilist_id}</uniqueid>'
                 )
             # Secondary provider IDs sourced from TVMaze — let episode providers
             # (TMDB, OMDB) retain their matching reference after our restructure
@@ -1068,7 +1068,7 @@ class JellyfinClient:
                 lines.append(f"  <tag>{self._xml_escape(tag)}</tag>")
             if anilist_id is not None:
                 lines.append(
-                    f'  <uniqueid type="anilist" default="true">{anilist_id}</uniqueid>'
+                    f'  <uniqueid type="AniList" default="true">{anilist_id}</uniqueid>'
                 )
             # Series-level provider IDs — non-default so they don't override
             # the per-season AniList source, but give episode providers the
