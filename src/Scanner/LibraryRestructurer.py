@@ -208,7 +208,7 @@ class RestructureGroup:
     warnings: list[str] = field(default_factory=list)
     source_rating_keys: list[str] = field(default_factory=list)
     operation_type: str = "move"  # "rename_folder", "rename_file", "move"
-    current_folder: str = ""  # current folder basename (for L1/L2 preview)
+    current_folder: str = ""  # current folder full path (for L1/L2/standalone preview)
     group_key: str = ""  # unique ID for form checkboxes
     anilist_id: int = 0  # AniList ID for this group (used to pre-seed library_items)
     support_file_count: int = 0  # metadata files that will be removed
@@ -334,9 +334,7 @@ def _extract_episode_info(filename: str) -> EpisodeInfo | None:
             special_type = m_special.group(2).upper()
             # "S" suffix means a short/special; expand to a readable label
             special_variant = special_type if special_type != "S" else "Special"
-            return EpisodeInfo(
-                number=ep_str, source_season=0, variant=special_variant
-            )
+            return EpisodeInfo(number=ep_str, source_season=0, variant=special_variant)
         else:
             # "OAD 01" / "OVA 01" prefix (no S## wrapper) → route to S00
             # groups: 1=OAD keyword, 2=OAD ep, 3=OVA keyword, 4=OVA ep
@@ -1395,9 +1393,7 @@ class LibraryRestructurer:
                     source_rating_keys=source_rating_keys,
                     group_key=str(group_id),
                     anilist_id=root_anilist_id,
-                    current_folder=", ".join(
-                        os.path.basename(s) for s in source_folders
-                    ),
+                    current_folder=", ".join(source_folders),
                     support_file_count=sf_count,
                 )
             )
@@ -1546,21 +1542,31 @@ class LibraryRestructurer:
                 if snum in _season_dir_cache:
                     return _season_dir_cache[snum]
                 if snum == 0:
-                    # If this is a standalone single-entry series (e.g. an OVA
-                    # series whose files use S00Exx naming), redirect to the one
-                    # AniList entry's folder rather than producing a generic
-                    # "Specials (year)" subfolder.  Only fall back to "Specials"
-                    # when the series group has multiple seasons, meaning S00 is
-                    # genuinely a specials bucket within a multi-season show.
-                    if len(sg_season_map) == 1 and 1 in sg_season_map:
-                        _season_dir_cache[snum] = _get_season_dir(1)
-                        return _season_dir_cache[snum]
-                    sp_tokens = {
-                        "season": "00",
-                        "season.name": "Specials",
-                        "year": str(si.year) if si.year else "",
-                    }
-                    name = self._season_tmpl.render(sp_tokens) or "Specials"
+                    # sg_season_map is only populated for multi-season series
+                    # groups (len > 1).  When it is empty this item is a
+                    # standalone single-entry series (e.g. an OVA series whose
+                    # files use S00Exx naming).  Use the show's AniList title
+                    # as the season folder rather than a generic "Specials (year)".
+                    # When sg_season_map is non-empty the show has multiple
+                    # seasons and S00 really is a specials bucket.
+                    if not sg_season_map:
+                        s_tokens = {
+                            "season": f"{snum:02d}",
+                            "season.name": self._san(
+                                _resolve_display_title(si, self._title_pref)
+                            ),
+                            "year": str(si.year) if si.year else "",
+                        }
+                        name = self._season_tmpl.render(s_tokens) or self._san(
+                            _resolve_display_title(si, self._title_pref)
+                        )
+                    else:
+                        sp_tokens = {
+                            "season": "00",
+                            "season.name": "Specials",
+                            "year": str(si.year) if si.year else "",
+                        }
+                        name = self._season_tmpl.render(sp_tokens) or "Specials"
                 elif snum in sg_season_map:
                     # Multi-season Sonarr: use the AniList entry for this season dir.
                     # No anti-nesting guard — same-name subfolder is intentional here
@@ -1825,7 +1831,7 @@ class LibraryRestructurer:
                     warnings=standalone_warnings,
                     source_rating_keys=[si.source_id],
                     operation_type=op_type,
-                    current_folder=current_folder,
+                    current_folder=si.local_path,
                     group_key=f"standalone_{si.source_id}",
                     anilist_id=si.anilist_id,
                     support_file_count=_count_support_files(si.local_path),
@@ -2226,7 +2232,7 @@ class LibraryRestructurer:
                     warnings=warnings,
                     source_rating_keys=[si.source_id],
                     operation_type=op_type,
-                    current_folder=current_folder,
+                    current_folder=si.local_path,
                     group_key=si.source_id,
                     anilist_id=si.anilist_id,
                     support_file_count=_count_support_files(si.local_path),
