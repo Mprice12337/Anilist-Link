@@ -968,19 +968,23 @@ class JellyfinClient:
             # Deduplicated title variant tags for searchability (romaji/english/native)
             for tag in sorted(set(tags or [])):
                 lines.append(f"  <tag>{self._xml_escape(tag)}</tag>")
+            # Provider IDs — use Jellyfin's native explicit-tag format so all
+            # installed plugins (TMDB, TVDB, OMDB, TVMaze, AniList) recognise
+            # them.  Scheme: <PROVIDERNAMEid> per Jellyfin NFO documentation.
+            # <imdb_id> is the TV-show variant of the IMDB tag (underscore form).
+            # <uniqueid type="AniList"> is kept alongside <anilistid> because the
+            # AniList plugin reads the uniqueid element via its registered name.
+            if imdb_id:
+                lines.append(f"  <imdb_id>{imdb_id}</imdb_id>")
+            if tvdb_id:
+                lines.append(f"  <tvdbid>{tvdb_id}</tvdbid>")
+            if tvmaze_id:
+                lines.append(f"  <tvmazeid>{tvmaze_id}</tvmazeid>")
             if anilist_id is not None:
+                lines.append(f"  <anilistid>{anilist_id}</anilistid>")
                 lines.append(
                     f'  <uniqueid type="AniList" default="true">{anilist_id}</uniqueid>'
                 )
-            # Secondary provider IDs sourced from TVMaze — let episode providers
-            # (TMDB, OMDB) retain their matching reference after our restructure
-            # renames folders away from names those providers would recognise.
-            if imdb_id:
-                lines.append(f'  <uniqueid type="imdb">{imdb_id}</uniqueid>')
-            if tvdb_id:
-                lines.append(f'  <uniqueid type="tvdb">{tvdb_id}</uniqueid>')
-            if tvmaze_id:
-                lines.append(f'  <uniqueid type="TVmaze">{tvmaze_id}</uniqueid>')
             if lock_data:
                 lines.append("  <lockdata>true</lockdata>")
             lines.append("</tvshow>")
@@ -1019,10 +1023,11 @@ class JellyfinClient:
         prevents Jellyfin from overwriting season-level metadata on refresh.
 
         ``series_imdb_id``, ``series_tvdb_id``, and ``series_tvmaze_id`` are
-        the parent series' provider IDs written as non-default uniqueid entries.
-        They give TMDB, TVDB, OMDB, and TVMaze enough series context to resolve
-        per-episode metadata even when the season numbering in our custom
-        arrangement diverges from what those providers use.
+        the parent series' provider IDs written using Jellyfin's native explicit
+        tag format (``<imdbid>``, ``<tvdbid>``, ``<tvmazeid>``).  They give
+        TMDB, TVDB, OMDB, and TVMaze enough series context to resolve per-episode
+        metadata even when the season numbering in our custom arrangement diverges
+        from what those providers use.
 
         Uses the item's own ``Path`` (no hierarchy walk) so the file lands in
         the correct season subdirectory.  Episode-level metadata remains owned
@@ -1066,24 +1071,21 @@ class JellyfinClient:
             # Deduplicated title variant tags for searchability (romaji/english/native)
             for tag in sorted(set(tags or [])):
                 lines.append(f"  <tag>{self._xml_escape(tag)}</tag>")
+            # Provider IDs — use Jellyfin's native explicit-tag format.
+            # Seasons use <imdbid> (no underscore — the "all other media" variant;
+            # <imdb_id> with underscore is only for the tvshow root element).
+            # Series-level TVDB/IMDB/TVMaze IDs give episode providers the series
+            # context they need for per-episode metadata lookups.
+            if series_imdb_id:
+                lines.append(f"  <imdbid>{series_imdb_id}</imdbid>")
+            if series_tvdb_id:
+                lines.append(f"  <tvdbid>{series_tvdb_id}</tvdbid>")
+            if series_tvmaze_id:
+                lines.append(f"  <tvmazeid>{series_tvmaze_id}</tvmazeid>")
             if anilist_id is not None:
+                lines.append(f"  <anilistid>{anilist_id}</anilistid>")
                 lines.append(
                     f'  <uniqueid type="AniList" default="true">{anilist_id}</uniqueid>'
-                )
-            # Series-level provider IDs — non-default so they don't override
-            # the per-season AniList source, but give episode providers the
-            # series context they need for per-episode metadata lookups.
-            if series_imdb_id:
-                lines.append(
-                    f'  <uniqueid type="imdb">{series_imdb_id}</uniqueid>'
-                )
-            if series_tvdb_id:
-                lines.append(
-                    f'  <uniqueid type="tvdb">{series_tvdb_id}</uniqueid>'
-                )
-            if series_tvmaze_id:
-                lines.append(
-                    f'  <uniqueid type="TVmaze">{series_tvmaze_id}</uniqueid>'
                 )
             if lock_data:
                 lines.append("  <lockdata>true</lockdata>")
