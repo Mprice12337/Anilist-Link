@@ -89,12 +89,17 @@ def strip_bracket_tags(title: str) -> str:
 
 
 def clean_title_for_search(title: str) -> str:
-    """Remove season/part qualifiers and bracketed tags for broader AniList results."""
+    """Remove season qualifiers and bracketed tags for broader AniList results.
+
+    Note: "Part N" is intentionally preserved — stripping it causes wrong matches
+    when Part N is the only disambiguation between two AniList entries (e.g.
+    "Mushoku Tensei Part 2" vs "Mushoku Tensei").  AniList's search handles
+    "Part N" correctly and the fuzzy matcher needs it to rank the right entry.
+    """
     clean = strip_bracket_tags(title)
-    # Strip season/part qualifiers
+    # Strip season qualifiers
     clean = re.sub(r"\s*-?\s*Season\s*\d+", "", clean, flags=re.IGNORECASE)
     clean = re.sub(r"\s*-?\s*S\d+", "", clean, flags=re.IGNORECASE)
-    clean = re.sub(r"\s*-?\s*Part\s*\d+", "", clean, flags=re.IGNORECASE)
     clean = re.sub(
         r"\s*-?\s*\d+(?:st|nd|rd|th)\s*Season", "", clean, flags=re.IGNORECASE
     )

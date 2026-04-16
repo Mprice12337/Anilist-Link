@@ -1546,7 +1546,15 @@ class LibraryRestructurer:
                 if snum in _season_dir_cache:
                     return _season_dir_cache[snum]
                 if snum == 0:
-                    # Specials — unchanged
+                    # If this is a standalone single-entry series (e.g. an OVA
+                    # series whose files use S00Exx naming), redirect to the one
+                    # AniList entry's folder rather than producing a generic
+                    # "Specials (year)" subfolder.  Only fall back to "Specials"
+                    # when the series group has multiple seasons, meaning S00 is
+                    # genuinely a specials bucket within a multi-season show.
+                    if len(sg_season_map) == 1 and 1 in sg_season_map:
+                        _season_dir_cache[snum] = _get_season_dir(1)
+                        return _season_dir_cache[snum]
                     sp_tokens = {
                         "season": "00",
                         "season.name": "Specials",

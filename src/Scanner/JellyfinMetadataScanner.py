@@ -53,17 +53,6 @@ _GENERIC_FOLDER_RE = re.compile(
 _GENERIC_SEASON_RE = re.compile(r"^season\s*\d+$", re.IGNORECASE)
 
 
-def _clean_filename_for_search(name: str) -> str:
-    """Strip extension, resolution tags, and bracketed quality from a filename."""
-    # Strip extension
-    name = os.path.splitext(name)[0]
-    # Strip trailing resolution/quality tags like "- 1080p", "- 1080p (Directors Cut)"
-    name = re.sub(r"\s*[-–]\s*\d{3,4}p.*$", "", name, flags=re.IGNORECASE)
-    # Strip bracketed resolution tags like "[1080p]"
-    name = re.sub(r"\s*\[\d{3,4}p[^\]]*\]", "", name, flags=re.IGNORECASE)
-    return name.strip()
-
-
 def _derive_folder_name(show: object) -> str:  # type: ignore[type-arg]
     """Derive the best search-friendly name for a Jellyfin item.
 
@@ -71,9 +60,9 @@ def _derive_folder_name(show: object) -> str:  # type: ignore[type-arg]
     1. Filesystem path — preferred because Jellyfin metadata agents replace
        the display Name with scraped titles (e.g. 'Gekijouban K: Missing Kings')
        while the path reflects the original folder/file name.
-    2. For file paths (movies/OVAs): use the parent folder name unless that
-       folder has a generic name like 'Specials (2014)', in which case fall
-       back to the cleaned filename itself.
+    2. For file paths (standalone movies/OVAs not in a generic sub-folder):
+       use the parent folder name.  Items in generic sub-folders (Specials,
+       Extras, etc.) are skipped before this function's result is used.
     3. show.name — last resort when no path is available.
     """
     from src.Clients.JellyfinClient import JellyfinShow  # local to avoid circular
@@ -82,31 +71,16 @@ def _derive_folder_name(show: object) -> str:  # type: ignore[type-arg]
 
     path: str = show.path or ""
     if not path:
-        logger.debug(
-            "No path for Jellyfin item '%s' (%s) — using display name",
-            show.name,
-            show.media_type,
-        )
         return show.name
 
     basename = os.path.basename(path)
     _, ext = os.path.splitext(basename)
 
     if ext.lower() in _MEDIA_EXTENSIONS:
-        # Path is a file — try parent folder first
+        # Path is a file — use the parent folder name as the match target.
+        # (Items in generic parent folders are already filtered out by the
+        # caller before this result is acted upon.)
         parent = os.path.basename(os.path.dirname(path))
-        if parent and not _GENERIC_FOLDER_RE.match(parent.strip()):
-            return parent
-        # Parent is generic (e.g. "Specials (2021)") — use the cleaned filename
-        cleaned = _clean_filename_for_search(basename)
-        if cleaned:
-            logger.debug(
-                "Generic parent folder '%s' for '%s' — using filename '%s'",
-                parent,
-                show.name,
-                cleaned,
-            )
-            return cleaned
         return parent or show.name
 
     # Path is a directory — if the folder name is a generic "Season N", use the
@@ -269,18 +243,49 @@ class JellyfinMetadataScanner:
         )
         for show in shows:
             folder_name = _derive_folder_name(show)
-            # Skip pathless items whose resolved name is a generic season label
-            # (e.g. "Season 1").  These are virtual Jellyfin containers with no
-            # filesystem path and cannot be matched to an AniList entry.
-            if not show.path and _GENERIC_SEASON_RE.match((folder_name or "").strip()):
+            # Skip any item without a real filesystem path — these are virtual
+            # Jellyfin containers (e.g. "Season Unknown", auto-generated season
+            # buckets) that have no on-disk presence.  There is nothing to match,
+            # no NFO to write, and no metadata to apply.
+            if not show.path:
                 logger.debug(
-                    "Skipping pathless generic-season item '%s' (%s)",
+                    "Skipping virtual item '%s' (%s) — no filesystem path",
                     show.name,
                     show.media_type,
                 )
                 if progress:
                     progress.scanned += 1
                 continue
+            # Skip generic sub-folders and episode files that belong to an
+            # already-mapped series, not standalone AniList entries.
+            # Two forms Jellyfin surfaces these as:
+            #   • Season/Movie item whose path IS a generic directory
+            #     (e.g. ".../Shaman King/Specials (2000)/")
+            #   • Movie item whose path is a file inside a generic directory
+            #     (e.g. ".../Another/Specials (2013)/ep.mkv")
+            _path_ext = os.path.splitext(show.path)[1].lower()
+            if _path_ext in _MEDIA_EXTENSIONS:
+                _parent = os.path.basename(os.path.dirname(show.path))
+                if _GENERIC_FOLDER_RE.match(_parent.strip()):
+                    logger.debug(
+                        "Skipping episode file '%s' in generic folder '%s'",
+                        show.name,
+                        _parent,
+                    )
+                    if progress:
+                        progress.scanned += 1
+                    continue
+            else:
+                _basename = os.path.basename(show.path.rstrip("/\\"))
+                if _GENERIC_FOLDER_RE.match(_basename.strip()):
+                    logger.debug(
+                        "Skipping generic sub-folder '%s' (%s)",
+                        show.name,
+                        _basename,
+                    )
+                    if progress:
+                        progress.scanned += 1
+                    continue
             # Always populate jellyfin_media so the browser can display items
             try:
                 await self._db.upsert_jellyfin_media(
@@ -421,7 +426,7 @@ class JellyfinMetadataScanner:
             candidates = await self._anilist.search_anime(search_title, per_page=15)
 
             if not candidates:
-                logger.warning("  [no results] %s", title)
+                logger.warning("  [no results] %s (searched: '%s')", title, search_title)
                 if preview:
                     results.items.append(
                         ScanItemDetail(
