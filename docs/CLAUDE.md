@@ -428,6 +428,9 @@ Current tables:
   - `GET /manual-grab` - Manual release grab
   - `GET /watchlist` - AniList watchlist browser
   - `POST /arr-webhook` - Sonarr/Radarr webhook receiver
+  - `POST /jellyfin/webhook` - Jellyfin webhook receiver (virtual season cleanup on TaskCompleted)
+  - `GET /api/jellyfin/virtual-items` - Inspect virtual seasons (diagnostic)
+  - `GET /api/jellyfin/delete-virtual` - Delete a single virtual item (diagnostic)
   - `GET /tools` - Admin tools
   - `GET /api/scan/plex/search` - AniList title search for manual rematch
 
@@ -453,6 +456,7 @@ Current tables:
 - `plex_metadata_scan` - Plex library scan and metadata application [planned for scheduling]
 - `plex_watch_sync` - Plex watch progress polling [implemented — default disabled]
 - `jellyfin_watch_sync` - Jellyfin watch progress polling [implemented — default disabled]
+- `jellyfin_virtual_cleanup` - Polls Jellyfin scan task state every 60s; runs virtual season cleanup on Running→Idle transition [implemented]
 
 ---
 
@@ -699,7 +703,9 @@ alias alstop='docker-compose down'           # Stop Anilist-Link
 - COMPLETED status protection: never downgrades AniList entries already marked COMPLETED ✅
 - Circular sync fix: backfill always writes `sync_state` to prevent false forward-sync updates ✅
 - `watch_sync_log` table (v4): full audit trail with per-entry undo from the Watch Sync UI ✅
-- Plex/Jellyfin webhook handler (real-time sync) not yet implemented
+- Jellyfin webhook handler (`POST /jellyfin/webhook`) ✅ — receives events from Webhook plugin
+- Jellyfin virtual season cleanup ✅ — automated post-scan + 60s poller + webhook trigger
+- Plex webhook handler (real-time sync) not yet implemented
 - AniList token auto-refresh not yet wired up
 
 **P4 — Downloads**: ✅ Complete

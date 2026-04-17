@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 
@@ -14,6 +15,7 @@ from src.Matching.TitleMatcher import TitleMatcher, get_primary_title
 from src.Scanner.JellyfinMetadataScanner import JellyfinMetadataScanner
 from src.Scanner.MetadataScanner import ScanItemDetail, ScanProgress, ScanResults
 from src.Scanner.SeriesGroupBuilder import SeriesGroupBuilder
+from src.Web.App import spawn_background_task
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +60,11 @@ async def _run_jellyfin_preview_scan(app_state: object) -> None:
             preview=True, library_ids=library_ids, progress=progress
         )
         app_state.jellyfin_scan_results = results  # type: ignore[attr-defined]
+    except asyncio.CancelledError:
+        logger.info("Jellyfin preview scan cancelled")
+        progress.status = "cancelled"
+        progress.error_message = "Cancelled by user"
+        raise
     except Exception:
         logger.exception("Jellyfin preview scan failed")
         progress.status = "error"
@@ -116,7 +123,7 @@ async def _run_jellyfin_live_scan(app_state: object) -> None:
         # OMDB, and TVMaze using the provider IDs we just wrote.
         if progress:
             progress.current_title = "Refreshing episode metadata from providers..."
-        for lib_id in (library_ids or []):
+        for lib_id in library_ids or []:
             series_ids = await jellyfin_client.get_series_ids_in_library(lib_id)
             logger.info(
                 "Triggering episode metadata refresh for %d series in library %s",
@@ -127,6 +134,16 @@ async def _run_jellyfin_live_scan(app_state: object) -> None:
                 await jellyfin_client.refresh_item_metadata(
                     series_id, recursive=True, replace_all=True
                 )
+
+        # Clean up virtual seasons created by the metadata refresh.
+        if progress:
+            progress.current_title = "Removing virtual season folders..."
+        await jellyfin_client.delete_virtual_seasons(library_ids or None)
+    except asyncio.CancelledError:
+        logger.info("Jellyfin live scan cancelled")
+        progress.status = "cancelled"
+        progress.error_message = "Cancelled by user"
+        raise
     except Exception:
         logger.exception("Jellyfin live scan failed")
         progress.status = "error"
@@ -193,12 +210,136 @@ async def jellyfin_scan_search(request: Request) -> JSONResponse:
     return JSONResponse(results)
 
 
+async def _run_jellyfin_scan_apply(
+    app_state: object,
+    parsed_items: list[tuple[str, int, float, str]],
+    scan_library_ids: list[str] | None,
+) -> None:
+    """Background coroutine: apply selected preview matches and refresh Jellyfin."""
+    config = app_state.config  # type: ignore[attr-defined]
+    db = app_state.db  # type: ignore[attr-defined]
+    anilist_client = app_state.anilist_client  # type: ignore[attr-defined]
+    progress: ScanProgress = app_state.jellyfin_apply_progress  # type: ignore[attr-defined]
+
+    jellyfin_client = JellyfinClient(
+        url=config.jellyfin.url, api_key=config.jellyfin.api_key
+    )
+    title_matcher = TitleMatcher(similarity_threshold=0.75)
+    group_builder = SeriesGroupBuilder(db, anilist_client)
+    scanner = JellyfinMetadataScanner(
+        db, anilist_client, title_matcher, jellyfin_client, config, group_builder
+    )
+
+    applied = 0
+    errors = 0
+
+    try:
+        progress.current_title = "Refreshing Jellyfin libraries…"
+        await jellyfin_client.refresh_library_and_wait(
+            inactivity_timeout=120.0, library_ids=scan_library_ids or None
+        )
+
+        for item_id, anilist_id, confidence, title in parsed_items:
+            progress.current_title = title
+            try:
+                group_id = None
+                group_entries: list[dict] = []
+                try:
+                    group_id, group_entries = await group_builder.get_or_build_group(
+                        anilist_id
+                    )
+                except Exception:
+                    logger.debug("Could not build series group for %s", title)
+
+                root_anilist_id = (
+                    group_entries[0]["anilist_id"] if group_entries else anilist_id
+                )
+                season_number: int | None = None
+                if group_entries:
+                    for i, entry in enumerate(group_entries):
+                        if entry.get("anilist_id") == anilist_id:
+                            season_number = i + 1
+                            break
+                    if season_number is None:
+                        season_number = 1
+
+                await db.upsert_media_mapping(
+                    source="jellyfin",
+                    source_id=item_id,
+                    source_title=title,
+                    anilist_id=anilist_id,
+                    anilist_title="",
+                    match_confidence=confidence,
+                    match_method="fuzzy",
+                    series_group_id=group_id,
+                    season_number=1,
+                )
+                await scanner._apply_anilist_metadata(
+                    item_id,
+                    title,
+                    anilist_id,
+                    confidence,
+                    "fuzzy",
+                    False,
+                    parent_anilist_id=root_anilist_id,
+                    season_number=season_number,
+                )
+                applied += 1
+            except Exception:
+                logger.exception("Error applying metadata for %s", title)
+                errors += 1
+            finally:
+                progress.scanned = applied + errors
+
+        progress.current_title = "Refreshing Jellyfin to pick up NFO changes…"
+        await jellyfin_client.refresh_library_and_wait(
+            inactivity_timeout=120.0, library_ids=scan_library_ids or None
+        )
+
+        progress.current_title = "Refreshing episode metadata from providers…"
+        for lib_id in scan_library_ids or []:
+            series_ids = await jellyfin_client.get_series_ids_in_library(lib_id)
+            logger.info(
+                "Triggering episode metadata refresh for %d series in library %s",
+                len(series_ids),
+                lib_id,
+            )
+            for series_id in series_ids:
+                await jellyfin_client.refresh_item_metadata(
+                    series_id, recursive=True, replace_all=True
+                )
+
+        progress.current_title = "Removing virtual season folders…"
+        await jellyfin_client.delete_virtual_seasons(scan_library_ids or None)
+
+        await db.dismiss_notifications_by_url("/jellyfin/scan/results")
+        await db.clear_dismissed_notifications()
+
+        progress.status = "complete"
+        progress.current_title = f"Applied metadata to {applied} shows" + (
+            f" ({errors} errors)" if errors else ""
+        )
+    except asyncio.CancelledError:
+        logger.info("Jellyfin scan-apply cancelled after %d items", applied)
+        progress.status = "cancelled"
+        progress.current_title = f"Cancelled after {applied} items"
+        raise
+    except Exception:
+        logger.exception("Error during Jellyfin apply")
+        progress.status = "error"
+        progress.error_message = "Apply failed unexpectedly"
+    finally:
+        await jellyfin_client.close()
+
+
 @router.post("/scan/jellyfin/apply")
 async def jellyfin_scan_apply(request: Request) -> RedirectResponse:
-    """Apply selected preview matches — store mappings and write metadata."""
+    """Kick off a background apply of selected preview matches.
+
+    Progress is reported through ``app_state.jellyfin_apply_progress`` and
+    picked up by the floating widget via ``/api/progress``.
+    """
     config = request.app.state.config
-    db = request.app.state.db
-    anilist_client = request.app.state.anilist_client
 
     if not config.jellyfin.url or not config.jellyfin.api_key:
         return RedirectResponse(
@@ -213,127 +354,59 @@ async def jellyfin_scan_apply(request: Request) -> RedirectResponse:
             url="/jellyfin?message=No+items+to+apply", status_code=303
         )
 
-    jellyfin_client = JellyfinClient(
-        url=config.jellyfin.url, api_key=config.jellyfin.api_key
-    )
-    title_matcher = TitleMatcher(similarity_threshold=0.75)
-    group_builder = SeriesGroupBuilder(db, anilist_client)
-    scanner = JellyfinMetadataScanner(
-        db, anilist_client, title_matcher, jellyfin_client, config, group_builder
-    )
+    existing = getattr(request.app.state, "jellyfin_apply_progress", None)
+    if existing and existing.status not in ("", "pending", "complete", "error"):
+        return RedirectResponse(
+            url="/jellyfin?message=Apply+already+running+%E2%80%94+see+progress+widget",
+            status_code=303,
+        )
 
-    applied = 0
-    errors = 0
+    parsed: list[tuple[str, int, float, str]] = []
+    for item_str in apply_items:
+        # Format: "item_id|anilist_id|confidence|title"
+        parts = str(item_str).split("|", 3)
+        if len(parts) < 4:
+            logger.warning("Malformed apply_item: %s", item_str)
+            continue
+        item_id, anilist_id_str, confidence_str, title = parts
+        try:
+            anilist_id = int(anilist_id_str)
+            confidence = float(confidence_str)
+        except ValueError:
+            continue
+        parsed.append((item_id, anilist_id, confidence, title))
 
-    # Use the library IDs that were active during the scan (or settings fallback)
+    if not parsed:
+        return RedirectResponse(
+            url="/jellyfin?message=No+valid+items+to+apply", status_code=303
+        )
+
     scan_library_ids: list[str] | None = getattr(
         request.app.state, "jellyfin_scan_library_ids", None
     )
     if not scan_library_ids and config.jellyfin.anime_library_ids:
         scan_library_ids = list(config.jellyfin.anime_library_ids)
 
-    try:
-        # Refresh only the selected libraries before writing so IDs are stable.
-        await jellyfin_client.refresh_library_and_wait(
-            inactivity_timeout=120.0, library_ids=scan_library_ids or None
-        )
+    request.app.state.jellyfin_apply_progress = ScanProgress(
+        status="running",
+        total=len(parsed),
+        current_title="Starting…",
+    )
+    spawn_background_task(
+        request.app.state,
+        _run_jellyfin_scan_apply(
+            request.app.state,
+            parsed,
+            list(scan_library_ids) if scan_library_ids else None,
+        ),
+        task_key="jellyfin_apply",
+    )
 
-        for item_str in apply_items:
-            # Format: "item_id|anilist_id|confidence|title"
-            parts = str(item_str).split("|", 3)
-            if len(parts) < 4:
-                logger.warning("Malformed apply_item: %s", item_str)
-                errors += 1
-                continue
-
-            item_id, anilist_id_str, confidence_str, title = parts
-            try:
-                anilist_id = int(anilist_id_str)
-                confidence = float(confidence_str)
-            except ValueError:
-                errors += 1
-                continue
-
-            group_id = None
-            group_entries: list[dict] = []
-            try:
-                group_id, group_entries = await group_builder.get_or_build_group(
-                    anilist_id
-                )
-            except Exception:
-                logger.debug("Could not build series group for %s", title)
-
-            root_anilist_id = (
-                group_entries[0]["anilist_id"] if group_entries else anilist_id
-            )
-
-            # Determine season number from position in group (chronological order)
-            season_number: int | None = None
-            if group_entries:
-                for i, entry in enumerate(group_entries):
-                    if entry.get("anilist_id") == anilist_id:
-                        season_number = i + 1
-                        break
-                if season_number is None:
-                    season_number = 1
-
-            await db.upsert_media_mapping(
-                source="jellyfin",
-                source_id=item_id,
-                source_title=title,
-                anilist_id=anilist_id,
-                anilist_title="",
-                match_confidence=confidence,
-                match_method="fuzzy",
-                series_group_id=group_id,
-                season_number=1,
-            )
-            await scanner._apply_anilist_metadata(
-                item_id,
-                title,
-                anilist_id,
-                confidence,
-                "fuzzy",
-                False,
-                parent_anilist_id=root_anilist_id,
-                season_number=season_number,
-            )
-            applied += 1
-
-        # Trigger a re-index so Jellyfin picks up the NFO files just written.
-        await jellyfin_client.refresh_library_and_wait(
-            inactivity_timeout=120.0, library_ids=scan_library_ids or None
-        )
-
-        # Trigger a recursive metadata refresh on every series so episode
-        # items get per-episode data from TMDB, TVDB, OMDB, and TVMaze using
-        # the provider IDs written to the NFO files above.
-        for lib_id in (scan_library_ids or []):
-            series_ids = await jellyfin_client.get_series_ids_in_library(lib_id)
-            logger.info(
-                "Triggering episode metadata refresh for %d series in library %s",
-                len(series_ids),
-                lib_id,
-            )
-            for series_id in series_ids:
-                await jellyfin_client.refresh_item_metadata(
-                    series_id, recursive=True, replace_all=True
-                )
-    except Exception:
-        logger.exception("Error during Jellyfin apply")
-        errors += 1
-    finally:
-        await jellyfin_client.close()
-
-    # Auto-dismiss the scan notification now that results have been applied
-    await db.dismiss_notifications_by_url("/jellyfin/scan/results")
-    await db.clear_dismissed_notifications()
-
-    msg = f"Applied+metadata+to+{applied}+shows"
-    if errors:
-        msg += f"+({errors}+errors)"
     return_to = getattr(request.app.state, "jellyfin_scan_return_to", "/jellyfin")
-    return RedirectResponse(url=f"{return_to}?message={msg}", status_code=303)
+    return RedirectResponse(
+        url=f"{return_to}?message=Applying+metadata+in+background+%E2%80%94+see+progress+widget",
+        status_code=303,
+    )
 
 
 @router.post("/scan/jellyfin/rematch")

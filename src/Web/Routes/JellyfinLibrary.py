@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -225,35 +226,18 @@ async def jellyfin_clear_all(request: Request) -> RedirectResponse:
     )
 
 
-@router.post("/jellyfin/apply-all")
-async def jellyfin_apply_all(request: Request) -> RedirectResponse:
-    """Apply AniList metadata to all matched Jellyfin items.
+async def _run_jellyfin_apply_all(
+    app_state: object, matched: list[dict], force_refresh: bool
+) -> None:
+    """Background coroutine: apply AniList metadata to every matched Jellyfin item.
 
-    Builds the series group, detects Structure B, and writes both show-level
-    and per-season metadata for multi-season shows.
-
-    When the form includes ``force_refresh=1`` the AniList metadata cache is
-    bypassed so fresh data is fetched from AniList for every item.
+    Progress is reported through ``app_state.jellyfin_apply_progress`` so the
+    floating widget can track it.
     """
-    config = request.app.state.config
-    db = request.app.state.db
-    anilist_client = request.app.state.anilist_client
-
-    form = await request.form()
-    force_refresh = form.get("force_refresh") == "1"
-
-    if not config.jellyfin.url or not config.jellyfin.api_key:
-        return RedirectResponse(
-            url="/jellyfin?error=Jellyfin+not+configured", status_code=303
-        )
-
-    items = await db.get_jellyfin_media_with_mappings()
-    matched = [i for i in items if i.get("anilist_id")]
-
-    if not matched:
-        return RedirectResponse(
-            url="/jellyfin?message=No+matched+items+to+apply", status_code=303
-        )
+    config = app_state.config  # type: ignore[attr-defined]
+    db = app_state.db  # type: ignore[attr-defined]
+    anilist_client = app_state.anilist_client  # type: ignore[attr-defined]
+    progress: ScanProgress = app_state.jellyfin_apply_progress  # type: ignore[attr-defined]
 
     jellyfin_client = JellyfinClient(
         url=config.jellyfin.url, api_key=config.jellyfin.api_key
@@ -264,18 +248,17 @@ async def jellyfin_apply_all(request: Request) -> RedirectResponse:
         db, anilist_client, title_matcher, jellyfin_client, config, group_builder
     )
 
-    applied = 0
-    errors = 0
-
-    # Scope the refresh to the configured anime libraries if available.
     apply_library_ids: list[str] | None = (
         list(config.jellyfin.anime_library_ids)
         if config.jellyfin.anime_library_ids
         else None
     )
 
+    applied = 0
+    errors = 0
+
     try:
-        # Refresh only the selected libraries so item IDs are stable.
+        progress.current_title = "Refreshing Jellyfin libraries…"
         await jellyfin_client.refresh_library_and_wait(
             inactivity_timeout=120.0, library_ids=apply_library_ids
         )
@@ -286,13 +269,13 @@ async def jellyfin_apply_all(request: Request) -> RedirectResponse:
                 jellyfin_title = item["jellyfin_title"]
                 anilist_id = item["anilist_id"]
                 confidence = item.get("match_confidence") or 1.0
+                progress.current_title = jellyfin_title
 
-                # Build series group and detect Structure B
                 group_id = None
                 group_entries: list[dict] = []
                 tv_entries: list[dict] = []
                 is_structure_b = False
-                jf_real_seasons = []
+                jf_real_seasons: list = []
                 try:
                     group_id, group_entries = await group_builder.get_or_build_group(
                         anilist_id
@@ -371,21 +354,86 @@ async def jellyfin_apply_all(request: Request) -> RedirectResponse:
                 applied += 1
             except Exception:
                 logger.exception(
-                    "Failed to apply metadata for %s", item["jellyfin_title"]
+                    "Failed to apply metadata for %s", item.get("jellyfin_title")
                 )
                 errors += 1
+            finally:
+                progress.scanned = applied + errors
 
-        # Trigger a re-index so Jellyfin picks up the NFO files just written.
+        progress.current_title = "Refreshing Jellyfin to pick up NFO changes…"
         await jellyfin_client.refresh_library_and_wait(
             inactivity_timeout=120.0, library_ids=apply_library_ids
         )
+
+        progress.current_title = "Removing virtual season folders…"
+        await jellyfin_client.delete_virtual_seasons(apply_library_ids)
+
+        progress.status = "complete"
+        progress.current_title = f"Applied metadata to {applied} items" + (
+            f" ({errors} errors)" if errors else ""
+        )
+    except asyncio.CancelledError:
+        logger.info("Jellyfin apply-all cancelled after %d items", applied)
+        progress.status = "cancelled"
+        progress.current_title = f"Cancelled after {applied} items"
+        raise
+    except Exception:
+        logger.exception("Jellyfin apply-all failed unexpectedly")
+        progress.status = "error"
+        progress.error_message = "Apply-all failed unexpectedly"
     finally:
         await jellyfin_client.close()
 
-    msg = f"Applied+metadata+to+{applied}+items"
-    if errors:
-        msg += f"+({errors}+errors)"
-    return RedirectResponse(url=f"/jellyfin?message={msg}", status_code=303)
+
+@router.post("/jellyfin/apply-all")
+async def jellyfin_apply_all(request: Request) -> RedirectResponse:
+    """Kick off a background task that applies AniList metadata to every
+    matched Jellyfin item.  Returns immediately; progress is tracked by the
+    floating widget via ``/api/progress``.
+
+    When the form includes ``force_refresh=1`` the AniList metadata cache is
+    bypassed so fresh data is fetched from AniList for every item.
+    """
+    config = request.app.state.config
+    db = request.app.state.db
+
+    form = await request.form()
+    force_refresh = form.get("force_refresh") == "1"
+
+    if not config.jellyfin.url or not config.jellyfin.api_key:
+        return RedirectResponse(
+            url="/jellyfin?error=Jellyfin+not+configured", status_code=303
+        )
+
+    existing = getattr(request.app.state, "jellyfin_apply_progress", None)
+    if existing and existing.status not in ("", "pending", "complete", "error"):
+        return RedirectResponse(
+            url="/jellyfin?message=Apply+already+running+%E2%80%94+see+progress+widget",
+            status_code=303,
+        )
+
+    items = await db.get_jellyfin_media_with_mappings()
+    matched = [i for i in items if i.get("anilist_id")]
+
+    if not matched:
+        return RedirectResponse(
+            url="/jellyfin?message=No+matched+items+to+apply", status_code=303
+        )
+
+    request.app.state.jellyfin_apply_progress = ScanProgress(
+        status="running",
+        total=len(matched),
+        current_title="Starting…",
+    )
+    spawn_background_task(
+        request.app.state,
+        _run_jellyfin_apply_all(request.app.state, matched, force_refresh),
+        task_key="jellyfin_apply",
+    )
+    return RedirectResponse(
+        url="/jellyfin?message=Applying+metadata+in+background+%E2%80%94+see+progress+widget",
+        status_code=303,
+    )
 
 
 @router.post("/jellyfin/apply-single")
@@ -503,7 +551,9 @@ async def jellyfin_scan_preview(request: Request) -> RedirectResponse:
     request.app.state.jellyfin_scan_return_to = "/jellyfin"
 
     spawn_background_task(
-        request.app.state, _run_jellyfin_preview_scan(request.app.state)
+        request.app.state,
+        _run_jellyfin_preview_scan(request.app.state),
+        task_key="jellyfin_scan",
     )
 
     return RedirectResponse(url="/jellyfin/scan/progress", status_code=303)
@@ -528,7 +578,11 @@ async def jellyfin_scan_live(request: Request) -> RedirectResponse:
     request.app.state.jellyfin_scan_results = None
     request.app.state.jellyfin_scan_return_to = "/jellyfin"
 
-    spawn_background_task(request.app.state, _run_jellyfin_live_scan(request.app.state))
+    spawn_background_task(
+        request.app.state,
+        _run_jellyfin_live_scan(request.app.state),
+        task_key="jellyfin_scan",
+    )
 
     return RedirectResponse(url="/jellyfin/scan/progress", status_code=303)
 
@@ -583,3 +637,132 @@ async def jellyfin_scan_results_page(request: Request) -> Response:
             "return_url": "/jellyfin",
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Virtual season inspection and cleanup
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/jellyfin/virtual-items")
+async def jellyfin_list_virtual_items(request: Request) -> JSONResponse:
+    """List virtual seasons/episodes under a series, or inspect a single item.
+
+    Query params:
+        series_id — list all seasons, flagging virtual ones
+        item_id   — inspect a single item's details
+    """
+    config = request.app.state.config
+    if not config.jellyfin.url or not config.jellyfin.api_key:
+        return JSONResponse({"error": "Jellyfin not configured"}, status_code=503)
+
+    jf = JellyfinClient(url=config.jellyfin.url, api_key=config.jellyfin.api_key)
+    try:
+        series_id = request.query_params.get("series_id")
+        item_id = request.query_params.get("item_id")
+
+        if series_id:
+            seasons = await jf.get_show_seasons(series_id)
+            result = []
+            for s in sorted(seasons, key=lambda x: x.index):
+                item_detail = await jf.get_item(s.item_id)
+                loc = (item_detail or {}).get("LocationType", "Unknown")
+                path = (item_detail or {}).get("Path") or ""
+                result.append(
+                    {
+                        "item_id": s.item_id,
+                        "index": s.index,
+                        "name": s.name,
+                        "episode_count": s.episode_count,
+                        "location_type": loc,
+                        "path": path,
+                        "is_virtual": loc == "Virtual" or not path,
+                    }
+                )
+            return JSONResponse({"series_id": series_id, "seasons": result})
+
+        if item_id:
+            item = await jf.get_item(item_id)
+            if not item:
+                return JSONResponse({"error": "Item not found"}, status_code=404)
+            return JSONResponse(
+                {
+                    "item_id": item_id,
+                    "name": item.get("Name"),
+                    "type": item.get("Type"),
+                    "location_type": item.get("LocationType"),
+                    "path": item.get("Path") or None,
+                    "index_number": item.get("IndexNumber"),
+                    "parent_id": item.get("ParentId"),
+                    "provider_ids": item.get("ProviderIds", {}),
+                    "is_virtual": item.get("LocationType") == "Virtual"
+                    or not item.get("Path"),
+                }
+            )
+
+        return JSONResponse(
+            {"error": "Provide ?series_id= or ?item_id="}, status_code=400
+        )
+    finally:
+        await jf.close()
+
+
+@router.get("/api/jellyfin/delete-virtual")
+async def jellyfin_delete_virtual_item(request: Request) -> JSONResponse:
+    """Delete a single virtual Jellyfin item by ID.
+
+    Stops the library scan task first so Jellyfin's refresh queue doesn't
+    race with the deletion.  Only deletes items with LocationType=Virtual
+    or no filesystem path.
+
+    Query params:
+        item_id — the Jellyfin item ID to delete
+    """
+    config = request.app.state.config
+    if not config.jellyfin.url or not config.jellyfin.api_key:
+        return JSONResponse({"error": "Jellyfin not configured"}, status_code=503)
+
+    item_id = request.query_params.get("item_id", "").strip()
+    if not item_id:
+        return JSONResponse({"error": "Provide ?item_id="}, status_code=400)
+
+    jf = JellyfinClient(url=config.jellyfin.url, api_key=config.jellyfin.api_key)
+    try:
+        item = await jf.get_item(item_id)
+        if not item:
+            return JSONResponse({"error": "Item not found"}, status_code=404)
+
+        loc = item.get("LocationType", "")
+        path = item.get("Path") or ""
+        if loc != "Virtual" and path:
+            return JSONResponse(
+                {
+                    "error": "Refusing to delete — item is not virtual",
+                    "location_type": loc,
+                    "path": path,
+                },
+                status_code=400,
+            )
+
+        await jf._stop_scan_task()
+        await asyncio.sleep(3)
+
+        resp = await jf._http.delete(f"/Items/{item_id}")
+        if resp.status_code in (200, 204):
+            return JSONResponse(
+                {
+                    "deleted": True,
+                    "item_id": item_id,
+                    "name": item.get("Name"),
+                }
+            )
+        else:
+            return JSONResponse(
+                {
+                    "error": f"Jellyfin returned HTTP {resp.status_code}",
+                    "body": resp.text[:500],
+                },
+                status_code=502,
+            )
+    finally:
+        await jf.close()

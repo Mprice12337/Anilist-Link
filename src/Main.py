@@ -332,6 +332,45 @@ async def main() -> None:
         finally:
             await plex.close()
 
+    # Track whether Jellyfin is currently scanning so the poller can detect
+    # the Running → Idle transition without cleaning up on every tick.
+    app.state.jellyfin_scan_was_running = False
+
+    async def _jellyfin_virtual_cleanup_poll() -> None:
+        cfg = app.state.config
+        if not cfg.jellyfin.url or not cfg.jellyfin.api_key:
+            return
+        lib_ids = (
+            list(cfg.jellyfin.anime_library_ids)
+            if cfg.jellyfin.anime_library_ids
+            else []
+        )
+        if not lib_ids:
+            return
+
+        from src.Clients.JellyfinClient import JellyfinClient as _JF
+
+        jf = _JF(url=cfg.jellyfin.url, api_key=cfg.jellyfin.api_key)
+        try:
+            scanning = await jf.is_library_scanning()
+            was_running = app.state.jellyfin_scan_was_running
+            app.state.jellyfin_scan_was_running = scanning
+
+            if was_running and not scanning:
+                logger.info(
+                    "Jellyfin library scan finished — running" " virtual season cleanup"
+                )
+                deleted = await jf.delete_virtual_seasons(lib_ids)
+                if deleted:
+                    logger.info(
+                        "Post-scan cleanup removed %d virtual seasons",
+                        deleted,
+                    )
+        except Exception:
+            logger.debug("Jellyfin virtual cleanup poll error", exc_info=True)
+        finally:
+            await jf.close()
+
     scheduler.register_jobs(
         crunchyroll_sync_func=_cr_sync,
         plex_scan_func=_plex_scan,
@@ -341,6 +380,7 @@ async def main() -> None:
         watchlist_refresh_func=_watchlist_refresh,
         jellyfin_watch_sync_func=_jellyfin_watch_sync,
         plex_watch_sync_func=_plex_watch_sync,
+        jellyfin_virtual_cleanup_func=_jellyfin_virtual_cleanup_poll,
     )
 
     # Expose callables for ad-hoc triggering (used by manual-run endpoints)

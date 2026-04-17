@@ -296,7 +296,8 @@ Syncs watch progress between media platforms and AniList. Detects when a user wa
 | COMPLETED status protection | ✅ Implemented — guard in forward sync |
 | Circular sync prevention | ✅ Implemented — backfill writes sync_state |
 | Plex webhook handler | Not yet implemented |
-| Jellyfin webhook handler | Not yet implemented |
+| Jellyfin webhook handler (`src/Web/Routes/JellyfinWebhook.py`) | ✅ Implemented — `POST /jellyfin/webhook` |
+| Jellyfin virtual season cleanup | ✅ Implemented — automated post-scan + poller |
 | AniList token auto-refresh | Not yet wired up |
 
 ### 6.3. Current: Crunchyroll → AniList
@@ -335,6 +336,24 @@ Both `PlexWatchSyncer` and `JellyfinWatchSyncer` implement bidirectional sync:
 **Auto-sync toggle**: Both sources default to disabled (`plex.watch_sync_enabled`, `jellyfin.watch_sync_enabled` in `app_settings`). Toggleable from the Watch Sync UI without restart. Controlled via `PLEX_WATCH_SYNC_ENABLED` / `JELLYFIN_WATCH_SYNC_ENABLED` env vars.
 
 **Undo**: Any forward-sync update can be reverted via the Watch Sync history UI (`/watch-sync`), which calls the AniList API to restore the before-state.
+
+### 6.5. Jellyfin Virtual Season Cleanup
+
+Jellyfin creates "virtual" season containers (`LocationType=Virtual`) when its metadata providers return season/episode lists for seasons that don't exist on disk. These duplicate the real season folders whose metadata we've already written. Neither `<lockdata>true</lockdata>` in NFO files nor the Missing Episode Fetcher library setting prevents this — it's a Jellyfin architectural limitation.
+
+**Root cause**: Jellyfin's `ProviderManager` refresh queue races with `DELETE /Items/{id}` — a single delete returns 204 but the refresh queue recreates the item moments later.
+
+**Solution**: Stop the library scan task (`DELETE /ScheduledTasks/Running/{taskId}`) before deleting virtual items, wait for the refresh queue to drain (~3s), then delete. Implemented in `JellyfinClient._stop_scan_task()` and `delete_virtual_seasons()`.
+
+**Three cleanup triggers**:
+1. **Post-scan**: Runs at the end of live scan, scan-apply, apply-all, and post-restructure refresh flows
+2. **Poller**: APScheduler job (`jellyfin_virtual_cleanup`, every 60s) detects when Jellyfin's own scheduled scan transitions Running → Idle, then runs cleanup
+3. **Webhook**: `POST /jellyfin/webhook` handler listens for `TaskCompleted` events from the Jellyfin Webhook plugin (kept for future — plugin currently doesn't fire TaskCompleted reliably)
+
+**Diagnostic endpoints** (`src/Web/Routes/JellyfinLibrary.py`):
+- `GET /api/jellyfin/virtual-items?series_id=` — list all seasons, flag virtual ones
+- `GET /api/jellyfin/virtual-items?item_id=` — inspect a single item
+- `GET /api/jellyfin/delete-virtual?item_id=` — manually delete a virtual item
 
 ---
 

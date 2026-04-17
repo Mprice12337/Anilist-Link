@@ -466,15 +466,125 @@ class JellyfinClient:
             )
             resp.raise_for_status()
             return [
-                item["Id"]
-                for item in resp.json().get("Items", [])
-                if item.get("Id")
+                item["Id"] for item in resp.json().get("Items", []) if item.get("Id")
             ]
         except Exception as exc:
             logger.warning(
                 "Could not fetch series IDs for library %s: %s", library_id, exc
             )
             return []
+
+    async def _stop_scan_task(self) -> str | None:
+        """Stop the running library scan task and return its task ID.
+
+        Uses ``DELETE /ScheduledTasks/Running/{taskId}`` to cancel the
+        task so its refresh queue drains before we delete virtual items.
+        Returns the task ID (for optional restart) or None.
+        """
+        task_id = await self._get_scan_task_id()
+        if not task_id:
+            return None
+        try:
+            resp = await self._http.get(f"/ScheduledTasks/{task_id}")
+            resp.raise_for_status()
+            if resp.json().get("State") != "Running":
+                return task_id
+            resp = await self._http.delete(f"/ScheduledTasks/Running/{task_id}")
+            if resp.status_code in (200, 204):
+                logger.info("Stopped Jellyfin scan task %s", task_id)
+            else:
+                logger.debug("Could not stop scan task: HTTP %d", resp.status_code)
+        except Exception:
+            logger.debug("Error stopping scan task", exc_info=True)
+        return task_id
+
+    async def delete_virtual_seasons(self, library_ids: list[str] | None = None) -> int:
+        """Delete all virtual season items from the specified libraries.
+
+        Virtual seasons are created by Jellyfin when metadata providers
+        return season/episode lists for seasons that don't exist on disk.
+        They duplicate the real season folders and cannot be prevented
+        via NFO locks.
+
+        To avoid a race condition with Jellyfin's ProviderManager refresh
+        queue (which recreates virtual items moments after deletion), this
+        method stops the scan task first, waits for the refresh queue to
+        drain, deletes the items, then lets the task resume on its own.
+
+        Returns the number of items deleted.
+        """
+        if not library_ids:
+            logger.debug("delete_virtual_seasons: no library IDs provided")
+            return 0
+
+        # Phase 1: Collect virtual season IDs
+        virtual_ids: list[str] = []
+        for lib_id in library_ids:
+            series_ids = await self.get_series_ids_in_library(lib_id)
+            logger.info(
+                "Virtual cleanup: library %s has %d series",
+                lib_id,
+                len(series_ids),
+            )
+            for series_id in series_ids:
+                seasons = await self.get_show_seasons(series_id)
+                for season in seasons:
+                    item = await self.get_item(season.item_id)
+                    if not item:
+                        continue
+                    loc = item.get("LocationType", "")
+                    path = item.get("Path") or ""
+                    if loc != "Virtual" and path:
+                        continue
+                    virtual_ids.append(season.item_id)
+                    logger.info(
+                        "Found virtual season '%s' (idx=%d) in series %s",
+                        season.name,
+                        season.index,
+                        series_id,
+                    )
+
+        if not virtual_ids:
+            logger.info(
+                "Virtual season cleanup: nothing to delete" " across %d libraries",
+                len(library_ids),
+            )
+            return 0
+
+        # Phase 2: Stop the scan task so the refresh queue drains
+        await self._stop_scan_task()
+        # Give the refresh queue a moment to finish processing
+        await asyncio.sleep(3)
+
+        # Phase 3: Delete the virtual items
+        deleted = 0
+        for item_id in virtual_ids:
+            try:
+                resp = await self._http.delete(f"/Items/{item_id}")
+                if resp.status_code in (200, 204):
+                    deleted += 1
+                    logger.info("Deleted virtual season %s", item_id)
+                elif resp.status_code == 404:
+                    # Already gone — count as success
+                    deleted += 1
+                else:
+                    logger.warning(
+                        "Failed to delete virtual season %s: HTTP %d",
+                        item_id,
+                        resp.status_code,
+                    )
+            except Exception:
+                logger.debug(
+                    "Error deleting virtual season %s",
+                    item_id,
+                    exc_info=True,
+                )
+        logger.info(
+            "Virtual season cleanup complete: deleted %d items across %d libraries",
+            deleted,
+            len(library_ids),
+        )
+        return deleted
 
     async def refresh_item_metadata(
         self,
@@ -501,9 +611,7 @@ class JellyfinClient:
                 params["ReplaceAllImages"] = "true"
             if recursive:
                 params["Recursive"] = "true"
-            resp = await self._http.post(
-                f"/Items/{item_id}/Refresh", params=params
-            )
+            resp = await self._http.post(f"/Items/{item_id}/Refresh", params=params)
             resp.raise_for_status()
             logger.info(
                 "Triggered metadata refresh for item %s (recursive=%s replace=%s)",
@@ -1039,9 +1147,7 @@ class JellyfinClient:
         try:
             item = await self.get_item(item_id)
             if not item or not item.get("Path"):
-                logger.debug(
-                    "write_season_nfo: no path for item %s", item_id
-                )
+                logger.debug("write_season_nfo: no path for item %s", item_id)
                 return
             raw_path: str = item["Path"]
             local_path = self._path_translator.translate(raw_path)
@@ -1104,13 +1210,9 @@ class JellyfinClient:
                 nfo_path,
             )
         except Exception as exc:
-            logger.debug(
-                "Could not write season.nfo for item %s: %s", item_id, exc
-            )
+            logger.debug("Could not write season.nfo for item %s: %s", item_id, exc)
 
-    async def refresh_library(
-        self, library_ids: list[str] | None = None
-    ) -> None:
+    async def refresh_library(self, library_ids: list[str] | None = None) -> None:
         """Trigger a Jellyfin library refresh.
 
         If *library_ids* is provided, only those virtual-folder items are
@@ -1125,9 +1227,7 @@ class JellyfinClient:
                         params={"Recursive": "true"},
                     )
                     resp.raise_for_status()
-                    logger.info(
-                        "Triggered Jellyfin library refresh for %s", lib_id
-                    )
+                    logger.info("Triggered Jellyfin library refresh for %s", lib_id)
                 except Exception:
                     logger.debug(
                         "Failed to trigger Jellyfin library refresh for %s",

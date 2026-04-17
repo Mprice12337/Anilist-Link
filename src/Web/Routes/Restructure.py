@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -237,6 +238,11 @@ async def _run_analysis_background(
             plan.total_groups,
             plan.total_files,
         )
+    except asyncio.CancelledError:
+        logger.info("Restructure analysis cancelled by user")
+        progress.status = "cancelled"
+        progress.phase = "Cancelled by user"
+        raise
     except Exception as exc:
         logger.exception("Restructure background analysis failed")
         progress.status = "error"
@@ -330,6 +336,11 @@ async def _run_execution(app_state: object) -> None:
             app_state,
             _post_restructure_refresh(app_state, config, plan, source_mode, library_id),
         )
+    except asyncio.CancelledError:
+        logger.info("Restructure execution cancelled by user")
+        progress.status = "cancelled"
+        progress.phase = "Cancelled by user"
+        raise
     except Exception:
         logger.exception("Restructuring execution failed")
         progress.status = "error"
@@ -392,6 +403,18 @@ async def _post_restructure_refresh(
             except Exception:
                 logger.exception("Failed to refresh Jellyfin library")
 
+            refresh_progress.phase = "Removing virtual season folders"
+            jf_lib_ids = (
+                list(config.jellyfin.anime_library_ids)  # type: ignore[attr-defined]
+                if config.jellyfin.anime_library_ids  # type: ignore[attr-defined]
+                else None
+            )
+            if jf_lib_ids:
+                try:
+                    await jellyfin_client.delete_virtual_seasons(jf_lib_ids)
+                except Exception:
+                    logger.exception("Failed to clean up virtual seasons")
+
         if source_mode == "local":
             if config.plex.url and config.plex.token:  # type: ignore[attr-defined]
                 refresh_progress.phase = "Waiting for Plex to re-index"
@@ -428,6 +451,14 @@ async def _post_restructure_refresh(
                     await jellyfin_client.refresh_library_and_wait(
                         poll_interval=5.0, inactivity_timeout=120.0
                     )
+                    refresh_progress.phase = "Removing virtual season folders"
+                    jf_lib_ids = (
+                        list(config.jellyfin.anime_library_ids)  # type: ignore[attr-defined]
+                        if config.jellyfin.anime_library_ids  # type: ignore[attr-defined]
+                        else None
+                    )
+                    if jf_lib_ids:
+                        await jellyfin_client.delete_virtual_seasons(jf_lib_ids)
                 except Exception:
                     logger.exception("Local restructure: Jellyfin refresh failed")
                 finally:
@@ -508,6 +539,15 @@ async def restructure_analyze_async(request: Request) -> JSONResponse:
     # Store pending templates so they can be applied on execution
     request.app.state.pending_naming_templates = pending_templates
 
+    # Remember the analyze parameters so /restructure/rematch can replay the
+    # analyze step after updating a show's AniList match.
+    request.app.state.restructure_analyze_params = {
+        "source_dirs": list(source_dirs),
+        "output_dir": output_dir,
+        "level": level,
+        "templates": dict(pending_templates),
+    }
+
     # Set up progress and launch background task
     progress = RestructureProgress(status="running")
     request.app.state.restructure_progress = progress
@@ -522,6 +562,7 @@ async def restructure_analyze_async(request: Request) -> JSONResponse:
             force_rescan=force_rescan,
             templates=pending_templates,
         ),
+        task_key="restructure_analysis",
     )
 
     logger.info(
@@ -738,19 +779,40 @@ def _group_rename_moves(group: object) -> list[dict]:
 
     for orig, renamed in sorted(dir_renames.items()):
         files = file_by_subdir.pop(orig, [])
+        full_path = os.path.join(src_root, orig) if src_root else orig
         subfolders.append(
-            {"name": orig, "renamed": renamed, "source": "", "files": files}
+            {
+                "name": orig,
+                "renamed": renamed,
+                "source": "",
+                "source_path": full_path,
+                "files": files,
+            }
         )
         seen.add(orig)
 
     for subdir, files in sorted(file_by_subdir.items()):
         if subdir and subdir not in seen:
+            full_path = os.path.join(src_root, subdir) if src_root else subdir
             subfolders.append(
-                {"name": subdir, "renamed": subdir, "source": "", "files": files}
+                {
+                    "name": subdir,
+                    "renamed": subdir,
+                    "source": "",
+                    "source_path": full_path,
+                    "files": files,
+                }
             )
         elif not subdir and files:
             subfolders.insert(
-                0, {"name": "", "renamed": "", "source": "", "files": files}
+                0,
+                {
+                    "name": "",
+                    "renamed": "",
+                    "source": "",
+                    "source_path": src_root,
+                    "files": files,
+                },
             )
 
     return subfolders
@@ -760,11 +822,13 @@ def _group_restructure_moves(group: object) -> list[dict]:
     """Group file_moves for full restructure by destination season folder.
 
     Each subfolder entry shows the target season folder name and which
-    source folder(s) the files come from.
+    source folder(s) the files come from.  Both the basename (``source``)
+    and the full path (``source_path``) are returned so the preview
+    template can display whichever matches the surrounding style.
     """
     target = group.target_folder.rstrip("/")
 
-    # dest_subdir_name → {source_basename → [FileMove]}
+    # dest_subdir_name → {source_full_path → [FileMove]}
     by_dest: dict[str, dict[str, list]] = {}
 
     for fm in group.file_moves:
@@ -773,34 +837,39 @@ def _group_restructure_moves(group: object) -> list[dict]:
         parts = dest_rel.split("/")
         season_folder = parts[0] if len(parts) > 1 else ""
 
-        # Identify which source folder this file came from
-        src_basename = ""
+        # Identify which source folder this file came from (full path)
+        src_full_path = ""
         for sf in group.source_folders:
             if fm.source.startswith(sf.rstrip("/") + "/") or fm.source.startswith(
                 sf.rstrip("/") + os.sep
             ):
-                src_basename = os.path.basename(sf.rstrip("/"))
+                src_full_path = sf.rstrip("/")
                 break
 
-        by_dest.setdefault(season_folder, {}).setdefault(src_basename, []).append(fm)
+        by_dest.setdefault(season_folder, {}).setdefault(src_full_path, []).append(fm)
 
     subfolders: list[dict] = []
     for season_name in sorted(by_dest.keys()):
         sources = by_dest[season_name]
         # Merge all source files into one list, track the primary source
         all_files: list = []
-        source_names: list[str] = []
-        for src_name, files in sorted(sources.items()):
+        source_paths: list[str] = []
+        for src_path, files in sorted(sources.items()):
             all_files.extend(files)
-            if src_name:
-                source_names.append(src_name)
+            if src_path:
+                source_paths.append(src_path)
 
-        source_label = ", ".join(dict.fromkeys(source_names)) if source_names else ""
+        # Deduplicate while preserving order
+        unique_paths = list(dict.fromkeys(source_paths))
+        source_basenames = [os.path.basename(p) for p in unique_paths]
+        source_label = ", ".join(source_basenames) if source_basenames else ""
+        source_path_label = ", ".join(unique_paths) if unique_paths else ""
         subfolders.append(
             {
                 "name": season_name,
                 "renamed": season_name,
                 "source": source_label,
+                "source_path": source_path_label,
                 "files": all_files,
             }
         )
@@ -831,6 +900,134 @@ async def restructure_preview(request: Request) -> Response:
             "grouped_moves": grouped_moves,
         },
     )
+
+
+@router.post("/restructure/rematch")
+async def restructure_rematch(request: Request) -> JSONResponse:
+    """Update the AniList match for one or more source folders and kick off a
+    fresh analyze so the restructure preview reflects the new match.
+
+    Form fields:
+        source_path: one or more full source folder paths to remap
+        anilist_id:  new AniList ID to associate
+        title:       optional display title (used for source_title fallback)
+
+    Returns JSON with ``redirect`` pointing at ``/restructure/progress`` so
+    the client can hand off to the progress page while re-analyze runs.
+    """
+    app_state = request.app.state
+    db = app_state.db
+    anilist_client = app_state.anilist_client
+
+    if _is_restructure_busy(app_state):
+        return JSONResponse(
+            {"ok": False, "error": "A restructure operation is already running"},
+            status_code=409,
+        )
+
+    params = getattr(app_state, "restructure_analyze_params", None)
+    if not params:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": (
+                    "Analyze parameters no longer available."
+                    " Run a fresh analyze from the restructure wizard."
+                ),
+            },
+            status_code=409,
+        )
+
+    form = await request.form()
+    source_paths = [p for p in form.getlist("source_path") if p]
+    anilist_id_raw = str(form.get("anilist_id", "")).strip()
+    title_hint = str(form.get("title", "")).strip()
+
+    if not source_paths or not anilist_id_raw:
+        return JSONResponse(
+            {"ok": False, "error": "source_path and anilist_id are required"},
+            status_code=400,
+        )
+    try:
+        anilist_id = int(anilist_id_raw)
+    except ValueError:
+        return JSONResponse(
+            {"ok": False, "error": "anilist_id must be an integer"}, status_code=400
+        )
+
+    # Pull fresh AniList metadata for the new match.  Cache it so the
+    # re-analyze avoids a second round trip.
+    try:
+        entry = await anilist_client.get_anime_by_id(anilist_id)
+    except Exception:
+        logger.exception("AniList lookup failed during rematch")
+        entry = None
+
+    anilist_title = title_hint
+    if entry:
+        title_obj = entry.get("title") or {}
+        anilist_title = (
+            title_obj.get("romaji")
+            or title_obj.get("english")
+            or title_obj.get("native")
+            or title_hint
+        )
+        year = entry.get("seasonYear") or (
+            (entry.get("startDate") or {}).get("year") or 0
+        )
+        await db.set_cached_metadata(
+            anilist_id=anilist_id,
+            title_romaji=title_obj.get("romaji") or "",
+            title_english=title_obj.get("english") or "",
+            title_native=title_obj.get("native") or "",
+            episodes=entry.get("episodes"),
+            cover_image=(entry.get("coverImage") or {}).get("large") or "",
+            description=entry.get("description") or "",
+            genres=json.dumps(entry.get("genres") or []),
+            status=entry.get("status") or "",
+            year=year,
+        )
+
+    for path in source_paths:
+        await db.upsert_media_mapping(
+            source="local",
+            source_id=path,
+            source_title=os.path.basename(path.rstrip("/")) or path,
+            anilist_id=anilist_id,
+            anilist_title=anilist_title,
+            match_confidence=1.0,
+            match_method="manual",
+        )
+
+    # Clear any prior plan + notification so the preview doesn't render stale
+    # data while the re-analyze runs.
+    app_state.restructure_plan = None
+    app_state.onboarding_restructure_plan = None
+    await db.dismiss_notifications_by_url("/restructure/preview")
+    await db.clear_dismissed_notifications()
+
+    progress = RestructureProgress(status="running")
+    app_state.restructure_progress = progress
+
+    spawn_background_task(
+        app_state,
+        _run_analysis_background(
+            app_state,
+            source_dirs=list(params.get("source_dirs") or []),
+            output_dir=params.get("output_dir") or "",
+            level=params.get("level") or "full_restructure",
+            force_rescan=False,
+            templates=dict(params.get("templates") or {}),
+        ),
+        task_key="restructure_analysis",
+    )
+
+    logger.info(
+        "Restructure rematch: anilist_id=%d for %d folder(s) — re-analyzing",
+        anilist_id,
+        len(source_paths),
+    )
+    return JSONResponse({"ok": True, "redirect": "/restructure/progress"})
 
 
 @router.post("/restructure/cancel")
@@ -946,7 +1143,11 @@ async def restructure_execute(request: Request) -> RedirectResponse:
     await db.dismiss_notifications_by_url("/restructure/preview")
     await db.clear_dismissed_notifications()
 
-    spawn_background_task(request.app.state, _run_execution(request.app.state))
+    spawn_background_task(
+        request.app.state,
+        _run_execution(request.app.state),
+        task_key="restructure_exec",
+    )
 
     return RedirectResponse(url="/restructure/progress", status_code=303)
 
@@ -1074,6 +1275,13 @@ async def restructure_plan_rerun(request: Request, plan_id: int) -> JSONResponse
     request.app.state.restructure_progress = progress
     request.app.state.pending_naming_templates = templates_dict
 
+    request.app.state.restructure_analyze_params = {
+        "source_dirs": list(source_dirs),
+        "output_dir": plan_row.get("output_dir") or "",
+        "level": plan_row.get("level") or "full_restructure",
+        "templates": dict(templates_dict),
+    }
+
     spawn_background_task(
         request.app.state,
         _run_analysis_background(
@@ -1084,6 +1292,7 @@ async def restructure_plan_rerun(request: Request, plan_id: int) -> JSONResponse
             force_rescan=False,
             templates=templates_dict,
         ),
+        task_key="restructure_analysis",
     )
 
     return JSONResponse({"ok": True, "redirect": "/"})

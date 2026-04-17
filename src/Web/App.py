@@ -112,6 +112,9 @@ def create_app(
     templates.env.filters["localtime"] = _utc_to_local
     app.state.templates = templates
     app.state.background_tasks = set()  # prevent GC of fire-and-forget tasks
+    # Map of task_key -> asyncio.Task for cancellable long-running ops.
+    # See spawn_background_task(task_key=...) and cancel_task() below.
+    app.state.cancellable_tasks = {}
 
     # Static files
     STATIC_DIR.mkdir(parents=True, exist_ok=True)
@@ -126,6 +129,7 @@ def create_app(
     from src.Web.Routes.Downloads import router as downloads_router
     from src.Web.Routes.JellyfinLibrary import router as jellyfin_library_router
     from src.Web.Routes.JellyfinScan import router as jellyfin_scan_router
+    from src.Web.Routes.JellyfinWebhook import router as jellyfin_webhook_router
     from src.Web.Routes.Library import router as library_router
     from src.Web.Routes.ManualGrab import router as manual_grab_router
     from src.Web.Routes.Mappings import router as mappings_router
@@ -150,6 +154,7 @@ def create_app(
     app.include_router(dashboard_router)
     app.include_router(jellyfin_library_router)
     app.include_router(jellyfin_scan_router)
+    app.include_router(jellyfin_webhook_router)
     app.include_router(library_router)
     app.include_router(manual_grab_router)
     app.include_router(mappings_router)
@@ -165,14 +170,59 @@ def create_app(
     return app
 
 
-def spawn_background_task(app_state: object, coro) -> asyncio.Task:  # type: ignore[type-arg]
+def spawn_background_task(
+    app_state: object,
+    coro,  # type: ignore[no-untyped-def]
+    task_key: str | None = None,
+) -> asyncio.Task:  # type: ignore[type-arg]
     """Create a background task that is prevented from being garbage-collected.
 
     The task automatically removes itself from the tracking set on completion.
     Use this instead of bare ``asyncio.create_task()`` in route handlers.
+
+    If ``task_key`` is provided, the task is registered in
+    ``app_state.cancellable_tasks`` so it can be cancelled via
+    :func:`cancel_task` / ``POST /api/tasks/{task_key}/cancel``.  Any existing
+    task registered under the same key will NOT be cancelled — callers should
+    check for an in-flight task first and refuse to start a duplicate.
     """
     task = asyncio.create_task(coro)
     tasks: set = app_state.background_tasks  # type: ignore[attr-defined]
     tasks.add(task)
     task.add_done_callback(tasks.discard)
+
+    if task_key:
+        registry: dict = getattr(app_state, "cancellable_tasks", None)  # type: ignore[attr-defined]
+        if registry is None:
+            registry = {}
+            app_state.cancellable_tasks = registry  # type: ignore[attr-defined]
+        registry[task_key] = task
+
+        def _unregister(t: asyncio.Task) -> None:  # type: ignore[type-arg]
+            # Only drop if the stored task is still us — a subsequent spawn
+            # under the same key would have replaced it.
+            if registry.get(task_key) is t:
+                registry.pop(task_key, None)
+
+        task.add_done_callback(_unregister)
+
     return task
+
+
+def cancel_task(app_state: object, task_key: str) -> bool:
+    """Request cancellation of a background task registered under ``task_key``.
+
+    Returns True if a live task was found and cancellation was requested;
+    False if no task was registered or the task already finished.
+
+    Cancellation raises :class:`asyncio.CancelledError` inside the coroutine at
+    its next ``await`` point.  Background coroutines that care about clean
+    shutdown should catch it, update their progress record to ``status =
+    "cancelled"``, and then either re-raise or return normally.
+    """
+    registry: dict = getattr(app_state, "cancellable_tasks", {}) or {}  # type: ignore[attr-defined]
+    task: asyncio.Task | None = registry.get(task_key)  # type: ignore[type-arg]
+    if task is None or task.done():
+        return False
+    task.cancel()
+    return True

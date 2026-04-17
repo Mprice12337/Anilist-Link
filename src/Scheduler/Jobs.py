@@ -24,6 +24,7 @@ JOB_PLEX_WATCH_SYNC = "plex_watch_sync"
 JOB_DOWNLOAD_SYNC = "download_sync"
 JOB_LIBRARY_REINDEX = "library_reindex"
 JOB_WATCHLIST_REFRESH = "watchlist_refresh"
+JOB_JELLYFIN_VIRTUAL_CLEANUP = "jellyfin_virtual_cleanup"
 
 
 def _cr_trigger(config: SchedulerConfig) -> CronTrigger | IntervalTrigger:
@@ -71,6 +72,7 @@ class JobScheduler:
         jellyfin_watch_sync_func: Callable[[], Awaitable[None]] | None = None,
         plex_watch_sync_func: Callable[[], Awaitable[None]] | None = None,
         watch_sync_interval_minutes: int = 15,
+        jellyfin_virtual_cleanup_func: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """Register job callables with configured intervals."""
         if crunchyroll_sync_func:
@@ -196,6 +198,19 @@ class JobScheduler:
                 "Registered %s job (every %d min)",
                 JOB_PLEX_WATCH_SYNC,
                 watch_sync_interval_minutes,
+            )
+
+        if jellyfin_virtual_cleanup_func:
+            self._scheduler.add_job(
+                jellyfin_virtual_cleanup_func,
+                trigger=IntervalTrigger(seconds=60),
+                id=JOB_JELLYFIN_VIRTUAL_CLEANUP,
+                name="Jellyfin Virtual Season Cleanup Monitor",
+                replace_existing=True,
+            )
+            logger.info(
+                "Registered %s job (every 60s)",
+                JOB_JELLYFIN_VIRTUAL_CLEANUP,
             )
 
     def start(self) -> None:
