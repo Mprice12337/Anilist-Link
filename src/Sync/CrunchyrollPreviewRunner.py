@@ -6,6 +6,7 @@ rows to ``cr_sync_preview`` with before/after state for user review.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -96,6 +97,11 @@ class CrunchyrollPreviewRunner:
 
         try:
             await self._scan_with_pagination(user)
+        except asyncio.CancelledError:
+            logger.info("CR preview scan cancelled by user")
+            self.progress.status = "cancelled"
+            self.progress.error = "Cancelled by user"
+            raise
         except Exception as exc:
             logger.exception("CR preview scan failed")
             self.progress.status = "error"

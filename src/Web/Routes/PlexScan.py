@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 
@@ -60,6 +61,11 @@ async def _run_preview_scan(
             preview=True, library_keys=library_keys, progress=progress
         )
         app_state.plex_scan_results = results  # type: ignore[attr-defined]
+    except asyncio.CancelledError:
+        logger.info("Plex preview scan cancelled")
+        progress.status = "cancelled"
+        progress.error_message = "Cancelled by user"
+        raise
     except Exception:
         logger.exception("Preview scan failed")
         progress.status = "error"
@@ -88,7 +94,11 @@ async def plex_scan_preview(request: Request) -> RedirectResponse:
     request.app.state.plex_scan_results = None
 
     # Launch background task
-    spawn_background_task(request.app.state, _run_preview_scan(request.app.state))
+    spawn_background_task(
+        request.app.state,
+        _run_preview_scan(request.app.state),
+        task_key="plex_scan",
+    )
 
     return RedirectResponse(url="/scan/plex/progress", status_code=303)
 

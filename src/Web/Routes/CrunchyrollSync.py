@@ -239,7 +239,9 @@ async def start_preview_scan(request: Request) -> JSONResponse:
         db, app_state.anilist_client, title_matcher, cr_client, config, progress
     )
 
-    spawn_background_task(app_state, runner.run_preview(user))
+    spawn_background_task(
+        app_state, runner.run_preview(user), task_key="cr_preview_scan"
+    )
     return JSONResponse({"ok": True, "running": True})
 
 

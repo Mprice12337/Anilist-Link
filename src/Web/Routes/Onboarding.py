@@ -154,23 +154,43 @@ async def update_onboarding_status(request: Request) -> JSONResponse:
         await db.set_setting("onboarding.step", str(step))
 
     # When onboarding completes, kick off Plex/Jellyfin metadata scans
-    # so the unified library has data on first visit.
+    # so the unified library has data on first visit — BUT only when no
+    # restructure is in flight or awaiting user review.  A pending plan
+    # means the file layout will still change, so scanning the media
+    # servers now would match stale paths.  The restructure execute/cancel
+    # paths both spawn _auto_scan_media_servers when they finish, so
+    # deferring here doesn't lose the scan — it just waits until the
+    # user has applied or dismissed the plan.
     if status == "completed":
-        # Clear stale restructure state so _auto_scan_media_servers
-        # doesn't think a restructure is pending (e.g. from a previous
-        # onboarding attempt that was abandoned or skipped).
-        exec_prog = getattr(request.app.state, "restructure_exec_progress", None)
-        restructure_done = (
-            exec_prog is not None and getattr(exec_prog, "status", "") == "complete"
-        )
-        if not restructure_done:
-            request.app.state.restructure_progress = None  # type: ignore[attr-defined]
-            request.app.state.restructure_plan = None  # type: ignore[attr-defined]
-            request.app.state.onboarding_restructure_plan = None  # type: ignore[attr-defined]
+        app_state = request.app.state
+        analyze_prog = getattr(app_state, "restructure_progress", None)
+        exec_prog = getattr(app_state, "restructure_exec_progress", None)
 
-        spawn_background_task(
-            request.app.state, _auto_scan_media_servers(request.app.state)
+        analyze_running = analyze_prog is not None and getattr(
+            analyze_prog, "status", ""
+        ) in ("running", "pending")
+        exec_running = exec_prog is not None and getattr(exec_prog, "status", "") in (
+            "running",
+            "pending",
         )
+        plan_pending_review = (
+            getattr(app_state, "restructure_plan", None) is not None
+            or getattr(app_state, "onboarding_restructure_plan", None) is not None
+        )
+
+        if analyze_running or exec_running or plan_pending_review:
+            logger.info(
+                "Onboarding marked complete but a restructure is %s —"
+                " deferring auto-scan until it finishes or is cancelled",
+                (
+                    "running"
+                    if (analyze_running or exec_running)
+                    else "pending user review"
+                ),
+            )
+            return JSONResponse({"ok": True, "scan_deferred": True})
+
+        spawn_background_task(app_state, _auto_scan_media_servers(app_state))
 
     return JSONResponse({"ok": True})
 
@@ -227,12 +247,14 @@ async def _auto_scan_media_servers(app_state: object) -> None:
         # still running, wait for it.  If it already completed, skip the refresh
         # entirely to avoid a double-scan that shows two jobs in the UI.
         media_refresh = getattr(app_state, "media_refresh_progress", None)
-        refresh_already_done = media_refresh is not None and getattr(
-            media_refresh, "status", ""
-        ) == "complete"
-        refresh_in_progress = media_refresh is not None and getattr(
-            media_refresh, "status", ""
-        ) == "running"
+        refresh_already_done = (
+            media_refresh is not None
+            and getattr(media_refresh, "status", "") == "complete"
+        )
+        refresh_in_progress = (
+            media_refresh is not None
+            and getattr(media_refresh, "status", "") == "running"
+        )
 
         if refresh_in_progress:
             logger.info(
@@ -688,6 +710,7 @@ async def skip_scan_start(request: Request) -> JSONResponse:
     spawn_background_task(
         request.app.state,
         _run_skip_scan(request.app.state, source_dirs, scan_progress),
+        task_key="skip_scan",
     )
 
     return JSONResponse({"ok": True, "message": "Scan started"})
@@ -835,6 +858,12 @@ async def _run_skip_scan(
             action_url="/library/scan/results",
             action_label="Review Matches",
         )
+    except asyncio.CancelledError:
+        logger.info("Skip-scan cancelled by user")
+        progress.status = "cancelled"
+        progress.phase = "Cancelled by user"
+        app_state.skip_scan_results = []  # type: ignore[attr-defined]
+        raise
     except Exception:
         logger.exception("Skip-scan failed")
         progress.status = "error"

@@ -141,7 +141,13 @@ async def get_progress(request: Request) -> JSONResponse:
 
     # Restructure analysis
     progress = getattr(app_state, "restructure_progress", None)
-    if progress and progress.status not in ("", "pending", "complete", "error"):
+    if progress and progress.status not in (
+        "",
+        "pending",
+        "complete",
+        "error",
+        "cancelled",
+    ):
         total = getattr(progress, "total", 0)
         done = getattr(progress, "processed", 0)
         pct = int(done / total * 100) if total else 0
@@ -164,6 +170,7 @@ async def get_progress(request: Request) -> JSONResponse:
         "pending",
         "complete",
         "error",
+        "cancelled",
     ):
         total = getattr(exec_progress, "total", 0)
         done = getattr(
@@ -190,6 +197,7 @@ async def get_progress(request: Request) -> JSONResponse:
         "",
         "complete",
         "error",
+        "cancelled",
     ):
         total = getattr(scan_progress, "total", 0)
         done = getattr(scan_progress, "scanned", 0)
@@ -207,7 +215,12 @@ async def get_progress(request: Request) -> JSONResponse:
 
     # Jellyfin metadata scan
     jf_scan = getattr(app_state, "jellyfin_scan_progress", None)
-    if jf_scan and getattr(jf_scan, "status", "") not in ("", "complete", "error"):
+    if jf_scan and getattr(jf_scan, "status", "") not in (
+        "",
+        "complete",
+        "error",
+        "cancelled",
+    ):
         total = getattr(jf_scan, "total", 0)
         done = getattr(jf_scan, "scanned", 0)
         pct = int(done / total * 100) if total else 0
@@ -229,6 +242,7 @@ async def get_progress(request: Request) -> JSONResponse:
         "",
         "complete",
         "error",
+        "cancelled",
     )
     if skip_scan_active:
         total = getattr(skip_scan, "total", 0)
@@ -252,22 +266,22 @@ async def get_progress(request: Request) -> JSONResponse:
     # to avoid duplicate "Library Scan" widgets.
     if not skip_scan_active:
         lib_scan_raw = getattr(app_state, "library_scan_progress", None)
-        lib_scan_candidates: list[Any] = []
+        lib_scan_items: list[tuple[Any, Any]] = []
         if isinstance(lib_scan_raw, dict):
-            lib_scan_candidates = list(lib_scan_raw.values())
+            lib_scan_items = list(lib_scan_raw.items())
         elif lib_scan_raw is not None:
-            lib_scan_candidates = [lib_scan_raw]
+            lib_scan_items = [(0, lib_scan_raw)]
 
-        for i, lib_scan in enumerate(lib_scan_candidates):
+        for library_id, lib_scan in lib_scan_items:
             status = getattr(lib_scan, "status", "")
-            if status not in ("", "complete", "error"):
+            if status not in ("", "complete", "error", "cancelled"):
                 total = getattr(lib_scan, "total", 0)
                 done = min(getattr(lib_scan, "processed", 0), total) if total else 0
                 pct = int(done / total * 100) if total else 0
                 pct = min(pct, 99)
                 tasks.append(
                     {
-                        "id": f"library_scan_{i}",
+                        "id": f"library_scan_{library_id}",
                         "type": "Library Scan",
                         "label": getattr(lib_scan, "phase", "Library scan")
                         or "Library scan",
@@ -281,12 +295,64 @@ async def get_progress(request: Request) -> JSONResponse:
                     }
                 )
 
+    # Jellyfin apply (both apply-all and scan-preview-apply paths)
+    jf_apply = getattr(app_state, "jellyfin_apply_progress", None)
+    if jf_apply and getattr(jf_apply, "status", "") not in (
+        "",
+        "complete",
+        "error",
+        "cancelled",
+    ):
+        total = getattr(jf_apply, "total", 0)
+        done = getattr(jf_apply, "scanned", 0)
+        pct = int(done / total * 100) if total else 0
+        tasks.append(
+            {
+                "id": "jellyfin_apply",
+                "type": "Metadata Apply",
+                "label": "Jellyfin: applying metadata",
+                "status": jf_apply.status,
+                "percent": pct,
+                "detail": (
+                    getattr(jf_apply, "current_title", "")
+                    or (f"{done}/{total}" if total else "")
+                ),
+            }
+        )
+
+    # Local library rescan (triggered from /library toolbar or dashboard)
+    reindex = getattr(app_state, "library_reindex_progress", None)
+    if reindex and getattr(reindex, "status", "") not in (
+        "",
+        "complete",
+        "error",
+        "cancelled",
+    ):
+        total = getattr(reindex, "total", 0)
+        done = min(getattr(reindex, "processed", 0), total) if total else 0
+        pct = int(done / total * 100) if total else 0
+        pct = min(pct, 99)
+        tasks.append(
+            {
+                "id": "library_reindex",
+                "type": "Library Scan",
+                "label": getattr(reindex, "phase", "Rescanning libraries…")
+                or "Rescanning libraries…",
+                "status": reindex.status,
+                "percent": pct,
+                "detail": (
+                    f"{done}/{total}" if total else getattr(reindex, "current_item", "")
+                ),
+            }
+        )
+
     # Post-restructure media server refresh
     media_refresh = getattr(app_state, "media_refresh_progress", None)
     if media_refresh and getattr(media_refresh, "status", "") not in (
         "",
         "complete",
         "error",
+        "cancelled",
     ):
         tasks.append(
             {
@@ -317,7 +383,40 @@ async def get_progress(request: Request) -> JSONResponse:
             }
         )
 
+    # Mark tasks cancellable if their id matches a registered cancellable task.
+    # The convention is that a coroutine passed ``task_key=<id>`` to
+    # spawn_background_task uses the same id as its /api/progress entry.
+    registry: dict = getattr(app_state, "cancellable_tasks", {}) or {}
+    for t in tasks:
+        tk = t.get("id")
+        task_obj = registry.get(tk) if tk else None
+        if task_obj is not None and not task_obj.done():
+            t["cancellable"] = True
+            t["task_key"] = tk
+        else:
+            t["cancellable"] = False
+
     return JSONResponse({"tasks": tasks})
+
+
+@router.post("/api/tasks/{task_key}/cancel")
+async def cancel_task_endpoint(task_key: str, request: Request) -> JSONResponse:
+    """Request cancellation of a registered long-running background task.
+
+    Returns 200 if a live task was found and cancellation was requested, or
+    404 if no matching task is in flight.  The task may take a short time to
+    actually stop — watch ``/api/progress`` for ``status == "cancelled"``.
+    """
+    from src.Web.App import cancel_task
+
+    ok = cancel_task(request.app.state, task_key)
+    if ok:
+        logger.info("Cancellation requested for task '%s'", task_key)
+        return JSONResponse({"ok": True, "cancelled": task_key})
+    return JSONResponse(
+        {"ok": False, "error": "No active task with that key"},
+        status_code=404,
+    )
 
 
 # ---------------------------------------------------------------------------

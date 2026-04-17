@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -241,7 +242,11 @@ async def plex_scan_preview(request: Request) -> RedirectResponse:
     request.app.state.plex_scan_results = None
     request.app.state.plex_scan_return_to = "/plex"
 
-    spawn_background_task(request.app.state, _run_preview_scan(request.app.state))
+    spawn_background_task(
+        request.app.state,
+        _run_preview_scan(request.app.state),
+        task_key="plex_scan",
+    )
 
     return RedirectResponse(url="/plex/scan/progress", status_code=303)
 
@@ -263,7 +268,9 @@ async def plex_scan_live(request: Request) -> RedirectResponse:
     request.app.state.plex_scan_return_to = "/plex"
 
     spawn_background_task(
-        request.app.state, _run_live_scan(request.app.state, library_keys, progress)
+        request.app.state,
+        _run_live_scan(request.app.state, library_keys, progress),
+        task_key="plex_scan",
     )
 
     return RedirectResponse(url="/plex/scan/progress", status_code=303)
@@ -300,6 +307,11 @@ async def _run_live_scan(
             dry_run=False, library_keys=library_keys, progress=progress
         )
         app_state.plex_scan_results = results  # type: ignore[attr-defined]
+    except asyncio.CancelledError:
+        logger.info("Plex live scan cancelled")
+        progress.status = "cancelled"
+        progress.error_message = "Cancelled by user"
+        raise
     except Exception:
         logger.exception("Live scan failed")
         progress.status = "error"
