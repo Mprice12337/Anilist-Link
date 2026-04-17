@@ -52,8 +52,8 @@ async def _run_jellyfin_preview_scan(app_state: object) -> None:
         # we attempt any matching or metadata writes.
         if progress:
             progress.current_title = "Waiting for Jellyfin library refresh..."
-        await jellyfin_client.refresh_library_and_wait(
-            inactivity_timeout=120.0, library_ids=library_ids or None
+        await jellyfin_client.refresh_and_wait(
+            app_state, library_ids=library_ids or None
         )
 
         results = await scanner.run_scan(
@@ -98,8 +98,8 @@ async def _run_jellyfin_live_scan(app_state: object) -> None:
         # we attempt any matching or metadata writes.
         if progress:
             progress.current_title = "Waiting for Jellyfin library refresh..."
-        await jellyfin_client.refresh_library_and_wait(
-            inactivity_timeout=120.0, library_ids=library_ids or None
+        await jellyfin_client.refresh_and_wait(
+            app_state, library_ids=library_ids or None
         )
 
         results = await scanner.run_scan(
@@ -111,8 +111,8 @@ async def _run_jellyfin_live_scan(app_state: object) -> None:
         # changes that were just written.
         if progress:
             progress.current_title = "Triggering Jellyfin re-index..."
-        await jellyfin_client.refresh_library_and_wait(
-            inactivity_timeout=120.0, library_ids=library_ids or None
+        await jellyfin_client.refresh_and_wait(
+            app_state, library_ids=library_ids or None
         )
 
         # Now that NFOs are read and provider IDs are set on series/season
@@ -235,8 +235,8 @@ async def _run_jellyfin_scan_apply(
 
     try:
         progress.current_title = "Refreshing Jellyfin libraries…"
-        await jellyfin_client.refresh_library_and_wait(
-            inactivity_timeout=120.0, library_ids=scan_library_ids or None
+        await jellyfin_client.refresh_and_wait(
+            app_state, library_ids=scan_library_ids or None
         )
 
         for item_id, anilist_id, confidence, title in parsed_items:
@@ -292,8 +292,8 @@ async def _run_jellyfin_scan_apply(
                 progress.scanned = applied + errors
 
         progress.current_title = "Refreshing Jellyfin to pick up NFO changes…"
-        await jellyfin_client.refresh_library_and_wait(
-            inactivity_timeout=120.0, library_ids=scan_library_ids or None
+        await jellyfin_client.refresh_and_wait(
+            app_state, library_ids=scan_library_ids or None
         )
 
         progress.current_title = "Refreshing episode metadata from providers…"
@@ -355,7 +355,13 @@ async def jellyfin_scan_apply(request: Request) -> RedirectResponse:
         )
 
     existing = getattr(request.app.state, "jellyfin_apply_progress", None)
-    if existing and existing.status not in ("", "pending", "complete", "error", "cancelled"):
+    if existing and existing.status not in (
+        "",
+        "pending",
+        "complete",
+        "error",
+        "cancelled",
+    ):
         return RedirectResponse(
             url="/jellyfin?message=Apply+already+running+%E2%80%94+see+progress+widget",
             status_code=303,

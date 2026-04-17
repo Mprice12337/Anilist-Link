@@ -332,11 +332,12 @@ async def main() -> None:
         finally:
             await plex.close()
 
-    # Track whether Jellyfin is currently scanning so the poller can detect
-    # the Running → Idle transition without cleaning up on every tick.
-    app.state.jellyfin_scan_was_running = False
+    # Jellyfin WebSocket listener — replaces the 60s polling approach with
+    # a persistent connection that gets instant scan completion events.
+    app.state.jellyfin_listener = None
 
-    async def _jellyfin_virtual_cleanup_poll() -> None:
+    async def _on_jellyfin_scan_complete() -> None:
+        """Callback fired by the WebSocket listener when a library scan ends."""
         cfg = app.state.config
         if not cfg.jellyfin.url or not cfg.jellyfin.api_key:
             return
@@ -352,24 +353,27 @@ async def main() -> None:
 
         jf = _JF(url=cfg.jellyfin.url, api_key=cfg.jellyfin.api_key)
         try:
-            scanning = await jf.is_library_scanning()
-            was_running = app.state.jellyfin_scan_was_running
-            app.state.jellyfin_scan_was_running = scanning
-
-            if was_running and not scanning:
+            deleted = await jf.delete_virtual_seasons(lib_ids)
+            if deleted:
                 logger.info(
-                    "Jellyfin library scan finished — running" " virtual season cleanup"
+                    "WebSocket-triggered cleanup removed %d virtual seasons",
+                    deleted,
                 )
-                deleted = await jf.delete_virtual_seasons(lib_ids)
-                if deleted:
-                    logger.info(
-                        "Post-scan cleanup removed %d virtual seasons",
-                        deleted,
-                    )
         except Exception:
-            logger.debug("Jellyfin virtual cleanup poll error", exc_info=True)
+            logger.debug("Virtual season cleanup error", exc_info=True)
         finally:
             await jf.close()
+
+    if config.jellyfin.url and config.jellyfin.api_key:
+        from src.Clients.JellyfinEventListener import JellyfinEventListener
+
+        listener = JellyfinEventListener(
+            url=config.jellyfin.url,
+            api_key=config.jellyfin.api_key,
+            on_scan_complete=_on_jellyfin_scan_complete,
+        )
+        app.state.jellyfin_listener = listener
+        await listener.start()
 
     scheduler.register_jobs(
         crunchyroll_sync_func=_cr_sync,
@@ -380,7 +384,6 @@ async def main() -> None:
         watchlist_refresh_func=_watchlist_refresh,
         jellyfin_watch_sync_func=_jellyfin_watch_sync,
         plex_watch_sync_func=_plex_watch_sync,
-        jellyfin_virtual_cleanup_func=_jellyfin_virtual_cleanup_poll,
     )
 
     # Expose callables for ad-hoc triggering (used by manual-run endpoints)

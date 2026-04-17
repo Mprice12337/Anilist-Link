@@ -259,9 +259,7 @@ async def _run_jellyfin_apply_all(
 
     try:
         progress.current_title = "Refreshing Jellyfin libraries…"
-        await jellyfin_client.refresh_library_and_wait(
-            inactivity_timeout=120.0, library_ids=apply_library_ids
-        )
+        await jellyfin_client.refresh_and_wait(app_state, library_ids=apply_library_ids)
 
         for item in matched:
             try:
@@ -361,9 +359,7 @@ async def _run_jellyfin_apply_all(
                 progress.scanned = applied + errors
 
         progress.current_title = "Refreshing Jellyfin to pick up NFO changes…"
-        await jellyfin_client.refresh_library_and_wait(
-            inactivity_timeout=120.0, library_ids=apply_library_ids
-        )
+        await jellyfin_client.refresh_and_wait(app_state, library_ids=apply_library_ids)
 
         progress.current_title = "Removing virtual season folders…"
         await jellyfin_client.delete_virtual_seasons(apply_library_ids)
@@ -406,7 +402,13 @@ async def jellyfin_apply_all(request: Request) -> RedirectResponse:
         )
 
     existing = getattr(request.app.state, "jellyfin_apply_progress", None)
-    if existing and existing.status not in ("", "pending", "complete", "error", "cancelled"):
+    if existing and existing.status not in (
+        "",
+        "pending",
+        "complete",
+        "error",
+        "cancelled",
+    ):
         return RedirectResponse(
             url="/jellyfin?message=Apply+already+running+%E2%80%94+see+progress+widget",
             status_code=303,

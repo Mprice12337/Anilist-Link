@@ -61,7 +61,13 @@ router = APIRouter(tags=["restructure"])
 def _is_restructure_busy(app_state: object) -> bool:
     """Return True if an analysis or execution is currently in-flight."""
     progress = getattr(app_state, "restructure_progress", None)
-    if progress and progress.status not in ("", "pending", "complete", "error", "cancelled"):
+    if progress and progress.status not in (
+        "",
+        "pending",
+        "complete",
+        "error",
+        "cancelled",
+    ):
         return True
     exec_progress = getattr(app_state, "restructure_exec_progress", None)
     if exec_progress and exec_progress.status not in (
@@ -398,9 +404,7 @@ async def _post_restructure_refresh(
             )
             refresh_progress.phase = "Waiting for Jellyfin to index"
             try:
-                await jellyfin_client.refresh_library_and_wait(
-                    poll_interval=5.0, inactivity_timeout=120.0
-                )
+                await jellyfin_client.refresh_and_wait(app_state)
             except Exception:
                 logger.exception("Failed to refresh Jellyfin library")
 
@@ -449,9 +453,7 @@ async def _post_restructure_refresh(
                     url=config.jellyfin.url, api_key=config.jellyfin.api_key  # type: ignore[attr-defined]
                 )
                 try:
-                    await jellyfin_client.refresh_library_and_wait(
-                        poll_interval=5.0, inactivity_timeout=120.0
-                    )
+                    await jellyfin_client.refresh_and_wait(app_state)
                     refresh_progress.phase = "Removing virtual season folders"
                     jf_lib_ids = (
                         list(config.jellyfin.anime_library_ids)  # type: ignore[attr-defined]

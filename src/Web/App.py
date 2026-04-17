@@ -78,6 +78,10 @@ def create_app(
 
         yield
         # Shutdown
+        jf_listener = getattr(app.state, "jellyfin_listener", None)
+        if jf_listener:
+            logger.info("Stopping Jellyfin WebSocket listener")
+            await jf_listener.stop()
         logger.info("Shutting down scheduler")
         scheduler.shutdown(wait=False)
         logger.info("Closing AniList client")

@@ -1338,6 +1338,30 @@ class JellyfinClient:
 
             await asyncio.sleep(poll_interval)
 
+    async def refresh_and_wait(
+        self,
+        app_state: object,
+        library_ids: list[str] | None = None,
+        timeout: float = 300.0,
+    ) -> bool:
+        """Trigger a library refresh and wait for completion.
+
+        Uses the :class:`JellyfinEventListener` WebSocket listener when
+        available (instant notification), falling back to HTTP polling via
+        :meth:`refresh_library_and_wait` otherwise.
+        """
+        await self.refresh_library(library_ids=library_ids)
+
+        listener = getattr(app_state, "jellyfin_listener", None)
+        if listener is not None:
+            return await listener.wait_for_scan_complete(timeout=timeout)
+
+        # Fallback: no WebSocket listener available
+        return await self.refresh_library_and_wait(
+            inactivity_timeout=timeout,
+            library_ids=library_ids,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Helpers

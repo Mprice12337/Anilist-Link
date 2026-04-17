@@ -44,7 +44,13 @@ def _get_scan_progress(app_state: Any) -> dict[int, LibraryScanProgress]:
 def _is_library_scan_busy(app_state: Any, library_id: int) -> bool:
     progress_map = _get_scan_progress(app_state)
     p = progress_map.get(library_id)
-    return p is not None and p.status not in ("", "pending", "complete", "error", "cancelled")
+    return p is not None and p.status not in (
+        "",
+        "pending",
+        "complete",
+        "error",
+        "cancelled",
+    )
 
 
 async def _run_library_scan(
@@ -771,7 +777,13 @@ async def library_jellyfin_apply_all(
         )
 
     existing = getattr(request.app.state, "jellyfin_apply_progress", None)
-    if existing and existing.status not in ("", "pending", "complete", "error", "cancelled"):
+    if existing and existing.status not in (
+        "",
+        "pending",
+        "complete",
+        "error",
+        "cancelled",
+    ):
         return RedirectResponse(
             url=(
                 f"/library/{library_id}?message="
@@ -908,7 +920,13 @@ async def library_reindex_all(request: Request) -> JSONResponse:
     app_state = request.app.state
 
     existing = getattr(app_state, "library_reindex_progress", None)
-    if existing and existing.status not in ("", "pending", "complete", "error", "cancelled"):
+    if existing and existing.status not in (
+        "",
+        "pending",
+        "complete",
+        "error",
+        "cancelled",
+    ):
         return JSONResponse(
             {"ok": False, "error": "A library rescan is already running"},
             status_code=409,

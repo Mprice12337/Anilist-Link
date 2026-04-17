@@ -60,6 +60,7 @@ COPY scripts/dev-tools/ /tmp/dev-tools/
 RUN if [ "$BUILD_VARIANT" = "dev" ]; then \
         mkdir -p /opt/dev-tools && \
         cp /tmp/dev-tools/*.sh /opt/dev-tools/ && \
+        cp /tmp/dev-tools/*.py /opt/dev-tools/ 2>/dev/null; \
         chmod +x /opt/dev-tools/*.sh && \
         apt-get update && apt-get install -y --no-install-recommends sqlite3 && \
         rm -rf /var/lib/apt/lists/*; \

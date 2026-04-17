@@ -426,7 +426,9 @@ class JellyfinMetadataScanner:
             candidates = await self._anilist.search_anime(search_title, per_page=15)
 
             if not candidates:
-                logger.warning("  [no results] %s (searched: '%s')", title, search_title)
+                logger.warning(
+                    "  [no results] %s (searched: '%s')", title, search_title
+                )
                 if preview:
                     results.items.append(
                         ScanItemDetail(
@@ -693,9 +695,12 @@ class JellyfinMetadataScanner:
 
         # Fetch root-entry metadata once to get series-level provider IDs for
         # all season.nfo writes in this loop.
-        root_meta = await self._get_anilist_metadata(
-            tv_entries[0]["anilist_id"], force_refresh=force_refresh
-        ) or {}
+        root_meta = (
+            await self._get_anilist_metadata(
+                tv_entries[0]["anilist_id"], force_refresh=force_refresh
+            )
+            or {}
+        )
         s_imdb_id = root_meta.get("imdb_id") or None
         s_tvdb_id = root_meta.get("tvdb_id") or None
         s_tvmaze_id = root_meta.get("tvmaze_id") or None
@@ -955,9 +960,12 @@ class JellyfinMetadataScanner:
         # happened to be processed last.
         effective_parent_id = parent_anilist_id or anilist_id
         if effective_parent_id != anilist_id:
-            parent_meta = await self._get_anilist_metadata(
-                effective_parent_id, force_refresh=force_refresh
-            ) or metadata
+            parent_meta = (
+                await self._get_anilist_metadata(
+                    effective_parent_id, force_refresh=force_refresh
+                )
+                or metadata
+            )
         else:
             parent_meta = metadata
 
@@ -1155,9 +1163,7 @@ class JellyfinMetadataScanner:
 
         # TVMaze lookup for IMDB/TVDB IDs — runs once per entry on cache miss.
         # Try English title first (more likely to match TVMaze), fall back to romaji.
-        tvmaze_title = (
-            title_obj.get("english") or title_obj.get("romaji") or ""
-        )
+        tvmaze_title = title_obj.get("english") or title_obj.get("romaji") or ""
         tvmaze_ids = await self._tvmaze.search_show(tvmaze_title)
         imdb_id = (tvmaze_ids or {}).get("imdb_id") or ""
         tvdb_id = (tvmaze_ids or {}).get("tvdb_id") or ""

@@ -44,9 +44,7 @@ class TVMazeClient:
     async def __aexit__(self, *_: Any) -> None:
         await self.close()
 
-    async def search_show(
-        self, title: str
-    ) -> dict[str, str | None] | None:
+    async def search_show(self, title: str) -> dict[str, str | None] | None:
         """Search TVMaze for *title* and return external IDs if confident.
 
         Returns a dict with keys ``imdb_id`` and ``tvdb_id`` (either may be
@@ -62,9 +60,7 @@ class TVMazeClient:
             return None
 
         try:
-            resp = await self._http.get(
-                _TVMAZE_SEARCH, params={"q": title.strip()}
-            )
+            resp = await self._http.get(_TVMAZE_SEARCH, params={"q": title.strip()})
             resp.raise_for_status()
             results: list[dict[str, Any]] = resp.json()
         except Exception as exc:

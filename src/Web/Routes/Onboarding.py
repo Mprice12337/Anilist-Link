@@ -299,9 +299,7 @@ async def _auto_scan_media_servers(app_state: object) -> None:
                 url=config.jellyfin.url, api_key=config.jellyfin.api_key
             )
             try:
-                await jf_refresh.refresh_library_and_wait(
-                    poll_interval=5.0, inactivity_timeout=120.0
-                )
+                await jf_refresh.refresh_and_wait(app_state)
             except Exception:
                 logger.exception("Jellyfin post-restructure refresh failed")
             finally:
