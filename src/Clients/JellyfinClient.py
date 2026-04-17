@@ -977,6 +977,9 @@ class JellyfinClient:
             if imdb_id:
                 lines.append(f"  <imdb_id>{imdb_id}</imdb_id>")
             if tvdb_id:
+                # <id> is the legacy Kodi field for the TVDB series ID — Jellyfin
+                # still writes it for backward compatibility with older scrapers.
+                lines.append(f"  <id>{tvdb_id}</id>")
                 lines.append(f"  <tvdbid>{tvdb_id}</tvdbid>")
             if tvmaze_id:
                 lines.append(f"  <tvmazeid>{tvmaze_id}</tvmazeid>")
