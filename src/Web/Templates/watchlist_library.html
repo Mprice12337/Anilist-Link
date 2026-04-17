@@ -1496,7 +1496,28 @@ var arr_enabled = {{ 'true' if arr_enabled else 'false' }};
     var container = document.getElementById('toastContainer');
     var toast = document.createElement('div');
     toast.className = 'toast toast-' + (type || 'success');
-    toast.textContent = msg;
+    toast.style.display = 'flex';
+    toast.style.alignItems = 'flex-start';
+    toast.style.gap = '0.5rem';
+    var msgEl = document.createElement('span');
+    msgEl.style.flex = '1';
+    msgEl.style.whiteSpace = 'pre-wrap';
+    msgEl.textContent = msg;
+    var copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.title = 'Copy message';
+    copyBtn.textContent = '📋';
+    copyBtn.style.cssText = 'background:none;border:none;cursor:pointer;color:inherit;opacity:0.9;font-size:0.95rem;padding:0 0.15rem;line-height:1';
+    copyBtn.onclick = function(e) {
+      e.stopPropagation();
+      if (!navigator.clipboard) return;
+      navigator.clipboard.writeText(msg).then(function() {
+        copyBtn.textContent = '✓';
+        setTimeout(function() { copyBtn.textContent = '📋'; }, 1200);
+      });
+    };
+    toast.appendChild(msgEl);
+    toast.appendChild(copyBtn);
     container.appendChild(toast);
     setTimeout(function() { toast.remove(); }, 4000);
   }

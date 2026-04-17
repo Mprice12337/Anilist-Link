@@ -93,15 +93,48 @@
         });
 
         function renderTask(t) {
+            var cancelBtn = '';
+            if (t.cancellable && t.task_key) {
+                cancelBtn =
+                    '<button type="button" class="pw-cancel" ' +
+                           'data-task-key="' + escHtml(t.task_key) + '" ' +
+                           'data-task-label="' + escHtml(t.label) + '" ' +
+                           'title="Cancel this task">✕</button>';
+            }
             return '<div class="pw-task">' +
                 '<div class="pw-task-head">' +
                     '<span class="pw-task-type">' + escHtml(t.type) + '</span>' +
                     '<span class="pw-task-label">' + escHtml(t.label) + '</span>' +
+                    cancelBtn +
                 '</div>' +
                 '<div class="pw-bar"><div class="pw-bar-fill" style="width:' + t.percent + '%"></div></div>' +
                 '<div class="pw-task-detail">' + escHtml(t.detail) + ' — ' + escHtml(t.status) + '</div>' +
             '</div>';
         }
+
+        // Cancel-task handler — delegated so dynamically re-rendered buttons work.
+        tasksEl.addEventListener('click', function (ev) {
+            var btn = ev.target.closest && ev.target.closest('.pw-cancel');
+            if (!btn) return;
+            var key = btn.getAttribute('data-task-key');
+            var label = btn.getAttribute('data-task-label') || key;
+            if (!key) return;
+            if (!confirm('Cancel "' + label + '"?\n\nIn-flight work will stop at the next safe point.')) {
+                return;
+            }
+            btn.disabled = true;
+            btn.textContent = '…';
+            fetch('/api/tasks/' + encodeURIComponent(key) + '/cancel', {
+                method: 'POST'
+            }).then(function (r) {
+                if (!r.ok) throw new Error('cancel failed');
+                // Widget will reflect the new state on the next poll.
+            }).catch(function () {
+                alert('Cancel request failed — task may have already finished.');
+                btn.disabled = false;
+                btn.textContent = '✕';
+            });
+        });
 
         function poll() {
             fetch('/api/progress').then(function (r) {

@@ -1031,8 +1031,12 @@
     <span id="global-toast-icon" style="flex-shrink:0;font-size:1.1rem">✓</span>
     <div style="flex:1">
         <div id="global-toast-title" style="font-weight:600;margin-bottom:0.15rem"></div>
-        <div id="global-toast-body" style="color:var(--text-muted);font-size:0.82rem"></div>
+        <div id="global-toast-body" style="color:var(--text-muted);font-size:0.82rem;white-space:pre-wrap"></div>
     </div>
+    <button id="global-toast-copy" type="button"
+            style="background:none;border:none;cursor:pointer;color:var(--text-muted);
+                   font-size:1rem;line-height:1;flex-shrink:0;padding:0.15rem 0.3rem"
+            title="Copy message">📋</button>
     <button onclick="document.getElementById('global-toast').classList.add('hidden')"
             style="background:none;border:none;cursor:pointer;color:var(--text-muted);
                    font-size:1.1rem;line-height:1;flex-shrink:0;padding:0" title="Dismiss">×</button>
@@ -1081,6 +1085,7 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
         var iconEl = el('global-toast-icon');
         var titleEl = el('global-toast-title');
         var bodyEl = el('global-toast-body');
+        var copyBtn = el('global-toast-copy');
         if (!toast) return;
         titleEl.textContent = title;
         bodyEl.textContent = body || '';
@@ -1093,6 +1098,18 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
         } else {
             toast.style.borderColor = 'var(--success,#22c55e)';
             iconEl.textContent = '✓';
+        }
+        if (copyBtn) {
+            var original = '📋';
+            copyBtn.textContent = original;
+            copyBtn.onclick = function () {
+                var text = (title ? title + '\n' : '') + (body || '');
+                if (!navigator.clipboard) return;
+                navigator.clipboard.writeText(text).then(function () {
+                    copyBtn.textContent = '✓';
+                    setTimeout(function () { copyBtn.textContent = original; }, 1200);
+                });
+            };
         }
         toast.classList.remove('hidden');
         toast.style.opacity = '1';

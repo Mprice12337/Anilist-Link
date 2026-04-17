@@ -117,7 +117,28 @@
     var c = document.getElementById('toastContainer');
     var t = document.createElement('div');
     t.className = 'toast toast-' + (type || 'success');
-    t.textContent = msg;
+    t.style.display = 'flex';
+    t.style.alignItems = 'flex-start';
+    t.style.gap = '0.5rem';
+    var msgEl = document.createElement('span');
+    msgEl.style.flex = '1';
+    msgEl.style.whiteSpace = 'pre-wrap';
+    msgEl.textContent = msg;
+    var copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.title = 'Copy message';
+    copyBtn.textContent = '📋';
+    copyBtn.style.cssText = 'background:none;border:none;cursor:pointer;color:inherit;opacity:0.85;font-size:0.95rem;padding:0 0.15rem;line-height:1';
+    copyBtn.onclick = function(e) {
+      e.stopPropagation();
+      if (!navigator.clipboard) return;
+      navigator.clipboard.writeText(msg).then(function() {
+        copyBtn.textContent = '✓';
+        setTimeout(function() { copyBtn.textContent = '📋'; }, 1200);
+      });
+    };
+    t.appendChild(msgEl);
+    t.appendChild(copyBtn);
     c.appendChild(t);
     setTimeout(function() { t.remove(); }, 5000);
   }

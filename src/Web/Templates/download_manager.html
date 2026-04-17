@@ -380,13 +380,30 @@
     function showToast(msg, type) {
         const toast = document.createElement('div');
         toast.className = `toast toast-${type}`;
-        toast.textContent = msg;
-        toast.style.cssText = 'position:fixed;bottom:1rem;right:1rem;padding:0.75rem 1.25rem;border-radius:6px;z-index:9999;font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,0.15);';
+        toast.style.cssText = 'position:fixed;bottom:1rem;right:1rem;padding:0.75rem 1.25rem;border-radius:6px;z-index:9999;font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,0.15);display:flex;align-items:flex-start;gap:0.5rem;max-width:360px;';
         if (type === 'success') toast.style.background = '#00c853';
         else if (type === 'info') toast.style.background = '#1e90ff';
         toast.style.color = '#fff';
+        const msgEl = document.createElement('span');
+        msgEl.style.cssText = 'flex:1;white-space:pre-wrap';
+        msgEl.textContent = msg;
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.title = 'Copy message';
+        copyBtn.textContent = '📋';
+        copyBtn.style.cssText = 'background:none;border:none;cursor:pointer;color:inherit;opacity:0.9;font-size:0.95rem;padding:0 0.15rem;line-height:1';
+        copyBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (!navigator.clipboard) return;
+            navigator.clipboard.writeText(msg).then(() => {
+                copyBtn.textContent = '✓';
+                setTimeout(() => { copyBtn.textContent = '📋'; }, 1200);
+            });
+        };
+        toast.appendChild(msgEl);
+        toast.appendChild(copyBtn);
         document.body.appendChild(toast);
-        setTimeout(() => toast.remove(), 3000);
+        setTimeout(() => toast.remove(), 4000);
     }
 })();
 </script>
