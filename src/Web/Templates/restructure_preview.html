@@ -29,7 +29,9 @@
         <a href="/" class="btn btn-secondary">Dashboard</a>
     </div>
 </div>
-{% else %}
+{% endif %}
+
+{% if plan.total_groups > 0 %}
 
 <div class="card">
     <h2>Summary</h2>
@@ -80,6 +82,17 @@
             {% if ns.files %}
             <span class="badge badge-muted">{{ ns.files }} file{{ "s" if ns.files != 1 else "" }}</span>
             {% endif %}
+            <span style="flex:1"></span>
+            {% set _fix_paths = group.source_folders if group.source_folders else ([group.current_folder] if group.current_folder else []) %}
+            {% if _fix_paths %}
+            <button type="button" class="btn btn-secondary btn-sm fix-match-btn"
+                    data-fix-paths='{{ _fix_paths | tojson }}'
+                    data-fix-title="{{ group.display_title | e }}"
+                    data-fix-anilist-id="{{ group.anilist_id or 0 }}"
+                    title="Pick a different AniList match for this show">
+                Fix Match
+            </button>
+            {% endif %}
         </div>
 
         <div class="restructure-paths">
@@ -109,8 +122,8 @@
                 <code class="restructure-path">{{ group.current_folder }}</code>
             </div>
             <div class="restructure-path-section">
-                <span class="restructure-path-label">New folder name:</span>
-                <code class="restructure-path">{{ group.target_folder.split('/')[-1] }}</code>
+                <span class="restructure-path-label">Target folder:</span>
+                <code class="restructure-path">{{ group.target_folder }}</code>
             </div>
             {% endif %}
         </div>
@@ -139,8 +152,10 @@
                     {% else %}
                     <code>{{ sf.name }}</code>
                     {% endif %}
-                    {% if sf.source %}
-                    <span class="text-muted" style="font-size: 0.8rem">&larr; {{ sf.source }}</span>
+                    {% if sf.source_path %}
+                    <span class="text-muted" style="font-size: 0.78rem;word-break:break-all">&larr; {{ sf.source_path }}</span>
+                    {% elif sf.source %}
+                    <span class="text-muted" style="font-size: 0.78rem">&larr; {{ sf.source }}</span>
                     {% endif %}
                     {% if sf.files %}
                     <span class="text-muted" style="font-size: 0.8rem">({{ sf.files | length }} file{{ "s" if sf.files | length != 1 else "" }})</span>
@@ -227,4 +242,203 @@
 </form>
 <form id="skip-form" method="post" action="/restructure/cancel" style="display:none"></form>
 {% endif %}
+
+{% if plan.unmatched_shows %}
+<div class="card">
+    <h2>Unmatched / Skipped Shows</h2>
+    <p class="text-muted hint">
+        These folders couldn't be matched to AniList automatically and won't be
+        included in the restructure.  Click <strong>Fix Match</strong> to pick
+        the correct AniList entry — the plan will be refreshed with your new
+        matches applied.
+    </p>
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Folder</th>
+                <th>Detected Title</th>
+                <th style="width:1%"></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for show in plan.unmatched_shows %}
+            {% set _sp = show.local_path or show.source_id %}
+            <tr>
+                <td><code style="word-break:break-all;font-size:0.82rem">{{ _sp }}</code></td>
+                <td>{{ show.title }}</td>
+                <td>
+                    <button type="button" class="btn btn-secondary btn-sm fix-match-btn"
+                            data-fix-paths='{{ [_sp] | tojson }}'
+                            data-fix-title="{{ show.title | e }}"
+                            data-fix-anilist-id="0">
+                        Fix Match
+                    </button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<!-- Fix Match Modal (shared for matched + unmatched rows) -->
+<div id="fix-match-modal" class="modal" style="display:none">
+    <div class="modal-backdrop" id="fm-backdrop"></div>
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Fix Match: <span id="fm-source-title"></span></h3>
+            <div id="fm-path-info" style="font-size:0.8rem;color:var(--text-muted);margin-top:0.25rem;word-break:break-all;white-space:pre-wrap"></div>
+            <button class="modal-close" id="fm-close-btn" type="button">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="search-bar">
+                <input type="text" id="fm-search-input" placeholder="Search AniList…">
+                <button class="btn btn-primary btn-sm" id="fm-search-btn" type="button">Search</button>
+            </div>
+            <div id="fm-loading" class="text-muted" style="display:none;padding:1rem 0">Searching…</div>
+            <div id="fm-results"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function () {
+    var state = { sourcePaths: [], currentAnilistId: 0 };
+    var modal = document.getElementById('fix-match-modal');
+    var titleEl = document.getElementById('fm-source-title');
+    var pathInfoEl = document.getElementById('fm-path-info');
+    var searchInput = document.getElementById('fm-search-input');
+    var resultsEl = document.getElementById('fm-results');
+    var loadingEl = document.getElementById('fm-loading');
+
+    function openFixMatch(sourcePaths, title, currentAnilistId) {
+        state.sourcePaths = Array.isArray(sourcePaths) ? sourcePaths.slice() : [sourcePaths];
+        state.currentAnilistId = currentAnilistId || 0;
+        titleEl.textContent = title || '';
+        pathInfoEl.textContent = state.sourcePaths.join('\n');
+        searchInput.value = title || '';
+        resultsEl.innerHTML = '';
+        modal.style.display = 'flex';
+        searchAniList();
+        setTimeout(function () { searchInput.focus(); searchInput.select(); }, 80);
+    }
+
+    function closeFixMatch() {
+        modal.style.display = 'none';
+        state.sourcePaths = [];
+    }
+
+    // Event delegation: Fix Match buttons on matched groups + unmatched rows
+    document.addEventListener('click', function (ev) {
+        var btn = ev.target.closest && ev.target.closest('.fix-match-btn');
+        if (!btn) return;
+        ev.preventDefault();
+        var paths;
+        try { paths = JSON.parse(btn.getAttribute('data-fix-paths') || '[]'); }
+        catch (e) { paths = []; }
+        var title = btn.getAttribute('data-fix-title') || '';
+        var aid = parseInt(btn.getAttribute('data-fix-anilist-id') || '0', 10) || 0;
+        openFixMatch(paths, title, aid);
+    });
+
+    // Modal chrome (close / backdrop / Escape)
+    document.getElementById('fm-backdrop').addEventListener('click', closeFixMatch);
+    document.getElementById('fm-close-btn').addEventListener('click', closeFixMatch);
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && modal.style.display === 'flex') closeFixMatch();
+    });
+    document.getElementById('fm-search-btn').addEventListener('click', searchAniList);
+    searchInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); searchAniList(); }
+    });
+
+    function searchAniList() {
+        var q = searchInput.value.trim();
+        if (!q) return;
+        resultsEl.innerHTML = '';
+        loadingEl.style.display = 'block';
+        fetch('/api/scan/plex/search?q=' + encodeURIComponent(q))
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                loadingEl.style.display = 'none';
+                if (!data || data.length === 0) {
+                    resultsEl.innerHTML = '<p class="text-muted" style="padding:1rem 0">No results found.</p>';
+                    return;
+                }
+                resultsEl.innerHTML = '';
+                for (var i = 0; i < data.length; i++) {
+                    var c = data[i];
+                    var seasonStr = (c.season && c.year)
+                        ? (c.season.charAt(0) + c.season.slice(1).toLowerCase() + ' ' + c.year)
+                        : (c.year ? ('' + c.year) : '');
+                    var meta = [seasonStr, c.format || '', c.episodes ? (c.episodes + ' ep') : ''].filter(Boolean).join(' · ');
+
+                    var row = document.createElement('div');
+                    row.className = 'search-result';
+                    var coverHtml = c.cover_image
+                        ? '<img class="search-result-cover" src="' + escHtml(c.cover_image) + '" alt="">'
+                        : '<div class="search-result-cover search-result-cover-placeholder"></div>';
+                    var infoHtml = '<div class="search-result-info"><div class="title-romaji">' + escHtml(c.title_romaji || '') + '</div>';
+                    if (c.title_english && c.title_english !== c.title_romaji) {
+                        infoHtml += '<div class="title-english">' + escHtml(c.title_english) + '</div>';
+                    }
+                    if (meta) {
+                        infoHtml += '<div class="search-result-meta text-muted">' + escHtml(meta) + '</div>';
+                    }
+                    infoHtml += '</div>';
+                    row.innerHTML = coverHtml + infoHtml;
+
+                    var selectBtn = document.createElement('button');
+                    selectBtn.type = 'button';
+                    selectBtn.className = 'btn btn-primary btn-sm';
+                    selectBtn.textContent = 'Select';
+                    (function (anilistId, matchTitle) {
+                        selectBtn.addEventListener('click', function () {
+                            selectMatch(anilistId, matchTitle);
+                        });
+                    })(c.id, c.title_romaji || c.title_english || '');
+                    row.appendChild(selectBtn);
+                    resultsEl.appendChild(row);
+                }
+            })
+            .catch(function () {
+                loadingEl.style.display = 'none';
+                resultsEl.innerHTML = '<p class="text-muted" style="padding:1rem 0">Search failed.</p>';
+            });
+    }
+
+    function selectMatch(anilistId, title) {
+        var btns = resultsEl.querySelectorAll('.btn');
+        btns.forEach(function (b) { b.disabled = true; });
+
+        var fd = new FormData();
+        state.sourcePaths.forEach(function (p) { fd.append('source_path', p); });
+        fd.append('anilist_id', String(anilistId));
+        if (title) fd.append('title', title);
+
+        fetch('/restructure/rematch', { method: 'POST', body: fd })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data && data.ok) {
+                    closeFixMatch();
+                    // Server started a background re-analyze; hand off to the
+                    // progress page, which auto-redirects to /restructure/preview
+                    // once re-analyze finishes.
+                    if (data.redirect) {
+                        window.location.href = data.redirect;
+                    } else {
+                        window.location.reload();
+                    }
+                } else {
+                    btns.forEach(function (b) { b.disabled = false; });
+                    alert('Rematch failed: ' + ((data && data.error) || 'unknown error'));
+                }
+            })
+            .catch(function (err) {
+                btns.forEach(function (b) { b.disabled = false; });
+                alert('Rematch request failed: ' + err.message);
+            });
+    }
+})();
+</script>
 {% endblock %}
