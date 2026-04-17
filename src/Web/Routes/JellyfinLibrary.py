@@ -644,6 +644,36 @@ async def jellyfin_scan_results_page(request: Request) -> Response:
 # ---------------------------------------------------------------------------
 
 
+@router.get("/api/jellyfin/cleanup-virtual")
+async def jellyfin_cleanup_virtual(request: Request) -> JSONResponse:
+    """Run virtual season cleanup across all configured Jellyfin libraries."""
+    config = request.app.state.config
+    if not config.jellyfin.url or not config.jellyfin.api_key:
+        return JSONResponse({"error": "Jellyfin not configured"}, status_code=503)
+
+    library_ids = (
+        list(config.jellyfin.anime_library_ids)
+        if config.jellyfin.anime_library_ids
+        else []
+    )
+    if not library_ids:
+        return JSONResponse(
+            {"error": "No Jellyfin library IDs configured"}, status_code=400
+        )
+
+    jf = JellyfinClient(url=config.jellyfin.url, api_key=config.jellyfin.api_key)
+    try:
+        deleted = await jf.delete_virtual_seasons(library_ids)
+        return JSONResponse(
+            {
+                "deleted": deleted,
+                "libraries_scanned": len(library_ids),
+            }
+        )
+    finally:
+        await jf.close()
+
+
 @router.get("/api/jellyfin/virtual-items")
 async def jellyfin_list_virtual_items(request: Request) -> JSONResponse:
     """List virtual seasons/episodes under a series, or inspect a single item.
