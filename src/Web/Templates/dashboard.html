@@ -40,6 +40,8 @@
         <form method="post" action="/api/sync" style="display:inline">
             <button type="submit" class="btn btn-secondary btn-sm">Sync Crunchyroll</button>
         </form>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="dashboardRescanLocal(this)"
+                title="Re-scan your on-disk libraries and refresh the database">Rescan Local</button>
         {% if plex_configured %}
         <a href="/library?source=plex" class="btn btn-secondary btn-sm"><img src="/static/img/plex.png" alt="" class="btn-service-logo">Plex Library</a>
         {% endif %}
@@ -47,7 +49,7 @@
         <a href="/library?source=jellyfin" class="btn btn-secondary btn-sm"><img src="/static/img/jellyfin.png" alt="" class="btn-service-logo">Jellyfin Library</a>
         {% endif %}
         {% if anilist_configured and not users %}
-        <a href="/auth/anilist" class="btn btn-secondary btn-sm">Link AniList</a>
+        <a href="/settings#settings-anilist" class="btn btn-secondary btn-sm">Link AniList</a>
         {% endif %}
     </div>
 </div>
@@ -59,7 +61,7 @@
     <p class="text-muted">
         No AniList account linked.
         {% if anilist_configured %}
-        <a href="/auth/anilist">Link your account</a> to see your watchlist.
+        <a href="/settings#settings-anilist">Link your account</a> to see your watchlist.
         {% else %}
         Configure AniList credentials in <a href="/settings">Settings</a> first.
         {% endif %}
@@ -124,6 +126,36 @@
 </section>
 
 <script>
+async function dashboardRescanLocal(btn) {
+    if (!confirm('Rescan all local libraries? This may take several minutes depending on library size.')) {
+        return;
+    }
+    var orig = btn.textContent;
+    btn.textContent = 'Starting…';
+    btn.disabled = true;
+    try {
+        var resp = await fetch('/api/library/reindex-all', {method: 'POST'});
+        var data = await resp.json();
+        if (data.ok) {
+            btn.textContent = 'Scanning… (see widget)';
+            // Re-enable after 4s so the user can trigger again if they must.
+            // The floating progress widget tracks the actual scan.
+            setTimeout(function() {
+                btn.textContent = orig;
+                btn.disabled = false;
+            }, 4000);
+        } else {
+            alert('Rescan failed: ' + (data.error || 'unknown'));
+            btn.textContent = orig;
+            btn.disabled = false;
+        }
+    } catch (err) {
+        alert('Rescan failed.');
+        btn.textContent = orig;
+        btn.disabled = false;
+    }
+}
+
 // Trigger scroll-on-hover when hovering the entire watching-card
 document.querySelectorAll('.watching-card').forEach(function(card) {
     var titleEl = card.querySelector('.watching-overlay-title');

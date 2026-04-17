@@ -26,7 +26,10 @@
 <section class="card">
     <h2>Matched Shows</h2>
     <p class="text-muted hint">These shows will have their metadata updated from AniList.</p>
-    <form method="post" action="{{ apply_url | default('/scan/plex/apply') }}" data-processing="Applying metadata…">
+    {% set _apply_url = apply_url | default('/scan/plex/apply') %}
+    {% set _is_jellyfin_apply = '/jellyfin/' in _apply_url %}
+    <form method="post" action="{{ _apply_url }}"
+          {% if not _is_jellyfin_apply %}data-processing="Applying metadata…"{% endif %}>
         <table class="table">
             <thead>
                 <tr>

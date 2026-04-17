@@ -59,13 +59,13 @@
     </div>
     <div class="action-bar-row">
         <span class="action-bar-label">Apply to Jellyfin</span>
-        <form method="post" action="/jellyfin/apply-all" style="display:inline" data-processing="Applying metadata to Jellyfin…">
+        <form method="post" action="/jellyfin/apply-all" style="display:inline">
             <button type="submit" class="btn btn-primary btn-sm"
                     {% if not jellyfin_configured or matched_count == 0 %}disabled{% endif %}>
                 Apply All Matched ({{ matched_count }} item{{ "s" if matched_count != 1 else "" }})
             </button>
         </form>
-        <form method="post" action="/jellyfin/apply-all" style="display:inline" data-processing="Refreshing metadata from AniList…">
+        <form method="post" action="/jellyfin/apply-all" style="display:inline">
             <input type="hidden" name="force_refresh" value="1">
             <button type="submit" class="btn btn-sm btn-secondary"
                     {% if not jellyfin_configured or matched_count == 0 %}disabled{% endif %}

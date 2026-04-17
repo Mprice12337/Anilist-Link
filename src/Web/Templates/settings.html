@@ -58,6 +58,23 @@
           <span id="{{ group_name | lower }}-migrate-status" style="margin-left:0.75rem;font-size:0.85rem;color:var(--text-muted)"></span>
         </div>
         {% endif %}
+        {% if group_name == "AniList" %}
+        <div style="margin-bottom:0.75rem;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">
+            {% if anilist_linked_users %}
+            <span class="badge badge-success">✓ Linked as {{ anilist_linked_users[0].get('username') or '(AniList user)' }}</span>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="anilistAuthorize()">
+                Re-authorize
+            </button>
+            {% elif anilist_configured %}
+            <button type="button" class="btn btn-primary" onclick="anilistAuthorize()">
+                Authorize AniList &rarr;
+            </button>
+            <span class="text-muted" style="font-size:0.85rem">Opens AniList in a new window to link your account.</span>
+            {% else %}
+            <span class="text-muted" style="font-size:0.85rem">Save your Client ID and Secret below first, then reload to link your account.</span>
+            {% endif %}
+        </div>
+        {% endif %}
         <div class="form-grid">
             {% for key, label, input_type in fields %}
             <div class="form-group">
@@ -352,6 +369,30 @@ async function migrateRootFolder(service) {
         if (el) observer.observe(el);
     });
 })();
+
+function anilistAuthorize() {
+    // Open in a sized popup so the user doesn't lose their place on the
+    // Settings page.  Falls back to a new tab if the popup is blocked.
+    var w = 620, h = 720;
+    var left = Math.round((screen.width - w) / 2);
+    var top = Math.round((screen.height - h) / 2);
+    var popup = window.open(
+        '/auth/anilist',
+        'anilist_oauth',
+        'width=' + w + ',height=' + h + ',left=' + left + ',top=' + top
+    );
+    if (!popup) {
+        // Popup blocked — open in a new tab instead so we never navigate
+        // the current tab away from Settings.
+        window.open('/auth/anilist', '_blank', 'noopener');
+    }
+}
+
+window.addEventListener('message', function(ev) {
+    if (!ev || !ev.data || ev.data.type !== 'anilist_auth_done') return;
+    // Reload so the linked-user badge reflects the new state.
+    window.location.href = '/settings?saved=1#settings-anilist';
+});
 
 async function loadArrFolders(key) {
     var service = key.startsWith('sonarr') ? 'sonarr' : 'radarr';

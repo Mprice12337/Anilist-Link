@@ -28,8 +28,8 @@
     {% endif %}
     <span style="flex:1"></span>
     <button class="btn btn-sm btn-secondary" id="reindexBtn" onclick="reindexAll()"
-            title="Re-scan local folders and update series-group-aware index">
-        Re-index Local
+            title="Re-scan your on-disk libraries and refresh the database">
+        Rescan Local
     </button>
     <span class="text-muted" style="font-size:0.82rem;white-space:nowrap">{{ matched_count }}/{{ item_count }}</span>
     <div class="view-toggle">
@@ -442,22 +442,39 @@ function escJs(s) {
 
 async function reindexAll() {
     var btn = document.getElementById('reindexBtn');
+    if (!confirm('Rescan all local libraries? This may take several minutes depending on library size.')) {
+        return;
+    }
     var origText = btn.textContent;
-    btn.textContent = 'Indexing...';
+    btn.textContent = 'Starting…';
     btn.disabled = true;
     try {
         var resp = await fetch('/api/library/reindex-all', {method: 'POST'});
         var data = await resp.json();
         if (data.ok) {
-            btn.textContent = 'Done (' + data.seeded + ')';
-            setTimeout(function() { window.location.reload(); }, 1200);
+            // The scan runs in the background — the floating progress widget
+            // picks it up from /api/progress.  Poll for completion and reload.
+            btn.textContent = 'Scanning… (see widget)';
+            var poll = setInterval(async function() {
+                try {
+                    var pr = await fetch('/api/progress');
+                    var pd = await pr.json();
+                    var active = (pd.tasks || []).some(function(t) {
+                        return t.id === 'library_reindex';
+                    });
+                    if (!active) {
+                        clearInterval(poll);
+                        window.location.reload();
+                    }
+                } catch(_) { /* ignore */ }
+            }, 3000);
         } else {
-            alert('Re-index failed: ' + (data.error || 'unknown'));
+            alert('Rescan failed: ' + (data.error || 'unknown'));
             btn.textContent = origText;
             btn.disabled = false;
         }
     } catch(err) {
-        alert('Re-index failed.');
+        alert('Rescan failed.');
         btn.textContent = origText;
         btn.disabled = false;
     }

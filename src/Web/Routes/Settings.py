@@ -195,6 +195,7 @@ async def settings_page(request: Request, saved: int = 0) -> HTMLResponse:
 
     db_settings = await db.get_all_settings()
     env_overrides = get_env_overrides()
+    config = request.app.state.config
 
     # Build display values: for secrets, never expose the real value
     display: dict[str, str] = {}
@@ -239,10 +240,21 @@ async def settings_page(request: Request, saved: int = 0) -> HTMLResponse:
     # knows exactly what to register on AniList's developer page.
     anilist_callback_url = str(request.url_for("anilist_callback"))
 
+    # Whether AniList credentials are currently usable (either from DB or env).
+    # Drives the Authorize button visibility in the AniList section.
+    anilist_configured = bool(config.anilist.client_id and config.anilist.client_secret)
+
+    # Linked AniList accounts so the Authorize button can show "already linked"
+    # state instead of prompting again.
+    try:
+        all_users = await db.get_all_users()
+        anilist_linked_users = [u for u in all_users if u.get("service") == "anilist"]
+    except Exception:
+        anilist_linked_users = []
+
     # Fetch Plex show libraries for the anime-library selector
     plex_libraries: list[dict[str, str]] = []
     selected_library_keys: list[str] = []
-    config = request.app.state.config
     if config.plex.url and config.plex.token:
         plex_client = PlexClient(url=config.plex.url, token=config.plex.token)
         try:
@@ -297,6 +309,8 @@ async def settings_page(request: Request, saved: int = 0) -> HTMLResponse:
             },
             "saved": bool(saved),
             "anilist_callback_url": anilist_callback_url,
+            "anilist_configured": anilist_configured,
+            "anilist_linked_users": anilist_linked_users,
             "plex_libraries": plex_libraries,
             "selected_library_keys": selected_library_keys,
             "jellyfin_libraries": jellyfin_libraries,
