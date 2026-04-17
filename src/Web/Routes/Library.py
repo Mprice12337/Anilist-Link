@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -19,7 +20,7 @@ from src.Scanner.JellyfinMetadataScanner import JellyfinMetadataScanner
 from src.Scanner.LibraryRestructurer import LibraryRestructurer, RestructureProgress
 from src.Scanner.LibraryScanner import LibraryScanner, LibraryScanProgress
 from src.Scanner.LocalDirectoryScanner import LocalDirectoryScanner
-from src.Scanner.MetadataScanner import MetadataScanner
+from src.Scanner.MetadataScanner import MetadataScanner, ScanProgress
 from src.Scanner.SeriesGroupBuilder import SeriesGroupBuilder
 from src.Web.App import spawn_background_task
 
@@ -43,7 +44,7 @@ def _get_scan_progress(app_state: Any) -> dict[int, LibraryScanProgress]:
 def _is_library_scan_busy(app_state: Any, library_id: int) -> bool:
     progress_map = _get_scan_progress(app_state)
     p = progress_map.get(library_id)
-    return p is not None and p.status not in ("", "pending", "complete", "error")
+    return p is not None and p.status not in ("", "pending", "complete", "error", "cancelled")
 
 
 async def _run_library_scan(
@@ -67,6 +68,11 @@ async def _run_library_scan(
         progress.phase = (
             f"Done: {stats['matched']} matched, {stats['unmatched']} unmatched"
         )
+    except asyncio.CancelledError:
+        logger.info("Library scan cancelled for library %d", library_id)
+        progress.status = "cancelled"
+        progress.phase = "Cancelled by user"
+        raise
     except Exception:
         logger.exception("Library scan failed for library %d", library_id)
         progress.status = "error"
@@ -196,6 +202,7 @@ async def library_scan(request: Request, library_id: int) -> RedirectResponse:
     spawn_background_task(
         request.app.state,
         _run_library_scan(request.app.state, library_id, path_list, force_rescan),
+        task_key=f"library_scan_{library_id}",
     )
 
     return RedirectResponse(url=f"/library/{library_id}/scan/progress", status_code=303)
@@ -681,18 +688,95 @@ async def library_jellyfin_sync(request: Request, library_id: int) -> JSONRespon
     return JSONResponse({"ok": True, "title": folder_name})
 
 
+async def _run_library_jellyfin_apply_all(
+    app_state: object,
+    matched_items: list[dict],
+    jellyfin_matches: dict,
+) -> None:
+    """Background coroutine: apply AniList metadata to all Jellyfin items that
+    map to the given library_items rows.
+    """
+    config = app_state.config  # type: ignore[attr-defined]
+    db = app_state.db  # type: ignore[attr-defined]
+    anilist_client = app_state.anilist_client  # type: ignore[attr-defined]
+    progress: ScanProgress = app_state.jellyfin_apply_progress  # type: ignore[attr-defined]
+
+    jellyfin_client = JellyfinClient(
+        url=config.jellyfin.url, api_key=config.jellyfin.api_key
+    )
+    title_matcher = TitleMatcher(similarity_threshold=0.75)
+    group_builder = SeriesGroupBuilder(db, anilist_client)
+    scanner = JellyfinMetadataScanner(
+        db, anilist_client, title_matcher, jellyfin_client, config, group_builder
+    )
+
+    applied = 0
+    errors = 0
+    try:
+        for it in matched_items:
+            jf_info = jellyfin_matches.get(it["folder_name"])
+            if not jf_info:
+                continue
+            progress.current_title = it["folder_name"]
+            try:
+                await scanner._apply_anilist_metadata(
+                    jf_info["item_id"],
+                    it["folder_name"],
+                    it["anilist_id"],
+                    it.get("match_confidence") or 1.0,
+                    it.get("match_method") or "manual",
+                    False,
+                )
+                applied += 1
+            except Exception:
+                logger.exception(
+                    "Failed to apply Jellyfin metadata for %s", it["folder_name"]
+                )
+                errors += 1
+            finally:
+                progress.scanned = applied + errors
+
+        progress.status = "complete"
+        progress.current_title = f"Applied metadata to {applied} Jellyfin items" + (
+            f" ({errors} errors)" if errors else ""
+        )
+    except asyncio.CancelledError:
+        logger.info("Library Jellyfin apply-all cancelled after %d items", applied)
+        progress.status = "cancelled"
+        progress.current_title = f"Cancelled after {applied} items"
+        raise
+    except Exception:
+        logger.exception("Library Jellyfin apply-all failed unexpectedly")
+        progress.status = "error"
+        progress.error_message = "Apply-all failed unexpectedly"
+    finally:
+        await jellyfin_client.close()
+
+
 @router.post("/library/{library_id}/jellyfin-apply-all")
 async def library_jellyfin_apply_all(
     request: Request, library_id: int
 ) -> RedirectResponse:
-    """Refresh Jellyfin library data and apply AniList metadata to all matched items."""
+    """Kick off a background task to apply AniList metadata to all Jellyfin
+    items that map to items in this local library.  Progress is reported via
+    ``/api/progress`` so the floating widget can display it.
+    """
     config = request.app.state.config
     db = request.app.state.db
-    anilist_client = request.app.state.anilist_client
 
     if not config.jellyfin.url or not config.jellyfin.api_key:
         return RedirectResponse(
             url=f"/library/{library_id}?error=Jellyfin+not+configured",
+            status_code=303,
+        )
+
+    existing = getattr(request.app.state, "jellyfin_apply_progress", None)
+    if existing and existing.status not in ("", "pending", "complete", "error", "cancelled"):
+        return RedirectResponse(
+            url=(
+                f"/library/{library_id}?message="
+                "Apply+already+running+%E2%80%94+see+progress+widget"
+            ),
             status_code=303,
         )
 
@@ -717,57 +801,38 @@ async def library_jellyfin_apply_all(
     folder_names = [it["folder_name"] for it in matched_items]
     jellyfin_matches = await db.get_jellyfin_matches_for_folder_names(folder_names)
 
-    jellyfin_client = JellyfinClient(
-        url=config.jellyfin.url, api_key=config.jellyfin.api_key
+    request.app.state.jellyfin_apply_progress = ScanProgress(
+        status="running",
+        total=sum(1 for it in matched_items if jellyfin_matches.get(it["folder_name"])),
+        current_title="Starting…",
     )
-    title_matcher = TitleMatcher(similarity_threshold=0.75)
-    group_builder = SeriesGroupBuilder(db, anilist_client)
-    scanner = JellyfinMetadataScanner(
-        db, anilist_client, title_matcher, jellyfin_client, config, group_builder
+    spawn_background_task(
+        request.app.state,
+        _run_library_jellyfin_apply_all(
+            request.app.state, matched_items, jellyfin_matches
+        ),
+        task_key="jellyfin_apply",
+    )
+    return RedirectResponse(
+        url=(
+            f"/library/{library_id}?message="
+            "Applying+metadata+in+background+%E2%80%94+see+progress+widget"
+        ),
+        status_code=303,
     )
 
-    applied = 0
-    errors = 0
-    try:
-        for it in matched_items:
-            jf_info = jellyfin_matches.get(it["folder_name"])
-            if not jf_info:
-                continue
-            try:
-                await scanner._apply_anilist_metadata(
-                    jf_info["item_id"],
-                    it["folder_name"],
-                    it["anilist_id"],
-                    it.get("match_confidence") or 1.0,
-                    it.get("match_method") or "manual",
-                    False,
-                )
-                applied += 1
-            except Exception:
-                logger.exception(
-                    "Failed to apply Jellyfin metadata for %s", it["folder_name"]
-                )
-                errors += 1
-    finally:
-        await jellyfin_client.close()
 
-    msg = f"Applied+metadata+to+{applied}+Jellyfin+items"
-    if errors:
-        msg += f"+({errors}+errors)"
-    return RedirectResponse(url=f"/library/{library_id}?message={msg}", status_code=303)
-
-
-@router.post("/api/library/reindex-all")
-async def library_reindex_all(request: Request) -> JSONResponse:
-    """Re-index all local libraries using the restructurer's analyze pipeline."""
-    db = request.app.state.db
-    anilist_client = request.app.state.anilist_client
+async def _run_library_reindex_all(app_state: object) -> None:
+    """Background coroutine: rescan every configured local library."""
+    db = app_state.db  # type: ignore[attr-defined]
+    anilist_client = app_state.anilist_client  # type: ignore[attr-defined]
+    progress: RestructureProgress = app_state.library_reindex_progress  # type: ignore[attr-defined]
 
     libraries = await db.get_all_libraries()
     if not libraries:
-        return JSONResponse(
-            {"ok": True, "seeded": 0, "message": "No libraries configured"}
-        )
+        progress.status = "complete"
+        progress.phase = "No libraries configured"
+        return
 
     title_matcher = TitleMatcher(similarity_threshold=0.75)
     group_builder = SeriesGroupBuilder(db, anilist_client)
@@ -788,16 +853,16 @@ async def library_reindex_all(request: Request) -> JSONResponse:
             if not library_paths:
                 continue
 
+            progress.phase = f"Scanning {library.get('name') or 'library'}"
             all_shows = []
-            scan_progress = RestructureProgress(status="running")
             for path in library_paths:
-                shows = await dir_scanner.scan_directory(path, scan_progress)
+                shows = await dir_scanner.scan_directory(path, progress)
                 all_shows.extend(shows)
 
             if not all_shows:
                 continue
 
-            progress = RestructureProgress(status="running")
+            progress.phase = f"Indexing {library.get('name') or 'library'}"
             plan = await restructurer.analyze(
                 all_shows, progress, level="full_restructure"
             )
@@ -813,19 +878,49 @@ async def library_reindex_all(request: Request) -> JSONResponse:
             total_seeded += seeded
             total_groups += plan.total_groups
 
-        return JSONResponse(
-            {
-                "ok": True,
-                "seeded": total_seeded,
-                "groups": total_groups,
-                "message": (
-                    f"Re-indexed {total_seeded} items" f" across {total_groups} groups"
-                ),
-            }
+        progress.status = "complete"
+        progress.phase = f"Re-indexed {total_seeded} items across {total_groups} groups"
+        logger.info(
+            "Library rescan complete: %d items, %d groups", total_seeded, total_groups
         )
+    except asyncio.CancelledError:
+        logger.info(
+            "Library rescan cancelled after %d items / %d groups",
+            total_seeded,
+            total_groups,
+        )
+        progress.status = "cancelled"
+        progress.phase = f"Cancelled — {total_seeded} items seeded"
+        raise
     except Exception as exc:
         logger.exception("Library reindex-all failed")
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        progress.status = "error"
+        progress.error_message = str(exc)
+
+
+@router.post("/api/library/reindex-all")
+async def library_reindex_all(request: Request) -> JSONResponse:
+    """Kick off a background rescan of all configured local libraries.
+
+    The actual work runs in a background task so the HTTP request returns
+    immediately and the floating progress widget can display status.
+    """
+    app_state = request.app.state
+
+    existing = getattr(app_state, "library_reindex_progress", None)
+    if existing and existing.status not in ("", "pending", "complete", "error", "cancelled"):
+        return JSONResponse(
+            {"ok": False, "error": "A library rescan is already running"},
+            status_code=409,
+        )
+
+    app_state.library_reindex_progress = RestructureProgress(
+        status="running", phase="Starting rescan…"
+    )
+    spawn_background_task(
+        app_state, _run_library_reindex_all(app_state), task_key="library_reindex"
+    )
+    return JSONResponse({"ok": True, "message": "Rescan started"})
 
 
 @router.post("/api/library/{library_id}/reindex")

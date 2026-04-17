@@ -406,7 +406,7 @@ async def jellyfin_apply_all(request: Request) -> RedirectResponse:
         )
 
     existing = getattr(request.app.state, "jellyfin_apply_progress", None)
-    if existing and existing.status not in ("", "pending", "complete", "error"):
+    if existing and existing.status not in ("", "pending", "complete", "error", "cancelled"):
         return RedirectResponse(
             url="/jellyfin?message=Apply+already+running+%E2%80%94+see+progress+widget",
             status_code=303,

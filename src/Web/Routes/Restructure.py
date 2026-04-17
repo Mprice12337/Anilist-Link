@@ -61,7 +61,7 @@ router = APIRouter(tags=["restructure"])
 def _is_restructure_busy(app_state: object) -> bool:
     """Return True if an analysis or execution is currently in-flight."""
     progress = getattr(app_state, "restructure_progress", None)
-    if progress and progress.status not in ("", "pending", "complete", "error"):
+    if progress and progress.status not in ("", "pending", "complete", "error", "cancelled"):
         return True
     exec_progress = getattr(app_state, "restructure_exec_progress", None)
     if exec_progress and exec_progress.status not in (
@@ -69,6 +69,7 @@ def _is_restructure_busy(app_state: object) -> bool:
         "pending",
         "complete",
         "error",
+        "cancelled",
     ):
         return True
     return False
