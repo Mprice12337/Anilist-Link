@@ -256,8 +256,12 @@ async def _run_jellyfin_apply_all(
 
     applied = 0
     errors = 0
+    listener = getattr(app_state, "jellyfin_listener", None)
 
     try:
+        if listener:
+            listener.suppress_callbacks = True
+
         progress.current_title = "Refreshing Jellyfin libraries…"
         await jellyfin_client.refresh_and_wait(app_state, library_ids=apply_library_ids)
 
@@ -378,6 +382,8 @@ async def _run_jellyfin_apply_all(
         progress.status = "error"
         progress.error_message = "Apply-all failed unexpectedly"
     finally:
+        if listener:
+            listener.suppress_callbacks = False
         await jellyfin_client.close()
 
 

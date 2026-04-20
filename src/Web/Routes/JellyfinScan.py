@@ -47,7 +47,11 @@ async def _run_jellyfin_preview_scan(app_state: object) -> None:
     if not library_ids and config.jellyfin.anime_library_ids:
         library_ids = list(config.jellyfin.anime_library_ids)
 
+    listener = getattr(app_state, "jellyfin_listener", None)
     try:
+        if listener:
+            listener.suppress_callbacks = True
+
         # Refresh only the selected libraries so item IDs are stable before
         # we attempt any matching or metadata writes.
         if progress:
@@ -70,6 +74,8 @@ async def _run_jellyfin_preview_scan(app_state: object) -> None:
         progress.status = "error"
         progress.error_message = "Preview scan failed unexpectedly"
     finally:
+        if listener:
+            listener.suppress_callbacks = False
         await jellyfin_client.close()
 
 
@@ -93,7 +99,13 @@ async def _run_jellyfin_live_scan(app_state: object) -> None:
     if not library_ids and config.jellyfin.anime_library_ids:
         library_ids = list(config.jellyfin.anime_library_ids)
 
+    listener = getattr(app_state, "jellyfin_listener", None)
     try:
+        # Suppress the WebSocket callback so our refresh calls don't
+        # re-trigger the auto-scan pipeline while we're already scanning.
+        if listener:
+            listener.suppress_callbacks = True
+
         # Refresh only the selected libraries so item IDs are stable before
         # we attempt any matching or metadata writes.
         if progress:
@@ -149,6 +161,8 @@ async def _run_jellyfin_live_scan(app_state: object) -> None:
         progress.status = "error"
         progress.error_message = "Live scan failed unexpectedly"
     finally:
+        if listener:
+            listener.suppress_callbacks = False
         await jellyfin_client.close()
 
 
@@ -232,8 +246,12 @@ async def _run_jellyfin_scan_apply(
 
     applied = 0
     errors = 0
+    listener = getattr(app_state, "jellyfin_listener", None)
 
     try:
+        if listener:
+            listener.suppress_callbacks = True
+
         progress.current_title = "Refreshing Jellyfin libraries…"
         await jellyfin_client.refresh_and_wait(
             app_state, library_ids=scan_library_ids or None
@@ -329,6 +347,8 @@ async def _run_jellyfin_scan_apply(
         progress.status = "error"
         progress.error_message = "Apply failed unexpectedly"
     finally:
+        if listener:
+            listener.suppress_callbacks = False
         await jellyfin_client.close()
 
 

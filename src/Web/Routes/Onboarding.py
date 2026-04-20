@@ -295,14 +295,19 @@ async def _auto_scan_media_servers(app_state: object) -> None:
 
         if not refresh_already_done and config.jellyfin.url and config.jellyfin.api_key:
             logger.info("Triggering Jellyfin library refresh post-restructure")
+            listener = getattr(app_state, "jellyfin_listener", None)
             jf_refresh = JellyfinClient(
                 url=config.jellyfin.url, api_key=config.jellyfin.api_key
             )
             try:
+                if listener:
+                    listener.suppress_callbacks = True
                 await jf_refresh.refresh_and_wait(app_state)
             except Exception:
                 logger.exception("Jellyfin post-restructure refresh failed")
             finally:
+                if listener:
+                    listener.suppress_callbacks = False
                 await jf_refresh.close()
 
     # Index local library — either run it now or wait for the background

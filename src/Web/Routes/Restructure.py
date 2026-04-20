@@ -373,8 +373,12 @@ async def _post_restructure_refresh(
 
     plex_client: PlexClient | None = None
     jellyfin_client: JellyfinClient | None = None
+    listener = getattr(app_state, "jellyfin_listener", None)
 
     try:
+        if listener:
+            listener.suppress_callbacks = True
+
         if source_mode == "plex":
             library_keys: list[str] = app_state.restructure_library_keys  # type: ignore[attr-defined]
             plex_client = PlexClient(url=config.plex.url, token=config.plex.token)  # type: ignore[attr-defined]
@@ -481,6 +485,8 @@ async def _post_restructure_refresh(
         refresh_progress.status = "error"
         refresh_progress.phase = "Media server refresh failed"
     finally:
+        if listener:
+            listener.suppress_callbacks = False
         if plex_client:
             await plex_client.close()
         if jellyfin_client:

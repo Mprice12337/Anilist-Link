@@ -336,8 +336,17 @@ async def main() -> None:
     # a persistent connection that gets instant scan completion events.
     app.state.jellyfin_listener = None
 
+    # Lock prevents concurrent auto-scans (e.g. rapid RefreshLibrary +
+    # WebhookItemAdded transitions firing back-to-back).
+    _jellyfin_auto_scan_lock = asyncio.Lock()
+
     async def _on_jellyfin_scan_complete() -> None:
-        """Callback fired by the WebSocket listener when a library scan ends."""
+        """Callback fired by the WebSocket listener when a library scan ends.
+
+        Runs the full metadata pipeline so externally-added media gets
+        matched, has metadata written, and virtual seasons cleaned up.
+        Skips the heavy work when a user-initiated scan is already running.
+        """
         cfg = app.state.config
         if not cfg.jellyfin.url or not cfg.jellyfin.api_key:
             return
@@ -349,20 +358,98 @@ async def main() -> None:
         if not lib_ids:
             return
 
+        # If a user-initiated scan/apply is already running, just do the
+        # lightweight virtual cleanup — the user scan handles everything.
+        jf_scan = getattr(app.state, "jellyfin_scan_progress", None)
+        jf_apply = getattr(app.state, "jellyfin_apply_progress", None)
+        user_scan_active = (jf_scan and jf_scan.status == "running") or (
+            jf_apply and jf_apply.status == "running"
+        )
+
         from src.Clients.JellyfinClient import JellyfinClient as _JF
 
-        jf = _JF(url=cfg.jellyfin.url, api_key=cfg.jellyfin.api_key)
-        try:
-            deleted = await jf.delete_virtual_seasons(lib_ids)
-            if deleted:
-                logger.info(
-                    "WebSocket-triggered cleanup removed %d virtual seasons",
-                    deleted,
+        if user_scan_active:
+            jf = _JF(url=cfg.jellyfin.url, api_key=cfg.jellyfin.api_key)
+            try:
+                deleted = await jf.delete_virtual_seasons(lib_ids)
+                if deleted:
+                    logger.info(
+                        "WebSocket-triggered cleanup removed %d virtual "
+                        "seasons (user scan active — skipping auto-scan)",
+                        deleted,
+                    )
+            except Exception:
+                logger.debug("Virtual season cleanup error", exc_info=True)
+            finally:
+                await jf.close()
+            return
+
+        # Acquire lock so concurrent events don't stack up full scans.
+        if _jellyfin_auto_scan_lock.locked():
+            logger.debug("Auto-scan already in progress — skipping duplicate")
+            return
+
+        async with _jellyfin_auto_scan_lock:
+            logger.info("Running auto-scan for new/changed Jellyfin items")
+            jf = _JF(url=cfg.jellyfin.url, api_key=cfg.jellyfin.api_key)
+            try:
+                from src.Scanner.JellyfinMetadataScanner import (
+                    JellyfinMetadataScanner,
                 )
-        except Exception:
-            logger.debug("Virtual season cleanup error", exc_info=True)
-        finally:
-            await jf.close()
+
+                title_matcher = TitleMatcher(similarity_threshold=0.75)
+                group_builder = SeriesGroupBuilder(db, app.state.anilist_client)
+                scanner = JellyfinMetadataScanner(
+                    db,
+                    app.state.anilist_client,
+                    title_matcher,
+                    jf,
+                    cfg,
+                    group_builder,
+                )
+
+                # Jellyfin just finished its own scan so items are already
+                # indexed — no need for an initial refresh_and_wait.
+                # Existing mappings are skipped quickly; only genuinely new
+                # items go through AniList search + fuzzy matching.
+                results = await scanner.run_scan(preview=False, library_ids=lib_ids)
+                logger.info(
+                    "Auto-scan complete: %d matched, %d skipped, %d failed",
+                    results.matched,
+                    results.skipped,
+                    results.failed,
+                )
+
+                if results.matched > 0:
+                    # NFOs were written — trigger a Jellyfin refresh so it
+                    # reads them, then do recursive episode metadata refresh.
+                    listener = app.state.jellyfin_listener
+                    if listener:
+                        listener.suppress_callbacks = True
+                    try:
+                        await jf.refresh_and_wait(app.state, library_ids=lib_ids)
+
+                        for lid in lib_ids:
+                            series_ids = await jf.get_series_ids_in_library(lid)
+                            for sid in series_ids:
+                                await jf.refresh_item_metadata(
+                                    sid, recursive=True, replace_all=True
+                                )
+                    finally:
+                        if listener:
+                            listener.suppress_callbacks = False
+
+                # Always clean up virtual seasons at the end.
+                deleted = await jf.delete_virtual_seasons(lib_ids)
+                if deleted:
+                    logger.info(
+                        "Auto-scan cleanup removed %d virtual seasons",
+                        deleted,
+                    )
+            except Exception:
+                logger.exception("Auto-scan pipeline error")
+            finally:
+                await jf.close()
 
     if config.jellyfin.url and config.jellyfin.api_key:
         from src.Clients.JellyfinEventListener import JellyfinEventListener

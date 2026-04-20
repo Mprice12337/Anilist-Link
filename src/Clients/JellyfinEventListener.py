@@ -69,6 +69,12 @@ class JellyfinEventListener:
         self._item_added_running: bool = False
         self._item_added_debounce: asyncio.Task | None = None  # type: ignore[type-arg]
 
+        # When True, scan-complete callbacks are suppressed.  Set this before
+        # triggering a Jellyfin refresh from our own code (e.g. after writing
+        # NFOs) so the resulting Running→Idle transition doesn't re-trigger
+        # the auto-scan pipeline and cause an infinite loop.
+        self.suppress_callbacks: bool = False
+
         # Lifecycle
         self._running = False
         self._task: asyncio.Task | None = None  # type: ignore[type-arg]
@@ -265,6 +271,9 @@ class JellyfinEventListener:
 
     def _fire_scan_complete_callback(self) -> None:
         """Schedule the on_scan_complete callback as a background task."""
+        if self.suppress_callbacks:
+            logger.debug("Callback suppressed — scan was triggered internally")
+            return
         if self._on_scan_complete:
             asyncio.create_task(self._run_callback())
 
