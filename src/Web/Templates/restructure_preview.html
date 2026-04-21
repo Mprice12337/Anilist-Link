@@ -281,6 +281,17 @@
 </div>
 {% endif %}
 
+<!-- Re-analyze overlay (shown while fix-match re-runs the analysis) -->
+<div id="reanalyze-overlay" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.7);display:none;align-items:center;justify-content:center;flex-direction:column;gap:1rem">
+    <div style="background:var(--bg-card);padding:2rem 3rem;border-radius:8px;text-align:center;max-width:420px">
+        <h3 style="margin:0 0 0.5rem">Updating match...</h3>
+        <p class="text-muted" id="reanalyze-status">Re-analyzing with corrected match</p>
+        <div class="progress-bar-container" style="margin-top:1rem">
+            <div class="progress-bar" id="reanalyze-bar" style="width:0%"></div>
+        </div>
+    </div>
+</div>
+
 <!-- Fix Match Modal (shared for matched + unmatched rows) -->
 <div id="fix-match-modal" class="modal" style="display:none">
     <div class="modal-backdrop" id="fm-backdrop"></div>
@@ -421,14 +432,8 @@
             .then(function (data) {
                 if (data && data.ok) {
                     closeFixMatch();
-                    // Server started a background re-analyze; hand off to the
-                    // progress page, which auto-redirects to /restructure/preview
-                    // once re-analyze finishes.
-                    if (data.redirect) {
-                        window.location.href = data.redirect;
-                    } else {
-                        window.location.reload();
-                    }
+                    // Show the re-analyze overlay and poll until done
+                    showReanalyzeOverlay();
                 } else {
                     btns.forEach(function (b) { b.disabled = false; });
                     alert('Rematch failed: ' + ((data && data.error) || 'unknown error'));
@@ -438,6 +443,44 @@
                 btns.forEach(function (b) { b.disabled = false; });
                 alert('Rematch request failed: ' + err.message);
             });
+    }
+
+    // Re-analyze overlay: polls progress and reloads when complete
+    function showReanalyzeOverlay() {
+        var overlay = document.getElementById('reanalyze-overlay');
+        var statusEl = document.getElementById('reanalyze-status');
+        var bar = document.getElementById('reanalyze-bar');
+        overlay.style.display = 'flex';
+
+        function pollReanalyze() {
+            fetch('/api/restructure/progress')
+                .then(function (r) { return r.json(); })
+                .then(function (d) {
+                    if (d.status === 'complete') {
+                        statusEl.textContent = 'Complete! Refreshing preview...';
+                        bar.style.width = '100%';
+                        window.location.reload();
+                        return;
+                    }
+                    if (d.status === 'error') {
+                        statusEl.textContent = 'Error: ' + (d.error_message || 'Analysis failed');
+                        bar.style.width = '100%';
+                        bar.classList.add('progress-bar-error');
+                        setTimeout(function () { overlay.style.display = 'none'; }, 3000);
+                        return;
+                    }
+                    if (d.total > 0) {
+                        var pct = Math.min(100, Math.round((d.processed / d.total) * 100));
+                        bar.style.width = pct + '%';
+                    }
+                    if (d.current_item) {
+                        statusEl.textContent = d.current_item;
+                    }
+                    setTimeout(pollReanalyze, 1000);
+                })
+                .catch(function () { setTimeout(pollReanalyze, 1500); });
+        }
+        setTimeout(pollReanalyze, 500);
     }
 })();
 </script>

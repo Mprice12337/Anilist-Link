@@ -15,14 +15,14 @@ from starlette.responses import Response
 
 from src.Clients.JellyfinClient import JellyfinClient
 from src.Clients.PlexClient import PlexClient
-from src.Matching.TitleMatcher import TitleMatcher, get_primary_title
+from src.Matching.TitleMatcher import get_primary_title
 from src.Scanner.JellyfinMetadataScanner import JellyfinMetadataScanner
 from src.Scanner.LibraryRestructurer import LibraryRestructurer, RestructureProgress
 from src.Scanner.LibraryScanner import LibraryScanner, LibraryScanProgress
 from src.Scanner.LocalDirectoryScanner import LocalDirectoryScanner
 from src.Scanner.MetadataScanner import MetadataScanner, ScanProgress
-from src.Scanner.SeriesGroupBuilder import SeriesGroupBuilder
 from src.Web.App import spawn_background_task
+from src.Web.Routes.Helpers import create_group_builder, create_title_matcher
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ async def _run_library_scan(
     progress_map = _get_scan_progress(app_state)
     progress = progress_map[library_id]
 
-    title_matcher = TitleMatcher(similarity_threshold=0.75)
+    title_matcher = create_title_matcher()
     scanner = LibraryScanner(
         db=db, anilist_client=anilist_client, title_matcher=title_matcher
     )
@@ -225,7 +225,7 @@ async def library_changes(request: Request, library_id: int) -> JSONResponse:
         return JSONResponse({"error": "not found"}, status_code=404)
 
     path_list = json.loads(library["paths"]) if library["paths"] else []
-    title_matcher = TitleMatcher(similarity_threshold=0.75)
+    title_matcher = create_title_matcher()
     scanner = LibraryScanner(
         db=db, anilist_client=anilist_client, title_matcher=title_matcher
     )
@@ -389,8 +389,8 @@ async def _apply_plex_metadata_for_item(
 ) -> None:
     """Apply AniList metadata to a single Plex item (shared logic)."""
     plex_client = PlexClient(url=config.plex.url, token=config.plex.token)
-    title_matcher = TitleMatcher(similarity_threshold=0.75)
-    group_builder = SeriesGroupBuilder(db, anilist_client)
+    title_matcher = create_title_matcher()
+    group_builder = create_group_builder(db, anilist_client)
     scanner = MetadataScanner(
         db,
         anilist_client,
@@ -671,8 +671,8 @@ async def library_jellyfin_sync(request: Request, library_id: int) -> JSONRespon
     jellyfin_client = JellyfinClient(
         url=config.jellyfin.url, api_key=config.jellyfin.api_key
     )
-    title_matcher = TitleMatcher(similarity_threshold=0.75)
-    group_builder = SeriesGroupBuilder(db, anilist_client)
+    title_matcher = create_title_matcher()
+    group_builder = create_group_builder(db, anilist_client)
     scanner = JellyfinMetadataScanner(
         db, anilist_client, title_matcher, jellyfin_client, config, group_builder
     )
@@ -710,8 +710,8 @@ async def _run_library_jellyfin_apply_all(
     jellyfin_client = JellyfinClient(
         url=config.jellyfin.url, api_key=config.jellyfin.api_key
     )
-    title_matcher = TitleMatcher(similarity_threshold=0.75)
-    group_builder = SeriesGroupBuilder(db, anilist_client)
+    title_matcher = create_title_matcher()
+    group_builder = create_group_builder(db, anilist_client)
     scanner = JellyfinMetadataScanner(
         db, anilist_client, title_matcher, jellyfin_client, config, group_builder
     )
@@ -846,8 +846,8 @@ async def _run_library_reindex_all(app_state: object) -> None:
         progress.phase = "No libraries configured"
         return
 
-    title_matcher = TitleMatcher(similarity_threshold=0.75)
-    group_builder = SeriesGroupBuilder(db, anilist_client)
+    title_matcher = create_title_matcher()
+    group_builder = create_group_builder(db, anilist_client)
     restructurer = LibraryRestructurer(db=db, group_builder=group_builder)
     dir_scanner = LocalDirectoryScanner(
         db=db, anilist_client=anilist_client, title_matcher=title_matcher
@@ -971,8 +971,8 @@ async def library_reindex(request: Request, library_id: int) -> JSONResponse:
             {"ok": False, "error": "Library has no paths configured"}, status_code=400
         )
 
-    title_matcher = TitleMatcher(similarity_threshold=0.75)
-    group_builder = SeriesGroupBuilder(db, anilist_client)
+    title_matcher = create_title_matcher()
+    group_builder = create_group_builder(db, anilist_client)
     restructurer = LibraryRestructurer(db=db, group_builder=group_builder)
     dir_scanner = LocalDirectoryScanner(
         db=db, anilist_client=anilist_client, title_matcher=title_matcher

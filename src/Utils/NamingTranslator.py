@@ -7,11 +7,15 @@ external links and title-based fallback searches.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from rapidfuzz import fuzz as _fuzz
 
 from src.Clients.AnilistClient import AniListClient
+
+# Type alias for URL-to-ID parser functions used by _resolve_external_id
+_UrlParser = Callable[[str], int | None]
 
 logger = logging.getLogger(__name__)
 
@@ -289,12 +293,17 @@ async def collect_series_chain(
     return result
 
 
-async def resolve_tvdb_id(anilist_id: int, anilist_client: AniListClient) -> int | None:
-    """Attempt to resolve a TVDB ID from AniList external links.
+async def _resolve_external_id(
+    anilist_id: int,
+    anilist_client: AniListClient,
+    site_names: set[str],
+    label: str,
+    url_parser: _UrlParser | None = None,
+) -> int | None:
+    """Resolve an external service ID from AniList external links.
 
-    Uses the ``siteId`` field (the actual TVDB series ID) as primary source,
-    then falls back to parsing legacy ``?id=`` URL query parameters.
-    Returns the TVDB numeric ID if found, else None.
+    Uses the ``siteId`` field as primary source, then falls back to
+    ``url_parser`` for legacy URL-based ID extraction.
     """
     try:
         data = await anilist_client._execute_query(
@@ -302,66 +311,63 @@ async def resolve_tvdb_id(anilist_id: int, anilist_client: AniListClient) -> int
         )
         media = data.get("Media", {})
         for link in media.get("externalLinks", []):
-            if link.get("site") in _TVDB_SITE_NAMES:
-                # siteId is the authoritative TVDB numeric series ID
+            if link.get("site") in site_names:
                 site_id = link.get("siteId")
                 if site_id and str(site_id).isdigit():
                     logger.debug(
-                        "Resolved TVDB ID %s for anilist_id=%d via siteId",
+                        "Resolved %s ID %s for anilist_id=%d via siteId",
+                        label,
                         site_id,
                         anilist_id,
                     )
                     return int(site_id)
-                # Legacy fallback: parse ?id= from URL
-                url = link.get("url", "")
-                if "id=" in url:
-                    try:
-                        part = url.split("id=")[1].split("&")[0]
-                        if part.isdigit():
-                            return int(part)
-                    except (IndexError, ValueError):
-                        pass
-        logger.debug("No TVDB external link found for anilist_id=%d", anilist_id)
+                if url_parser:
+                    parsed = url_parser(link.get("url", ""))
+                    if parsed is not None:
+                        return parsed
+        logger.debug("No %s external link found for anilist_id=%d", label, anilist_id)
         return None
     except Exception:
-        logger.warning("Failed to resolve TVDB ID for anilist_id=%d", anilist_id)
+        logger.warning("Failed to resolve %s ID for anilist_id=%d", label, anilist_id)
         return None
+
+
+def _parse_tvdb_url(url: str) -> int | None:
+    """Extract TVDB ID from a legacy ``?id=`` URL parameter."""
+    if "id=" in url:
+        try:
+            part = url.split("id=")[1].split("&")[0]
+            if part.isdigit():
+                return int(part)
+        except (IndexError, ValueError):
+            pass
+    return None
+
+
+def _parse_tmdb_url(url: str) -> int | None:
+    """Extract TMDB ID from a ``/movie/<id>`` or ``/tv/<id>`` URL path."""
+    if "/movie/" in url or "/tv/" in url:
+        try:
+            part = url.rstrip("/").split("/")[-1]
+            if part.isdigit():
+                return int(part)
+        except (IndexError, ValueError):
+            pass
+    return None
+
+
+async def resolve_tvdb_id(anilist_id: int, anilist_client: AniListClient) -> int | None:
+    """Attempt to resolve a TVDB ID from AniList external links."""
+    return await _resolve_external_id(
+        anilist_id, anilist_client, _TVDB_SITE_NAMES, "TVDB", _parse_tvdb_url
+    )
 
 
 async def resolve_tmdb_id(anilist_id: int, anilist_client: AniListClient) -> int | None:
-    """Attempt to resolve a TMDB ID from AniList external links.
-
-    Uses the ``siteId`` field as primary source, then falls back to URL parsing.
-    Returns the TMDB numeric ID if found, else None.
-    """
-    try:
-        data = await anilist_client._execute_query(
-            GET_EXTERNAL_LINKS_QUERY, {"id": anilist_id}
-        )
-        media = data.get("Media", {})
-        for link in media.get("externalLinks", []):
-            if link.get("site") in _TMDB_SITE_NAMES:
-                site_id = link.get("siteId")
-                if site_id and str(site_id).isdigit():
-                    logger.debug(
-                        "Resolved TMDB ID %s for anilist_id=%d via siteId",
-                        site_id,
-                        anilist_id,
-                    )
-                    return int(site_id)
-                url = link.get("url", "")
-                if "/movie/" in url or "/tv/" in url:
-                    try:
-                        part = url.rstrip("/").split("/")[-1]
-                        if part.isdigit():
-                            return int(part)
-                    except (IndexError, ValueError):
-                        pass
-        logger.debug("No TMDB external link found for anilist_id=%d", anilist_id)
-        return None
-    except Exception:
-        logger.warning("Failed to resolve TMDB ID for anilist_id=%d", anilist_id)
-        return None
+    """Attempt to resolve a TMDB ID from AniList external links."""
+    return await _resolve_external_id(
+        anilist_id, anilist_client, _TMDB_SITE_NAMES, "TMDB", _parse_tmdb_url
+    )
 
 
 def get_preferred_title(media: dict[str, Any]) -> str:

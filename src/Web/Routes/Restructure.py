@@ -14,7 +14,6 @@ from starlette.responses import Response
 
 from src.Clients.JellyfinClient import JellyfinClient
 from src.Clients.PlexClient import PlexClient
-from src.Matching.TitleMatcher import TitleMatcher
 from src.Scanner.LibraryRestructurer import (
     LibraryRestructurer,
     RestructurePlan,
@@ -22,6 +21,7 @@ from src.Scanner.LibraryRestructurer import (
 )
 from src.Scanner.LocalDirectoryScanner import LocalDirectoryScanner
 from src.Web.App import spawn_background_task
+from src.Web.Routes.Helpers import create_group_builder, create_title_matcher
 
 logger = logging.getLogger(__name__)
 
@@ -104,9 +104,8 @@ async def _run_analysis_background(
 
     try:
         if templates:
-            from src.Scanner.SeriesGroupBuilder import SeriesGroupBuilder
 
-            group_builder = SeriesGroupBuilder(db, anilist_client)
+            group_builder = create_group_builder(db, anilist_client)
             restructurer = LibraryRestructurer(
                 db=db,
                 group_builder=group_builder,
@@ -123,7 +122,7 @@ async def _run_analysis_background(
             )
         else:
             restructurer = await LibraryRestructurer.from_settings(db, anilist_client)
-        title_matcher = TitleMatcher(similarity_threshold=0.75)
+        title_matcher = create_title_matcher()
         scanner = LocalDirectoryScanner(
             db=db, anilist_client=anilist_client, title_matcher=title_matcher
         )
@@ -539,9 +538,10 @@ async def restructure_analyze_async(request: Request) -> JSONResponse:
             status_code=400,
         )
 
-    # Clear previous plan / notification
+    # Clear previous plan / notification / stale execution state
     request.app.state.restructure_plan = None
     request.app.state.onboarding_restructure_plan = None
+    request.app.state.restructure_exec_progress = None
     await db.dismiss_notifications_by_url("/restructure/preview")
     await db.clear_dismissed_notifications()
 
@@ -550,12 +550,15 @@ async def restructure_analyze_async(request: Request) -> JSONResponse:
 
     # Remember the analyze parameters so /restructure/rematch can replay the
     # analyze step after updating a show's AniList match.
-    request.app.state.restructure_analyze_params = {
+    # Stored both in memory (fast) and DB (survives restarts).
+    analyze_params = {
         "source_dirs": list(source_dirs),
         "output_dir": output_dir,
         "level": level,
         "templates": dict(pending_templates),
     }
+    request.app.state.restructure_analyze_params = analyze_params
+    await db.set_setting("restructure.analyze_params", json.dumps(analyze_params))
 
     # Set up progress and launch background task
     progress = RestructureProgress(status="running")
@@ -936,6 +939,15 @@ async def restructure_rematch(request: Request) -> JSONResponse:
 
     params = getattr(app_state, "restructure_analyze_params", None)
     if not params:
+        # Fall back to DB-persisted params (survives restarts)
+        raw = await db.get_setting("restructure.analyze_params")
+        if raw:
+            try:
+                params = json.loads(raw)
+                app_state.restructure_analyze_params = params
+            except (json.JSONDecodeError, TypeError):
+                params = None
+    if not params:
         return JSONResponse(
             {
                 "ok": False,
@@ -997,7 +1009,19 @@ async def restructure_rematch(request: Request) -> JSONResponse:
             year=year,
         )
 
+    # Capture the OLD anilist_ids before overwriting, so we can invalidate
+    # stale series group data.
+    old_anilist_ids: set[int] = set()
     for path in source_paths:
+        old_mapping = await db.get_mapping_by_source("local", path)
+        if old_mapping and old_mapping.get("anilist_id"):
+            old_anilist_ids.add(old_mapping["anilist_id"])
+        # Explicitly delete then re-insert to guarantee a clean state.
+        # Handles edge cases with path normalization or trailing slashes.
+        await db.execute(
+            "DELETE FROM media_mappings WHERE source='local' AND source_id=?",
+            (path,),
+        )
         await db.upsert_media_mapping(
             source="local",
             source_id=path,
@@ -1007,11 +1031,48 @@ async def restructure_rematch(request: Request) -> JSONResponse:
             match_confidence=1.0,
             match_method="manual",
         )
+        logger.debug(
+            "Rematch: stored mapping local/%s -> anilist_id=%d (%s)",
+            path,
+            anilist_id,
+            anilist_title,
+        )
+
+    # Nuke the entire stale series group that contained the OLD match.
+    # When the original (wrong) match built a series group, it pulled in
+    # related entries — including the NEW (correct) anilist_id.  If we only
+    # delete the old ID's row, the new ID is still sitting in that wrong
+    # group.  Deleting the full group + all its entries forces a clean
+    # rebuild from the AniList relation graph for every affected entry.
+    old_anilist_ids.discard(anilist_id)
+    for old_id in old_anilist_ids:
+        stale_group = await db.fetch_one(
+            "SELECT sge.group_id FROM series_group_entries sge"
+            " WHERE sge.anilist_id=?",
+            (old_id,),
+        )
+        if stale_group:
+            gid = stale_group["group_id"]
+            await db.execute(
+                "DELETE FROM series_group_entries WHERE group_id=?", (gid,)
+            )
+            await db.execute("DELETE FROM series_groups WHERE id=?", (gid,))
+            logger.debug("Rematch: deleted stale series group id=%d", gid)
+
+    # Also remove the NEW anilist_id from any group it was pulled into by
+    # the old match, so the group builder rebuilds it from scratch.
+    await db.execute(
+        "DELETE FROM series_group_entries WHERE anilist_id=?",
+        (anilist_id,),
+    )
 
     # Clear any prior plan + notification so the preview doesn't render stale
     # data while the re-analyze runs.
     app_state.restructure_plan = None
     app_state.onboarding_restructure_plan = None
+    # Clear stale exec_progress so /api/restructure/progress doesn't report
+    # a prior execution as "complete" and redirect the user away.
+    app_state.restructure_exec_progress = None
     await db.dismiss_notifications_by_url("/restructure/preview")
     await db.clear_dismissed_notifications()
 
@@ -1282,14 +1343,18 @@ async def restructure_plan_rerun(request: Request, plan_id: int) -> JSONResponse
 
     progress = RestructureProgress(status="running")
     request.app.state.restructure_progress = progress
+    request.app.state.restructure_exec_progress = None
+    request.app.state.restructure_plan = None
     request.app.state.pending_naming_templates = templates_dict
 
-    request.app.state.restructure_analyze_params = {
+    analyze_params = {
         "source_dirs": list(source_dirs),
         "output_dir": plan_row.get("output_dir") or "",
         "level": plan_row.get("level") or "full_restructure",
         "templates": dict(templates_dict),
     }
+    request.app.state.restructure_analyze_params = analyze_params
+    await db.set_setting("restructure.analyze_params", json.dumps(analyze_params))
 
     spawn_background_task(
         request.app.state,

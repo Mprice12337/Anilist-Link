@@ -1,38 +1,12 @@
 {% extends "base.html" %}
+{% from "macros.html" import render_title, flash_alerts %}
 {% block title %}Anilist-Link: Plex Library{% endblock %}
 {% block container_class %}container-wide{% endblock %}
-
-{# ── Title rendering macro ── #}
-{% macro render_title(item, title_display) %}
-{% set romaji = item.title_romaji or "" %}
-{% set english = item.title_english or "" %}
-{% set plex = item.plex_title or "" %}
-{% if title_display == "english" %}
-    <span class="title-romaji">{{ english or romaji or plex }}</span>
-{% elif title_display == "both_romaji_primary" %}
-    <span class="title-romaji">{{ romaji or plex }}</span>
-    {% if english and english != (romaji or plex) %}
-    <span class="title-english">{{ english }}</span>
-    {% endif %}
-{% elif title_display == "both_english_primary" %}
-    <span class="title-romaji">{{ english or romaji or plex }}</span>
-    {% if romaji and romaji != (english or plex) %}
-    <span class="title-english">{{ romaji }}</span>
-    {% endif %}
-{% else %}{# romaji (default) #}
-    <span class="title-romaji">{{ romaji or plex }}</span>
-{% endif %}
-{% endmacro %}
 
 {% block content %}
 <h1>Plex Library</h1>
 
-{% if message %}
-<div class="alert alert-success">{{ message | replace("+", " ") }}</div>
-{% endif %}
-{% if error %}
-<div class="alert alert-danger">{{ error | replace("+", " ") }}</div>
-{% endif %}
+{{ flash_alerts(message, error) }}
 
 {# ── Action Bar ── #}
 <div class="card action-bar">
@@ -147,7 +121,7 @@
         </div>
         <div class="library-card-info">
             {% if item.anilist_id %}
-            {{ render_title(item, title_display) }}
+            {{ render_title(item, title_display, item.plex_title or "") }}
             {% else %}
             <span class="title-romaji">{{ item.plex_title }}</span>
             {% endif %}
@@ -177,7 +151,7 @@
         {% endif %}
         <div class="library-list-info">
             {% if item.anilist_id %}
-            {{ render_title(item, title_display) }}
+            {{ render_title(item, title_display, item.plex_title or "") }}
             {% else %}
             <span class="title-romaji">{{ item.plex_title }}</span>
             {% endif %}

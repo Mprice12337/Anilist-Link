@@ -87,9 +87,11 @@ class LocalDirectoryScanner:
                 if mapping and mapping.get("anilist_id"):
                     cached_id = mapping["anilist_id"]
                     logger.debug(
-                        "LocalDirectoryScanner: cache hit %r -> anilist_id=%s",
+                        "LocalDirectoryScanner: cache hit %r -> anilist_id=%s"
+                        " (method=%s)",
                         folder_name,
                         cached_id,
+                        mapping.get("match_method", ""),
                     )
                     year = 0
                     romaji = ""
@@ -97,6 +99,39 @@ class LocalDirectoryScanner:
                     anilist_format = ""
                     anilist_episodes = None
                     cache = await self._db.get_cached_metadata(cached_id)
+                    if not cache and mapping.get("match_method") == "manual":
+                        # Manual rematch without cached metadata — fetch from
+                        # AniList now so folder tokens have proper titles.
+                        try:
+                            entry = await self._anilist.get_anime_by_id(cached_id)
+                            if entry:
+                                _t = entry.get("title") or {}
+                                _y = entry.get("seasonYear") or (
+                                    (entry.get("startDate") or {}).get("year") or 0
+                                )
+                                import json as _json
+
+                                await self._db.set_cached_metadata(
+                                    anilist_id=cached_id,
+                                    title_romaji=_t.get("romaji") or "",
+                                    title_english=_t.get("english") or "",
+                                    title_native=_t.get("native") or "",
+                                    episodes=entry.get("episodes"),
+                                    cover_image=(
+                                        (entry.get("coverImage") or {}).get("large")
+                                        or ""
+                                    ),
+                                    description=entry.get("description") or "",
+                                    genres=_json.dumps(entry.get("genres") or []),
+                                    status=entry.get("status") or "",
+                                    year=_y,
+                                )
+                                cache = await self._db.get_cached_metadata(cached_id)
+                        except Exception:
+                            logger.debug(
+                                "Failed to fetch metadata for manual match %d",
+                                cached_id,
+                            )
                     if cache:
                         year = cache.get("year", 0) or 0
                         romaji = cache.get("title_romaji", "")

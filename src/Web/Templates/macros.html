@@ -1,0 +1,33 @@
+{# Shared Jinja2 macros used across multiple templates. #}
+
+{# ── Title rendering macro ──
+   Renders an item's title according to the user's title_display preference.
+   `fallback` is the service-specific title to use when AniList titles are missing
+   (e.g. item.plex_title, item.jellyfin_title, or item.folder_name).
+#}
+{% macro render_title(item, title_display, fallback="") %}
+{% set romaji = item.title_romaji or "" %}
+{% set english = item.title_english or "" %}
+{% set fb = fallback %}
+{% if title_display == "english" %}
+    <span class="title-romaji">{{ english or romaji or fb }}</span>
+{% elif title_display == "both_romaji_primary" %}
+    <span class="title-romaji">{{ romaji or fb }}</span>
+    {% if english and english != (romaji or fb) %}
+    <span class="title-english">{{ english }}</span>
+    {% endif %}
+{% elif title_display == "both_english_primary" %}
+    <span class="title-romaji">{{ english or romaji or fb }}</span>
+    {% if romaji and romaji != (english or fb) %}
+    <span class="title-english">{{ romaji }}</span>
+    {% endif %}
+{% else %}{# romaji (default) #}
+    <span class="title-romaji">{{ romaji or fb }}</span>
+{% endif %}
+{% endmacro %}
+
+{# ── Flash message alerts ── #}
+{% macro flash_alerts(message="", error="") %}
+{% if message %}<div class="alert alert-success">{{ message | replace("+", " ") }}</div>{% endif %}
+{% if error %}<div class="alert alert-danger">{{ error | replace("+", " ") }}</div>{% endif %}
+{% endmacro %}

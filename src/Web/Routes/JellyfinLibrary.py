@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 
 import httpx
@@ -11,11 +10,15 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from src.Clients.JellyfinClient import JellyfinClient
-from src.Matching.TitleMatcher import TitleMatcher
 from src.Scanner.JellyfinMetadataScanner import JellyfinMetadataScanner
 from src.Scanner.MetadataScanner import ScanProgress, ScanResults
-from src.Scanner.SeriesGroupBuilder import SeriesGroupBuilder
 from src.Web.App import spawn_background_task
+from src.Web.Routes.Helpers import (
+    cache_anilist_entry,
+    create_group_builder,
+    create_title_matcher,
+    get_anilist_display_title,
+)
 from src.Web.Routes.JellyfinScan import (
     _run_jellyfin_live_scan,
     _run_jellyfin_preview_scan,
@@ -134,27 +137,9 @@ async def jellyfin_update_match(request: Request) -> JSONResponse:
 
     entry = await anilist_client.get_anime_by_id(int(anilist_id))
     if entry:
-        title_obj = entry.get("title", {})
-        year = entry.get("seasonYear") or (
-            (entry.get("startDate") or {}).get("year") or 0
-        )
-        await db.set_cached_metadata(
-            anilist_id=int(anilist_id),
-            title_romaji=title_obj.get("romaji") or "",
-            title_english=title_obj.get("english") or "",
-            title_native=title_obj.get("native") or "",
-            episodes=entry.get("episodes"),
-            cover_image=(entry.get("coverImage") or {}).get("large") or "",
-            description=entry.get("description") or "",
-            genres=json.dumps(entry.get("genres") or []),
-            status=entry.get("status") or "",
-            year=year,
-        )
+        await cache_anilist_entry(db, entry)
 
-    anilist_title = ""
-    if entry:
-        t = entry.get("title", {})
-        anilist_title = t.get("romaji") or t.get("english") or ""
+    anilist_title = get_anilist_display_title(entry) if entry else ""
 
     await db.upsert_media_mapping(
         source="jellyfin",
@@ -242,8 +227,8 @@ async def _run_jellyfin_apply_all(
     jellyfin_client = JellyfinClient(
         url=config.jellyfin.url, api_key=config.jellyfin.api_key
     )
-    title_matcher = TitleMatcher(similarity_threshold=0.75)
-    group_builder = SeriesGroupBuilder(db, anilist_client)
+    title_matcher = create_title_matcher()
+    group_builder = create_group_builder(db, anilist_client)
     scanner = JellyfinMetadataScanner(
         db, anilist_client, title_matcher, jellyfin_client, config, group_builder
     )
@@ -470,8 +455,8 @@ async def jellyfin_apply_single(request: Request) -> JSONResponse:
     jellyfin_client = JellyfinClient(
         url=config.jellyfin.url, api_key=config.jellyfin.api_key
     )
-    title_matcher = TitleMatcher(similarity_threshold=0.75)
-    group_builder = SeriesGroupBuilder(db, anilist_client)
+    title_matcher = create_title_matcher()
+    group_builder = create_group_builder(db, anilist_client)
     scanner = JellyfinMetadataScanner(
         db, anilist_client, title_matcher, jellyfin_client, config, group_builder
     )

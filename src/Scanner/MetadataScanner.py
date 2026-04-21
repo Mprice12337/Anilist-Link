@@ -16,6 +16,7 @@ from src.Matching.Normalizer import clean_title_for_search
 from src.Matching.TitleMatcher import TitleMatcher, get_primary_title
 from src.Scanner.SeriesGroupBuilder import SeriesGroupBuilder
 from src.Utils.Config import AppConfig
+from src.Web.Routes.Helpers import build_rematch_changes
 
 logger = logging.getLogger(__name__)
 
@@ -493,26 +494,7 @@ class MetadataScanner:
                     group_id = None
 
             if preview:
-                # Build a summary of what would change — use the search
-                # result directly instead of making another API call.
-                changes: dict[str, str] = {}
-                al_title = (
-                    matched_entry.get("title", {}).get("english")
-                    or matched_entry.get("title", {}).get("romaji")
-                    or ""
-                )
-                if al_title and al_title != title:
-                    changes["title"] = al_title
-                if matched_entry.get("description"):
-                    changes["summary"] = "(will update)"
-                if matched_entry.get("genres"):
-                    changes["genres"] = ", ".join(matched_entry["genres"])
-                score = matched_entry.get("averageScore")
-                if score:
-                    changes["rating"] = str(round(score / 10, 1))
-                cover = matched_entry.get("coverImage", {}).get("large", "")
-                if cover:
-                    changes["poster"] = "(will update)"
+                changes = build_rematch_changes(matched_entry, title)
 
                 # Extract year/season/format from matched entry
                 start_date = matched_entry.get("startDate") or {}

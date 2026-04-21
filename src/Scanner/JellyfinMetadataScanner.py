@@ -24,6 +24,7 @@ from src.Scanner.MetadataScanner import (
 from src.Scanner.SeriesGroupBuilder import SeriesGroupBuilder
 from src.Utils.Config import AppConfig
 from src.Utils.PathTranslator import PathTranslator
+from src.Web.Routes.Helpers import build_rematch_changes
 
 logger = logging.getLogger(__name__)
 
@@ -493,24 +494,7 @@ class JellyfinMetadataScanner:
             )
 
             if preview:
-                changes: dict[str, str] = {}
-                al_title = (
-                    matched_entry.get("title", {}).get("english")
-                    or matched_entry.get("title", {}).get("romaji")
-                    or ""
-                )
-                if al_title and al_title != title:
-                    changes["title"] = al_title
-                if matched_entry.get("description"):
-                    changes["summary"] = "(will update)"
-                if matched_entry.get("genres"):
-                    changes["genres"] = ", ".join(matched_entry["genres"])
-                score = matched_entry.get("averageScore")
-                if score:
-                    changes["rating"] = str(round(score / 10, 1))
-                cover = matched_entry.get("coverImage", {}).get("large", "")
-                if cover:
-                    changes["poster"] = "(will update)"
+                changes = build_rematch_changes(matched_entry, title)
 
                 start_date = matched_entry.get("startDate") or {}
                 al_year = matched_entry.get("seasonYear") or start_date.get("year")

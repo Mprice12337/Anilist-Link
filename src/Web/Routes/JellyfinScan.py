@@ -11,11 +11,16 @@ from fastapi.responses import JSONResponse, RedirectResponse
 
 from src.Clients.AnilistClient import AniListClient
 from src.Clients.JellyfinClient import JellyfinClient
-from src.Matching.TitleMatcher import TitleMatcher, get_primary_title
+from src.Matching.TitleMatcher import get_primary_title
 from src.Scanner.JellyfinMetadataScanner import JellyfinMetadataScanner
 from src.Scanner.MetadataScanner import ScanItemDetail, ScanProgress, ScanResults
-from src.Scanner.SeriesGroupBuilder import SeriesGroupBuilder
 from src.Web.App import spawn_background_task
+from src.Web.Routes.Helpers import (
+    build_rematch_changes,
+    create_group_builder,
+    create_title_matcher,
+    format_anilist_search_results,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +42,8 @@ async def _run_jellyfin_preview_scan(app_state: object) -> None:
     jellyfin_client = JellyfinClient(
         url=config.jellyfin.url, api_key=config.jellyfin.api_key
     )
-    title_matcher = TitleMatcher(similarity_threshold=0.75)
-    group_builder = SeriesGroupBuilder(db, anilist_client)
+    title_matcher = create_title_matcher()
+    group_builder = create_group_builder(db, anilist_client)
     scanner = JellyfinMetadataScanner(
         db, anilist_client, title_matcher, jellyfin_client, config, group_builder
     )
@@ -89,8 +94,8 @@ async def _run_jellyfin_live_scan(app_state: object) -> None:
     jellyfin_client = JellyfinClient(
         url=config.jellyfin.url, api_key=config.jellyfin.api_key
     )
-    title_matcher = TitleMatcher(similarity_threshold=0.75)
-    group_builder = SeriesGroupBuilder(db, anilist_client)
+    title_matcher = create_title_matcher()
+    group_builder = create_group_builder(db, anilist_client)
     scanner = JellyfinMetadataScanner(
         db, anilist_client, title_matcher, jellyfin_client, config, group_builder
     )
@@ -203,25 +208,7 @@ async def jellyfin_scan_search(request: Request) -> JSONResponse:
     anilist_client = request.app.state.anilist_client
     candidates = await anilist_client.search_anime(q, per_page=15)
 
-    results = []
-    for c in candidates:
-        title_obj = c.get("title", {})
-        start_date = c.get("startDate") or {}
-        cover = c.get("coverImage") or {}
-        results.append(
-            {
-                "id": c["id"],
-                "title_romaji": title_obj.get("romaji") or "",
-                "title_english": title_obj.get("english") or "",
-                "year": c.get("seasonYear") or start_date.get("year"),
-                "season": c.get("season"),
-                "format": c.get("format"),
-                "episodes": c.get("episodes"),
-                "cover_image": cover.get("medium") or cover.get("large") or "",
-                "status": c.get("status"),
-            }
-        )
-    return JSONResponse(results)
+    return JSONResponse(format_anilist_search_results(candidates))
 
 
 async def _run_jellyfin_scan_apply(
@@ -238,8 +225,8 @@ async def _run_jellyfin_scan_apply(
     jellyfin_client = JellyfinClient(
         url=config.jellyfin.url, api_key=config.jellyfin.api_key
     )
-    title_matcher = TitleMatcher(similarity_threshold=0.75)
-    group_builder = SeriesGroupBuilder(db, anilist_client)
+    title_matcher = create_title_matcher()
+    group_builder = create_group_builder(db, anilist_client)
     scanner = JellyfinMetadataScanner(
         db, anilist_client, title_matcher, jellyfin_client, config, group_builder
     )
@@ -477,20 +464,7 @@ async def jellyfin_scan_rematch(request: Request) -> RedirectResponse:
         title_obj = entry.get("title", {})
         start_date = entry.get("startDate") or {}
 
-        changes: dict[str, str] = {}
-        al_title = title_obj.get("english") or title_obj.get("romaji") or ""
-        if al_title and al_title != title:
-            changes["title"] = al_title
-        if entry.get("description"):
-            changes["summary"] = "(will update)"
-        if entry.get("genres"):
-            changes["genres"] = ", ".join(entry["genres"])
-        score = entry.get("averageScore")
-        if score:
-            changes["rating"] = str(round(score / 10, 1))
-        cover = (entry.get("coverImage") or {}).get("large", "")
-        if cover:
-            changes["poster"] = "(will update)"
+        changes = build_rematch_changes(entry, title)
 
         new_item = ScanItemDetail(
             rating_key=item_id,

@@ -10,7 +10,7 @@ import os
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from src.Matching.TitleMatcher import TitleMatcher, get_primary_title
+from src.Matching.TitleMatcher import get_primary_title
 from src.Scanner.LibraryRestructurer import (
     LibraryRestructurer,
     RestructurePlan,
@@ -19,8 +19,8 @@ from src.Scanner.LibraryRestructurer import (
     _find_video_subdirs,
 )
 from src.Scanner.LocalDirectoryScanner import LocalDirectoryScanner
-from src.Scanner.SeriesGroupBuilder import SeriesGroupBuilder
 from src.Web.App import spawn_background_task
+from src.Web.Routes.Helpers import create_group_builder, create_title_matcher
 
 logger = logging.getLogger(__name__)
 
@@ -350,8 +350,8 @@ async def _auto_scan_media_servers(app_state: object) -> None:
     if config.plex.url and config.plex.token:
         logger.info("Onboarding complete — starting Plex preview scan")
         plex_client = PlexClient(url=config.plex.url, token=config.plex.token)
-        title_matcher = TitleMatcher(similarity_threshold=0.75)
-        group_builder = SeriesGroupBuilder(db, anilist_client)
+        title_matcher = create_title_matcher()
+        group_builder = create_group_builder(db, anilist_client)
         scanner = MetadataScanner(
             db, anilist_client, title_matcher, plex_client, config, group_builder
         )
@@ -395,8 +395,8 @@ async def _auto_scan_media_servers(app_state: object) -> None:
         jf_client = JellyfinClient(
             url=config.jellyfin.url, api_key=config.jellyfin.api_key
         )
-        title_matcher = TitleMatcher(similarity_threshold=0.75)
-        group_builder = SeriesGroupBuilder(db, anilist_client)
+        title_matcher = create_title_matcher()
+        group_builder = create_group_builder(db, anilist_client)
         jf_scanner = JellyfinMetadataScanner(
             db, anilist_client, title_matcher, jf_client, config, group_builder
         )
@@ -487,8 +487,8 @@ async def _auto_index_local_libraries(app_state: object) -> None:
         library_paths,
     )
 
-    title_matcher = TitleMatcher(similarity_threshold=0.75)
-    group_builder = SeriesGroupBuilder(db, anilist_client)
+    title_matcher = create_title_matcher()
+    group_builder = create_group_builder(db, anilist_client)
     dir_scanner = LocalDirectoryScanner(
         db=db, anilist_client=anilist_client, title_matcher=title_matcher
     )
@@ -732,7 +732,7 @@ async def _run_skip_scan(
     db = app_state.db  # type: ignore[attr-defined]
     anilist_client = app_state.anilist_client  # type: ignore[attr-defined]
 
-    title_matcher = TitleMatcher(similarity_threshold=0.75)
+    title_matcher = create_title_matcher()
     dir_scanner = LocalDirectoryScanner(
         db=db, anilist_client=anilist_client, title_matcher=title_matcher
     )
@@ -995,7 +995,7 @@ async def skip_scan_commit(request: Request) -> JSONResponse:
         library_id = libraries[0]["id"]
 
     # Build series groups for matched items
-    group_builder = SeriesGroupBuilder(db, anilist_client)
+    group_builder = create_group_builder(db, anilist_client)
     group_ids: dict[int, int] = {}
     seen_groups: set[int] = set()
 
@@ -1115,7 +1115,7 @@ async def library_scan_confirm(request: Request):
         library_id = libraries[0]["id"]
 
     # Build series groups
-    group_builder = SeriesGroupBuilder(db, anilist_client)
+    group_builder = create_group_builder(db, anilist_client)
     group_ids: dict[int, int] = {}
     seen_groups: set[int] = set()
 
@@ -1243,7 +1243,7 @@ async def onboarding_restructure_analyze(request: Request) -> JSONResponse:
     )
 
     restructurer = await LibraryRestructurer.from_settings(db, anilist_client)
-    title_matcher = TitleMatcher(similarity_threshold=0.75)
+    title_matcher = create_title_matcher()
     scanner = LocalDirectoryScanner(
         db=db, anilist_client=anilist_client, title_matcher=title_matcher
     )

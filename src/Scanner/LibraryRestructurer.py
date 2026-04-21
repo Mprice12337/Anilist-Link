@@ -1470,20 +1470,30 @@ class LibraryRestructurer:
                     _, _group_entries = await self._group_builder.get_or_build_group(
                         si.anilist_id
                     )
-                    # Build a season_order → entry map for ALL formats (TV,
-                    # OVA, ONA, SPECIAL, MOVIE).  Each entry's season_order
-                    # is its authoritative season number after restructuring,
-                    # so direct matching is correct for both first-time runs
-                    # and re-runs on already-restructured media.
+                    # Build a season_order → entry map for ALL formats.
+                    # The file's S01/S02 numbering is relative to the MATCHED
+                    # entry, not the franchise root.  For example, if the user
+                    # matched to Fate/Zero (season_order=3 in the Fate group),
+                    # S01 should map to Fate/Zero, S02 to Fate/Zero 2nd Season
+                    # — NOT to Fate/stay night (season_order=1) and UBW (order=2).
+                    #
+                    # Find the matched entry's position, then offset so that
+                    # file-season 1 corresponds to the matched entry.
                     _so_map: dict[int, dict] = {}
+                    _matched_order = 1
                     for _e in _group_entries:
                         _so = _e.get("season_order")
                         if _so and _so > 0:
                             _so_map[_so] = _e
+                        if _e.get("anilist_id") == si.anilist_id and _so:
+                            _matched_order = _so
                     if len(_so_map) > 1:
                         for _sn in _all_distinct_seasons:
-                            if _sn in _so_map:
-                                sg_season_map[_sn] = _so_map[_sn]
+                            # Map file-season N to group entry at
+                            # (matched_position + N - 1)
+                            _target_order = _matched_order + _sn - 1
+                            if _target_order in _so_map:
+                                sg_season_map[_sn] = _so_map[_target_order]
                 except Exception as _exc:
                     logger.warning(
                         "Series group lookup failed for %s: %s", si.title, _exc

@@ -12,9 +12,7 @@ from src.Clients.AnilistClient import AniListClient
 from src.Clients.CrunchyrollClient import CrunchyrollClient
 from src.Clients.PlexClient import PlexClient
 from src.Database.Connection import DatabaseManager
-from src.Matching.TitleMatcher import TitleMatcher
 from src.Scanner.MetadataScanner import MetadataScanner
-from src.Scanner.SeriesGroupBuilder import SeriesGroupBuilder
 from src.Scheduler.Jobs import JobScheduler
 from src.Sync.CrunchyrollPreviewRunner import (
     CrunchyrollPreviewProgress,
@@ -28,6 +26,7 @@ from src.Sync.WatchSyncer import WatchSyncer
 from src.Utils.Config import AppConfig, load_config, load_config_from_db_settings
 from src.Utils.Logging import get_logger, setup_logging
 from src.Web.App import create_app
+from src.Web.Routes.Helpers import create_group_builder, create_title_matcher
 
 logger = get_logger(__name__)
 
@@ -53,7 +52,7 @@ async def crunchyroll_sync_task(
         db=db,
     )
 
-    title_matcher = TitleMatcher(similarity_threshold=0.75)
+    title_matcher = create_title_matcher()
     syncer = WatchSyncer(
         db, anilist_client, title_matcher, cr_client, config, dry_run=dry_run
     )
@@ -102,7 +101,7 @@ async def crunchyroll_preview_task(
         logger.warning("Crunchyroll preview skipped — no AniList accounts linked")
         return
 
-    title_matcher = TitleMatcher(similarity_threshold=0.75)
+    title_matcher = create_title_matcher()
     runner = CrunchyrollPreviewRunner(
         db,
         anilist_client,
@@ -159,8 +158,8 @@ async def plex_metadata_scan_task(
 
     logger.info("Starting Plex metadata scan%s", " (DRY RUN)" if dry_run else "")
     plex_client = PlexClient(url=config.plex.url, token=config.plex.token)
-    title_matcher = TitleMatcher(similarity_threshold=0.75)
-    group_builder = SeriesGroupBuilder(db, anilist_client)
+    title_matcher = create_title_matcher()
+    group_builder = create_group_builder(db, anilist_client)
     scanner = MetadataScanner(
         db,
         anilist_client,
@@ -191,8 +190,8 @@ async def library_reindex_task(
     from src.Scanner.LocalDirectoryScanner import LocalDirectoryScanner
 
     logger.info("Starting scheduled library re-index")
-    title_matcher = TitleMatcher(similarity_threshold=0.75)
-    group_builder = SeriesGroupBuilder(db, anilist_client)
+    title_matcher = create_title_matcher()
+    group_builder = create_group_builder(db, anilist_client)
     restructurer = LibraryRestructurer(db=db, group_builder=group_builder)
     dir_scanner = LocalDirectoryScanner(
         db=db, anilist_client=anilist_client, title_matcher=title_matcher
@@ -397,8 +396,8 @@ async def main() -> None:
                     JellyfinMetadataScanner,
                 )
 
-                title_matcher = TitleMatcher(similarity_threshold=0.75)
-                group_builder = SeriesGroupBuilder(db, app.state.anilist_client)
+                title_matcher = create_title_matcher()
+                group_builder = create_group_builder(db, app.state.anilist_client)
                 scanner = JellyfinMetadataScanner(
                     db,
                     app.state.anilist_client,

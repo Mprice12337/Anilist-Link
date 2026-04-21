@@ -1,40 +1,14 @@
 {% extends "base.html" %}
+{% from "macros.html" import render_title, flash_alerts %}
 {% block title %}Anilist-Link: {{ library.name }}{% endblock %}
 {% block container_class %}container-wide{% endblock %}
-
-{# ── Title rendering macro ── #}
-{% macro render_title(item, title_display) %}
-{% set romaji = item.title_romaji or "" %}
-{% set english = item.title_english or "" %}
-{% set folder = item.folder_name or "" %}
-{% if title_display == "english" %}
-    <span class="title-romaji">{{ english or romaji or item.anilist_title or folder }}</span>
-{% elif title_display == "both_romaji_primary" %}
-    <span class="title-romaji">{{ romaji or item.anilist_title or folder }}</span>
-    {% if english and english != (romaji or item.anilist_title or folder) %}
-    <span class="title-english">{{ english }}</span>
-    {% endif %}
-{% elif title_display == "both_english_primary" %}
-    <span class="title-romaji">{{ english or romaji or item.anilist_title or folder }}</span>
-    {% if romaji and romaji != (english or item.anilist_title or folder) %}
-    <span class="title-english">{{ romaji }}</span>
-    {% endif %}
-{% else %}{# romaji (default) #}
-    <span class="title-romaji">{{ romaji or item.anilist_title or folder }}</span>
-{% endif %}
-{% endmacro %}
 
 {% block content %}
 <div style="display:flex;align-items:center;gap:1rem;margin-bottom:0.5rem">
     <h1 style="margin:0">{{ library.name }}</h1>
 </div>
 
-{% if message %}
-<div class="alert alert-success">{{ message | replace("+", " ") }}</div>
-{% endif %}
-{% if error %}
-<div class="alert alert-danger">{{ error | replace("+", " ") }}</div>
-{% endif %}
+{{ flash_alerts(message, error) }}
 
 <!-- Change detection banner (hidden by default, shown by JS) -->
 <div class="change-banner" id="changeBanner" style="display:none">
@@ -187,7 +161,7 @@
         </div>
         <div class="library-card-info">
             {% if item.anilist_id %}
-            {{ render_title(item, title_display) }}
+            {{ render_title(item, title_display, item.anilist_title or item.folder_name or "") }}
             {% else %}
             <span class="title-romaji">{{ item.folder_name }}</span>
             {% endif %}
@@ -232,7 +206,7 @@
         {% endif %}
         <div class="library-list-info">
             {% if item.anilist_id %}
-            {{ render_title(item, title_display) }}
+            {{ render_title(item, title_display, item.anilist_title or item.folder_name or "") }}
             {% else %}
             <span class="title-romaji">{{ item.folder_name }}</span>
             {% endif %}
