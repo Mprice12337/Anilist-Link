@@ -17,12 +17,21 @@
 <div class="card" style="margin-bottom:1.5rem">
   <div class="card-header" style="display:flex;align-items:center;gap:0.75rem">
     <h2 style="margin:0;font-size:1.1rem">Jellyfin</h2>
-    {% if jellyfin_user %}
+    {% if not jellyfin_configured %}
+    <span class="badge badge-gray">Not configured</span>
+    {% elif jellyfin_user %}
     <span class="badge badge-green">Linked</span>
     {% else %}
     <span class="badge badge-gray">Not linked</span>
     {% endif %}
   </div>
+  {% if not jellyfin_configured %}
+  <div class="card-body service-disabled">
+    <p class="text-muted" style="margin:0">
+      Configure Jellyfin in <a href="/settings" class="service-disabled-link">Settings</a> to enable watch sync.
+    </p>
+  </div>
+  {% else %}
   <div class="card-body">
 
     {% if jellyfin_user %}
@@ -76,18 +85,28 @@
     {% endif %}
 
   </div>
+  {% endif %}
 </div>
 
 {# ── Plex ────────────────────────────────────────────────────────────── #}
 <div class="card" style="margin-bottom:1.5rem">
   <div class="card-header" style="display:flex;align-items:center;gap:0.75rem">
     <h2 style="margin:0;font-size:1.1rem">Plex</h2>
-    {% if plex_user %}
+    {% if not plex_configured %}
+    <span class="badge badge-gray">Not configured</span>
+    {% elif plex_user %}
     <span class="badge badge-green">Linked</span>
     {% else %}
     <span class="badge badge-gray">Not linked</span>
     {% endif %}
   </div>
+  {% if not plex_configured %}
+  <div class="card-body service-disabled">
+    <p class="text-muted" style="margin:0">
+      Configure Plex in <a href="/settings" class="service-disabled-link">Settings</a> to enable watch sync.
+    </p>
+  </div>
+  {% else %}
   <div class="card-body">
 
     {% if plex_user %}
@@ -140,6 +159,7 @@
     {% endif %}
 
   </div>
+  {% endif %}
 </div>
 
 {# ── Sync History ─────────────────────────────────────────────────────── #}
@@ -165,7 +185,12 @@
         <tbody id="sync-log-tbody">
           {% for entry in sync_log %}
           <tr id="log-row-{{ entry.id }}" {% if entry.undone_at %}class="text-muted" style="opacity:0.55"{% endif %}>
-            <td>
+            <td style="white-space:nowrap">
+              {% if entry.direction == 'to_media' %}
+              <span class="direction-arrow" title="AniList → {{ entry.source|title }}">↓</span>
+              {% else %}
+              <span class="direction-arrow" title="{{ entry.source|title }} → AniList">↑</span>
+              {% endif %}
               <span class="badge {% if entry.source == 'plex' %}badge-orange{% else %}badge-blue{% endif %}">
                 {{ entry.source|title }}
               </span>
@@ -188,7 +213,9 @@
               {{ entry.applied_at[:16] if entry.applied_at else '—' }}
             </td>
             <td>
-              {% if entry.undone_at %}
+              {% if entry.direction == 'to_media' %}
+              {# Backfill entries can't be undone — no API to unmark in Plex/Jellyfin #}
+              {% elif entry.undone_at %}
               <span class="text-muted" style="font-size:0.8rem">Undone</span>
               {% else %}
               <button class="btn btn-sm btn-danger"
@@ -205,7 +232,7 @@
     </div>
     {% else %}
     <p class="text-muted" style="margin:1rem;font-size:0.9rem">
-      No sync history yet. Run a Plex or Jellyfin → AniList sync to see entries here.
+      No sync history yet. Run a sync to see entries here.
     </p>
     {% endif %}
   </div>
@@ -228,6 +255,21 @@
 </div>
 
 <style>
+.service-disabled {
+  opacity: 0.5;
+  padding: 1.5rem;
+}
+.service-disabled-link {
+  color: var(--accent, #6366f1);
+  text-decoration: underline;
+}
+.direction-arrow {
+  display: inline-block;
+  width: 1.2em;
+  text-align: center;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
 .toggle-switch {
   position: relative;
   display: inline-block;
@@ -488,6 +530,10 @@
       showAlert("Error: " + (data.error || "unknown"), "error");
     }
   };
+
+  // ── Auto-load user lists on page load ──────────────────────────────── //
+  if (document.getElementById("jf-user-select")) { loadJellyfinUsers(); }
+  if (document.getElementById("plex-account-select")) { loadPlexAccounts(); }
 
 })();
 </script>

@@ -277,6 +277,30 @@ async def plex_scan_apply(request: Request) -> RedirectResponse:
     await db.dismiss_notifications_by_url("/scan/plex/results")
     await db.clear_dismissed_notifications()
 
+    # If onboarding set a pending backfill flag, run AniList→Plex in background
+    pending = await db.get_setting("onboarding.pending_backfill_plex")
+    if pending == "true":
+        await db.set_setting("onboarding.pending_backfill_plex", "")
+
+        async def _run_plex_backfill() -> None:
+            from src.Sync.PlexWatchSyncer import PlexWatchSyncer
+
+            bf_client = PlexClient(url=config.plex.url, token=config.plex.token)
+            try:
+                syncer = PlexWatchSyncer(
+                    db=db,
+                    anilist_client=anilist_client,
+                    plex_client=bf_client,
+                )
+                bf_results = await syncer.sync_to_plex()
+                logger.info("Post-onboarding Plex backfill: %s", bf_results)
+            except Exception:
+                logger.exception("Post-onboarding Plex backfill failed")
+            finally:
+                await bf_client.close()
+
+        spawn_background_task(request.app.state, _run_plex_backfill())
+
     msg = f"Applied+metadata+to+{applied}+shows"
     if errors:
         msg += f"+({errors}+errors)"

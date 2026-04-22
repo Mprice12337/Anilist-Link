@@ -324,6 +324,25 @@ async def _run_jellyfin_scan_apply(
         progress.current_title = f"Applied metadata to {applied} shows" + (
             f" ({errors} errors)" if errors else ""
         )
+
+        # If onboarding set a pending backfill flag, run AniList→Jellyfin now
+        pending = await db.get_setting("onboarding.pending_backfill_jellyfin")
+        if pending == "true":
+            await db.set_setting("onboarding.pending_backfill_jellyfin", "")
+            logger.info("Triggering post-onboarding AniList → Jellyfin backfill")
+            try:
+                from src.Sync.JellyfinWatchSyncer import JellyfinWatchSyncer
+
+                syncer = JellyfinWatchSyncer(
+                    db=db,
+                    anilist_client=anilist_client,
+                    jellyfin_client=jellyfin_client,
+                )
+                bf_results = await syncer.sync_to_jellyfin()
+                logger.info("Post-onboarding Jellyfin backfill: %s", bf_results)
+            except Exception:
+                logger.exception("Post-onboarding Jellyfin backfill failed")
+
     except asyncio.CancelledError:
         logger.info("Jellyfin scan-apply cancelled after %d items", applied)
         progress.status = "cancelled"

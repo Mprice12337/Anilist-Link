@@ -10,7 +10,7 @@ from src.Database.Models import INDEXES, TABLES
 
 logger = logging.getLogger(__name__)
 
-LATEST_VERSION = 5
+LATEST_VERSION = 6
 
 
 async def run_migrations(db: aiosqlite.Connection) -> None:
@@ -43,6 +43,10 @@ async def run_migrations(db: aiosqlite.Connection) -> None:
 
     if current < 5:
         await _apply_v5(db)
+        current = 5
+
+    if current < 6:
+        await _apply_v6(db)
 
 
 async def _get_current_version(db: aiosqlite.Connection) -> int:
@@ -126,6 +130,7 @@ async def _apply_column_guards(db: aiosqlite.Connection) -> None:
         ("anilist_cache", "imdb_id", "TEXT NOT NULL DEFAULT ''"),
         ("anilist_cache", "tvdb_id", "TEXT NOT NULL DEFAULT ''"),
         ("anilist_cache", "tvmaze_id", "TEXT NOT NULL DEFAULT ''"),
+        ("watch_sync_log", "direction", "TEXT NOT NULL DEFAULT 'to_anilist'"),
     ]
 
     added: list[str] = []
@@ -268,3 +273,23 @@ async def _apply_v5(db: aiosqlite.Connection) -> None:
     await db.execute("INSERT INTO schema_version (version) VALUES (?)", (5,))
     await db.commit()
     logger.info("Migration v5 applied: series_group_entries title columns added")
+
+
+async def _apply_v6(db: aiosqlite.Connection) -> None:
+    """Add direction column to watch_sync_log.
+
+    Distinguishes forward sync (media→AniList, 'to_anilist') from
+    backfill (AniList→media, 'to_media') so the UI can display both
+    directions and hide the Undo button for backfill entries.
+    """
+    logger.info("Applying migration v6: adding direction to watch_sync_log")
+    try:
+        await db.execute(
+            "ALTER TABLE watch_sync_log ADD COLUMN direction "
+            "TEXT NOT NULL DEFAULT 'to_anilist'"
+        )
+    except aiosqlite.OperationalError:
+        pass  # Already present on fresh DBs
+    await db.execute("INSERT INTO schema_version (version) VALUES (?)", (6,))
+    await db.commit()
+    logger.info("Migration v6 applied: watch_sync_log direction column added")

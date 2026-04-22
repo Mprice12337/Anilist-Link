@@ -54,6 +54,30 @@ _GENERIC_FOLDER_RE = re.compile(
 _GENERIC_SEASON_RE = re.compile(r"^season\s*\d+$", re.IGNORECASE)
 
 
+def _build_provider_ids(
+    *,
+    anilist_id: int = 0,
+    imdb_id: str = "",
+    tvdb_id: str = "",
+    tvmaze_id: str = "",
+) -> dict[str, str]:
+    """Build a Jellyfin-compatible ProviderIds dict from raw IDs.
+
+    Jellyfin stores provider IDs keyed by provider name (e.g. ``"Imdb"``,
+    ``"Tvdb"``).  Only non-empty values are included.
+    """
+    ids: dict[str, str] = {}
+    if anilist_id:
+        ids["AniList"] = str(anilist_id)
+    if imdb_id:
+        ids["Imdb"] = imdb_id
+    if tvdb_id:
+        ids["Tvdb"] = str(tvdb_id)
+    if tvmaze_id:
+        ids["TvMaze"] = str(tvmaze_id)
+    return ids
+
+
 def _derive_folder_name(show: object) -> str:  # type: ignore[type-arg]
     """Derive the best search-friendly name for a Jellyfin item.
 
@@ -798,6 +822,12 @@ class JellyfinMetadataScanner:
                 )
                 return
 
+            season_provider_ids = _build_provider_ids(
+                anilist_id=anilist_id,
+                imdb_id=series_imdb_id or "",
+                tvdb_id=series_tvdb_id or "",
+                tvmaze_id=series_tvmaze_id or "",
+            )
             try:
                 await self._jellyfin.update_item_metadata(
                     item_id=season_item_id,
@@ -807,6 +837,7 @@ class JellyfinMetadataScanner:
                     genres=season_genres,
                     rating=season_rating,
                     studio=season_studio,
+                    provider_ids=season_provider_ids,
                 )
             except Exception:
                 logger.exception(
@@ -980,9 +1011,17 @@ class JellyfinMetadataScanner:
         # Provider IDs sourced from our TVMaze cache — written into tvshow.nfo
         # and season.nfo so all installed plugins (TMDB, TVDB, OMDB, TVMaze)
         # can resolve per-episode metadata after restructure renames folders.
+        # Also pushed via the Jellyfin API so the IDs appear in the metadata
+        # editor immediately without requiring NFO plugin support.
         p_imdb_id = parent_meta.get("imdb_id") or ""
         p_tvdb_id = parent_meta.get("tvdb_id") or ""
         p_tvmaze_id = parent_meta.get("tvmaze_id") or ""
+        p_provider_ids = _build_provider_ids(
+            anilist_id=effective_parent_id,
+            imdb_id=p_imdb_id,
+            tvdb_id=p_tvdb_id,
+            tvmaze_id=p_tvmaze_id,
+        )
 
         if dry_run:
             logger.info(
@@ -1003,6 +1042,7 @@ class JellyfinMetadataScanner:
                 genres=genres,
                 rating=rating,
                 studio=studio_name,
+                provider_ids=p_provider_ids,
             )
         except Exception:
             logger.exception(

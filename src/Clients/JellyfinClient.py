@@ -258,6 +258,7 @@ class JellyfinClient:
         genres: list[str] | None = None,
         rating: float | None = None,
         studio: str | None = None,
+        provider_ids: dict[str, str] | None = None,
     ) -> None:
         """Write AniList metadata fields to a Jellyfin item.
 
@@ -266,6 +267,11 @@ class JellyfinClient:
         rejects the full ``BaseItemDto`` format (400 Bad Request), so only the
         fields accepted by the update endpoint are sent — no ``ImageTags``,
         ``MediaStreams``, ``UserData``, ``GenreItems``, etc.
+
+        *provider_ids* is a mapping of Jellyfin provider names to their IDs
+        (e.g. ``{"Imdb": "tt123", "Tvdb": "456", "AniList": "789"}``).
+        These are merged into the existing ProviderIds so previously set
+        values are preserved.
         """
         current = await self.get_item(item_id)
         if not current:
@@ -302,14 +308,23 @@ class JellyfinClient:
             body["CommunityRating"] = round(rating, 1)
         if studio is not None:
             body["Studios"] = [{"Name": studio}]
+        if provider_ids:
+            existing = body["ProviderIds"]
+            existing.update(provider_ids)
+            body["ProviderIds"] = existing
 
-        # Lock the fields we wrote so Jellyfin auto-refresh doesn't overwrite
-        locked: list[str] = list(body["LockedFields"])
-        for f in ("Name", "Overview", "Genres", "Studios"):
-            if f not in locked:
-                locked.append(f)
-        body["LockData"] = True
-        body["LockedFields"] = locked
+        # Actively unlock so previously-locked items (from our old code or
+        # manual GUI locks) allow metadata to propagate on Jellyfin rescans.
+        body["LockData"] = False
+        body["LockedFields"] = []
+
+        # To re-enable locking in the future, replace the two lines above with:
+        # locked: list[str] = list(body["LockedFields"])
+        # for f in ("Name", "Overview", "Genres", "Studios"):
+        #     if f not in locked:
+        #         locked.append(f)
+        # body["LockData"] = True
+        # body["LockedFields"] = locked
 
         resp = await self._http.post(f"/Items/{item_id}", json=body)
         resp.raise_for_status()
@@ -1017,14 +1032,16 @@ class JellyfinClient:
         imdb_id: str | None = None,
         tvdb_id: str | None = None,
         tvmaze_id: str | None = None,
-        lock_data: bool = True,
+        lock_data: bool = False,
     ) -> None:
         """Write a tvshow.nfo into the show's root directory.
 
         Writes AniList-sourced metadata so Jellyfin classifies the folder as a
         TV show and our custom series/season arrangement is preserved.
-        ``<lockdata>true</lockdata>`` prevents Jellyfin's scheduled metadata
-        refreshes (e.g. TVDB) from overwriting show-level data.
+        When *lock_data* is True, ``<lockdata>true</lockdata>`` prevents
+        Jellyfin's scheduled metadata refreshes from overwriting show-level
+        data — currently disabled by default because it also blocks our own
+        updates from propagating on rescans.
 
         Walks up the hierarchy via ``_find_show_root_folder`` so the NFO always
         lands at the top-level show folder regardless of which child item
@@ -1124,13 +1141,14 @@ class JellyfinClient:
         series_imdb_id: str | None = None,
         series_tvdb_id: str | None = None,
         series_tvmaze_id: str | None = None,
-        lock_data: bool = True,
+        lock_data: bool = False,
     ) -> None:
         """Write a season.nfo into the item's own directory.
 
         Writes AniList metadata for this specific season entry so each season
         carries its own title, description, and AniList ID rather than
-        inheriting the parent show's TVDB data.  ``<lockdata>true</lockdata>``
+        inheriting the parent show's TVDB data.  When *lock_data* is True,
+        ``<lockdata>true</lockdata>``
         prevents Jellyfin from overwriting season-level metadata on refresh.
 
         ``series_imdb_id``, ``series_tvdb_id``, and ``series_tvmaze_id`` are
@@ -1212,22 +1230,39 @@ class JellyfinClient:
         except Exception as exc:
             logger.debug("Could not write season.nfo for item %s: %s", item_id, exc)
 
-    async def refresh_library(self, library_ids: list[str] | None = None) -> None:
+    async def refresh_library(
+        self,
+        library_ids: list[str] | None = None,
+        replace_all_metadata: bool = False,
+    ) -> None:
         """Trigger a Jellyfin library refresh.
 
         If *library_ids* is provided, only those virtual-folder items are
         refreshed (``POST /Items/{id}/Refresh?Recursive=true``).
         Otherwise the global ``POST /Library/Refresh`` is used.
+
+        When *replace_all_metadata* is True the per-item refresh uses
+        ``MetadataRefreshMode=FullRefresh&ReplaceAllMetadata=true`` so
+        NFO data takes priority and gaps are filled by other providers.
         """
+        params: dict[str, str] = {"Recursive": "true"}
+        if replace_all_metadata:
+            params["MetadataRefreshMode"] = "FullRefresh"
+            params["ReplaceAllMetadata"] = "true"
+
         if library_ids:
             for lib_id in library_ids:
                 try:
                     resp = await self._http.post(
                         f"/Items/{lib_id}/Refresh",
-                        params={"Recursive": "true"},
+                        params=params,
                     )
                     resp.raise_for_status()
-                    logger.info("Triggered Jellyfin library refresh for %s", lib_id)
+                    logger.info(
+                        "Triggered Jellyfin library refresh for %s%s",
+                        lib_id,
+                        " (replace all)" if replace_all_metadata else "",
+                    )
                 except Exception:
                     logger.debug(
                         "Failed to trigger Jellyfin library refresh for %s",
@@ -1343,6 +1378,7 @@ class JellyfinClient:
         app_state: object,
         library_ids: list[str] | None = None,
         timeout: float = 300.0,
+        replace_all_metadata: bool = False,
     ) -> bool:
         """Trigger a library refresh and wait for completion.
 
@@ -1350,7 +1386,10 @@ class JellyfinClient:
         available (instant notification), falling back to HTTP polling via
         :meth:`refresh_library_and_wait` otherwise.
         """
-        await self.refresh_library(library_ids=library_ids)
+        await self.refresh_library(
+            library_ids=library_ids,
+            replace_all_metadata=replace_all_metadata,
+        )
 
         listener = getattr(app_state, "jellyfin_listener", None)
         if listener is not None:

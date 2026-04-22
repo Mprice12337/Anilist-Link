@@ -18,6 +18,7 @@ from src.Scanner.LibraryRestructurer import (
     LibraryRestructurer,
     RestructurePlan,
     RestructureProgress,
+    ShowInput,
 )
 from src.Scanner.LocalDirectoryScanner import LocalDirectoryScanner
 from src.Web.App import spawn_background_task
@@ -1066,38 +1067,123 @@ async def restructure_rematch(request: Request) -> JSONResponse:
         (anilist_id,),
     )
 
-    # Clear any prior plan + notification so the preview doesn't render stale
-    # data while the re-analyze runs.
-    app_state.restructure_plan = None
-    app_state.onboarding_restructure_plan = None
-    # Clear stale exec_progress so /api/restructure/progress doesn't report
-    # a prior execution as "complete" and redirect the user away.
-    app_state.restructure_exec_progress = None
-    await db.dismiss_notifications_by_url("/restructure/preview")
-    await db.clear_dismissed_notifications()
-
-    progress = RestructureProgress(status="running")
-    app_state.restructure_progress = progress
-
-    spawn_background_task(
-        app_state,
-        _run_analysis_background(
-            app_state,
-            source_dirs=list(params.get("source_dirs") or []),
-            output_dir=params.get("output_dir") or "",
-            level=params.get("level") or "full_restructure",
-            force_rescan=False,
-            templates=dict(params.get("templates") or {}),
-        ),
-        task_key="restructure_analysis",
+    # --- In-place plan patch (no full re-analyze) ---
+    # Build a ShowInput for the rematched entry using fresh metadata,
+    # run the restructurer on just that one show, then splice the result
+    # into the existing plan.
+    plan: RestructurePlan | None = getattr(app_state, "restructure_plan", None)
+    onb_plan: RestructurePlan | None = getattr(
+        app_state, "onboarding_restructure_plan", None
     )
+    active_plan = plan or onb_plan
+    if not active_plan:
+        return JSONResponse(
+            {"ok": False, "error": "No active restructure plan to patch"},
+            status_code=409,
+        )
+
+    # Build a ShowInput for each rematched path
+    cache = await db.get_cached_metadata(anilist_id)
+    romaji = (cache.get("title_romaji") or "") if cache else ""
+    english = (cache.get("title_english") or "") if cache else ""
+    show_year = (cache.get("year") or 0) if cache else 0
+    show_format = ""
+    show_episodes: int | None = None
+    # Try to get format from the AniList entry we just fetched
+    if entry:
+        show_format = entry.get("format", "") or ""
+        show_episodes = entry.get("episodes")
+
+    rematched_shows: list[ShowInput] = []
+    for path in source_paths:
+        folder_name = os.path.basename(path.rstrip("/")) or path
+        rematched_shows.append(
+            ShowInput(
+                title=folder_name,
+                local_path=path,
+                source_id=path,
+                anilist_id=anilist_id,
+                anilist_title=anilist_title,
+                year=show_year,
+                anilist_title_romaji=romaji,
+                anilist_title_english=english,
+                anilist_format=show_format,
+                anilist_episodes=show_episodes,
+            )
+        )
+
+    # Run the restructurer on just the rematched show(s) to get a mini-plan
+    templates = dict(params.get("templates") or {})
+    if templates:
+        group_builder = create_group_builder(db, anilist_client)
+        restructurer = LibraryRestructurer(
+            db=db,
+            group_builder=group_builder,
+            file_template=templates.get("naming.file_template", ""),
+            folder_template=templates.get("naming.folder_template", ""),
+            season_folder_template=templates.get("naming.season_folder_template", ""),
+            movie_file_template=templates.get("naming.movie_file_template", ""),
+            title_pref=templates.get("app.title_display", "romaji"),
+            illegal_char_replacement=templates.get(
+                "naming.illegal_char_replacement", ""
+            ),
+        )
+    else:
+        restructurer = await LibraryRestructurer.from_settings(db, anilist_client)
+
+    output_dir = params.get("output_dir") or ""
+    level = params.get("level") or "full_restructure"
+    mini_progress = RestructureProgress(status="running")
+    mini_plan = await restructurer.analyze(
+        rematched_shows, mini_progress, level=level, output_dir=output_dir or None
+    )
+
+    # Patch the active plan: remove old entries for these paths, insert new ones
+    path_set = set(source_paths)
+
+    # Remove from groups (match by source_folders or current_folder)
+    old_file_count = 0
+    new_groups = []
+    for g in active_plan.groups:
+        g_paths = set(g.source_folders) if g.source_folders else set()
+        if g.current_folder:
+            g_paths.update(p.strip() for p in g.current_folder.split(",") if p.strip())
+        if g_paths & path_set:
+            old_file_count += len(g.file_moves)
+        else:
+            new_groups.append(g)
+    active_plan.groups = new_groups
+
+    # Remove from unmatched_shows
+    active_plan.unmatched_shows = [
+        s
+        for s in active_plan.unmatched_shows
+        if s.local_path not in path_set and s.source_id not in path_set
+    ]
+
+    # Add new groups from the mini-plan
+    active_plan.groups.extend(mini_plan.groups)
+
+    # Add any new unmatched shows (shouldn't happen for a manual match, but safe)
+    active_plan.unmatched_shows.extend(mini_plan.unmatched_shows)
+
+    # Recalculate totals
+    active_plan.total_groups = len(active_plan.groups)
+    active_plan.total_files = sum(len(g.file_moves) for g in active_plan.groups)
+
+    # Ensure both plan references point to the patched plan
+    app_state.restructure_plan = active_plan
+    app_state.onboarding_restructure_plan = active_plan
 
     logger.info(
-        "Restructure rematch: anilist_id=%d for %d folder(s) — re-analyzing",
+        "Restructure rematch: anilist_id=%d for %d folder(s) — "
+        "patched plan in-place (%d groups, %d files)",
         anilist_id,
         len(source_paths),
+        active_plan.total_groups,
+        active_plan.total_files,
     )
-    return JSONResponse({"ok": True, "redirect": "/restructure/progress"})
+    return JSONResponse({"ok": True})
 
 
 @router.post("/restructure/cancel")

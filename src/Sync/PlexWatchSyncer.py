@@ -294,6 +294,17 @@ class PlexWatchSyncer(WatchSyncBase):
                     marked,
                     anilist_id,
                 )
+                await self._db.insert_watch_sync_log_entry(
+                    source="plex",
+                    user_id=anilist_user_id,
+                    anilist_id=anilist_id,
+                    show_title=mapping.get("anilist_title", ""),
+                    before_status="",
+                    before_progress=0,
+                    after_status="played",
+                    after_progress=progress,
+                    direction="to_media",
+                )
                 results["updated"] += 1
             else:
                 results["skipped"] += 1

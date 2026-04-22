@@ -1643,13 +1643,14 @@ class DatabaseManager:
         before_progress: int,
         after_status: str,
         after_progress: int,
+        direction: str = "to_anilist",
     ) -> int:
         """Insert one watch_sync_log row. Returns the new row id."""
         cursor = await self.execute(
             """INSERT INTO watch_sync_log
                    (source, user_id, anilist_id, show_title, before_status,
-                    before_progress, after_status, after_progress)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    before_progress, after_status, after_progress, direction)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 source,
                 user_id,
@@ -1659,6 +1660,7 @@ class DatabaseManager:
                 before_progress,
                 after_status,
                 after_progress,
+                direction,
             ),
         )
         await self.db.commit()

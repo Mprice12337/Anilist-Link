@@ -347,8 +347,12 @@ async def _run_jellyfin_apply_all(
             finally:
                 progress.scanned = applied + errors
 
-        progress.current_title = "Refreshing Jellyfin to pick up NFO changes…"
-        await jellyfin_client.refresh_and_wait(app_state, library_ids=apply_library_ids)
+        progress.current_title = "Refreshing Jellyfin (replace all metadata)…"
+        await jellyfin_client.refresh_and_wait(
+            app_state,
+            library_ids=apply_library_ids,
+            replace_all_metadata=True,
+        )
 
         progress.current_title = "Removing virtual season folders…"
         await jellyfin_client.delete_virtual_seasons(apply_library_ids)

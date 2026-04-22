@@ -290,17 +290,53 @@ class JellyfinWatchSyncer(WatchSyncBase):
     async def _get_or_create_mapping_id(
         self, series_id: str, anilist_id: int, season_number: int
     ) -> int:
-        """Return the media_mappings id for a season-level jellyfin source_id."""
-        # Season-level Jellyfin mappings aren't stored separately (unlike Plex).
-        # We look up the main mapping and use a computed key.
+        """Return a real media_mappings id for a season-level jellyfin entry.
+
+        For season 1 (or shows without a series group), returns the existing
+        mapping for the series.  For season N > 1, creates a dedicated
+        mapping row with source_id ``{series_id}::season::{N}`` so that
+        sync_state FK constraints are satisfied.
+        """
+        if season_number <= 1:
+            row = await self._db.fetch_one(
+                "SELECT id FROM media_mappings"
+                " WHERE source='jellyfin' AND source_id=?",
+                (series_id,),
+            )
+            if row:
+                return row["id"]
+
+        # Season-qualified source_id for sequel seasons
+        season_source_id = f"{series_id}::season::{season_number}"
         row = await self._db.fetch_one(
-            "SELECT id FROM media_mappings WHERE source='jellyfin' AND source_id=?",
-            (series_id,),
+            "SELECT id FROM media_mappings" " WHERE source='jellyfin' AND source_id=?",
+            (season_source_id,),
         )
         if row:
-            # Use a unique offset to distinguish each season's sync_state
-            return row["id"] * 1000 + season_number
-        return anilist_id
+            return row["id"]
+
+        # Look up the parent mapping to inherit its series_group_id
+        parent = await self._db.fetch_one(
+            "SELECT series_group_id, anilist_title FROM media_mappings"
+            " WHERE source='jellyfin' AND source_id=?",
+            (series_id,),
+        )
+        group_id = parent["series_group_id"] if parent else None
+
+        cursor = await self._db.execute(
+            """INSERT INTO media_mappings
+                   (source, source_id, anilist_id, anilist_title,
+                    match_method, series_group_id, season_number)
+               VALUES ('jellyfin', ?, ?, ?, 'sync_state', ?, ?)""",
+            (
+                season_source_id,
+                anilist_id,
+                parent.get("anilist_title", "") if parent else "",
+                group_id,
+                season_number,
+            ),
+        )
+        return cursor.lastrowid
 
     # ==================================================================
     # AniList → Jellyfin
@@ -421,9 +457,10 @@ class JellyfinWatchSyncer(WatchSyncBase):
                 results["skipped"] += 1
                 return
             await self._jellyfin.mark_episode_played(series_id, jf_user_id)
+            movie_name = jf_item.get("Name", series_id)
             logger.info(
                 "Marked Movie '%s' as played in Jellyfin for AniList #%d",
-                jf_item.get("Name", series_id),
+                movie_name,
                 anilist_id,
             )
             if mapping_id:
@@ -433,32 +470,62 @@ class JellyfinWatchSyncer(WatchSyncBase):
                     last_episode=progress,
                     status=entry.get("list_status", "COMPLETED"),
                 )
+            await self._db.insert_watch_sync_log_entry(
+                source="jellyfin",
+                user_id=anilist_user_id,
+                anilist_id=anilist_id,
+                show_title=mapping_title or movie_name,
+                before_status="",
+                before_progress=0,
+                after_status="played",
+                after_progress=progress,
+                direction="to_media",
+            )
             results["updated"] += 1
             return
 
         # Resolve season number → Jellyfin season UUID
         season_item_id: str | None = None
+        episode_offset: int = 0
         if season_number is not None:
             season_id_map = await self._build_season_id_map(series_id)
             season_item_id = season_id_map.get(season_number)
             if season_item_id is None:
+                # Structure C fallback: Jellyfin has fewer seasons than AniList
+                # entries (e.g. one season with 23 eps covering two AniList
+                # entries).  Fall back to the first season (or whole series)
+                # and use an episode offset based on prior group entries.
+                episode_offset = await self._calc_episode_offset(
+                    anilist_id, season_number
+                )
+                if episode_offset < 0:
+                    logger.debug(
+                        "AniList #%d: season %d not in Jellyfin and no offset "
+                        "could be calculated — skipping",
+                        anilist_id,
+                        season_number,
+                    )
+                    results["skipped"] += 1
+                    return
+                # Use Season 1 if it exists, otherwise fetch all episodes
+                season_item_id = season_id_map.get(1)
                 logger.debug(
-                    "AniList #%d: season %d not found in Jellyfin series %s",
+                    "AniList #%d: season %d not in Jellyfin — Structure C "
+                    "fallback with offset=%d",
                     anilist_id,
                     season_number,
-                    series_id,
+                    episode_offset,
                 )
-                results["skipped"] += 1
-                return
 
         logger.debug(
-            "AniList #%d → JF series=%s season=%s uuid=%s user=%s progress=%d",
+            "AniList #%d → JF series=%s season=%s uuid=%s user=%s progress=%d offset=%d",
             anilist_id,
             series_id,
             season_number,
             season_item_id,
             jf_user_id,
             progress,
+            episode_offset,
         )
         episodes = await self._jellyfin.get_series_episodes_with_userdata(
             series_id, jf_user_id, season_item_id=season_item_id
@@ -474,7 +541,7 @@ class JellyfinWatchSyncer(WatchSyncBase):
             results["skipped"] += 1
             return
 
-        episodes_to_mark = episodes[:progress]
+        episodes_to_mark = episodes[episode_offset : episode_offset + progress]
         marked = 0
         for ep in episodes_to_mark:
             if not ep.get("UserData", {}).get("Played", False):
@@ -499,6 +566,17 @@ class JellyfinWatchSyncer(WatchSyncBase):
                 marked,
                 anilist_id,
                 mapping_title,
+            )
+            await self._db.insert_watch_sync_log_entry(
+                source="jellyfin",
+                user_id=anilist_user_id,
+                anilist_id=anilist_id,
+                show_title=mapping_title,
+                before_status="",
+                before_progress=0,
+                after_status="played",
+                after_progress=progress,
+                direction="to_media",
             )
             results["updated"] += 1
         else:
@@ -578,14 +656,16 @@ class JellyfinWatchSyncer(WatchSyncBase):
             )
             return None, None, "", 0
 
-        # Synthetic mapping_id mirrors _get_or_create_mapping_id so forward
-        # sync and backfill share the same sync_state row.
-        synth_id = parent_mapping["id"] * 1000 + season_number_sq
+        # Use _get_or_create_mapping_id so forward sync and backfill share
+        # the same real mapping row (and FK constraints are satisfied).
+        real_mapping_id = await self._get_or_create_mapping_id(
+            parent_id, anilist_id, season_number_sq
+        )
         return (
             parent_id,
             season_number_sq,
             parent_mapping.get("anilist_title", ""),
-            synth_id,
+            real_mapping_id,
         )
 
     async def _build_season_id_map(self, series_id: str) -> dict[int, str]:
@@ -596,6 +676,43 @@ class JellyfinWatchSyncer(WatchSyncBase):
         """
         seasons = await self._jellyfin.get_show_seasons(series_id)
         return {s.index: s.item_id for s in seasons if s.index >= 1}
+
+    async def _calc_episode_offset(self, anilist_id: int, season_number: int) -> int:
+        """Calculate the episode offset for a Structure C fallback.
+
+        When Jellyfin has one season but AniList splits the show into multiple
+        entries (e.g. "86 Part 1" = 11 eps, "86 Part 2" = 12 eps, all under
+        one Jellyfin Season 1 with 23 episodes), the offset for Part 2 is
+        the sum of episode counts of all prior entries in the series group.
+
+        Returns -1 if the offset cannot be determined.
+        """
+        sge_row = await self._db.fetch_one(
+            "SELECT group_id, season_order FROM series_group_entries"
+            " WHERE anilist_id=?",
+            (anilist_id,),
+        )
+        if not sge_row:
+            return -1
+
+        group_id: int = sge_row["group_id"]
+        prior_entries = await self._db.fetch_all(
+            """SELECT episodes FROM series_group_entries
+               WHERE group_id=? AND season_order < ?
+               ORDER BY season_order ASC""",
+            (group_id, season_number),
+        )
+        if not prior_entries:
+            return -1
+
+        offset = 0
+        for entry in prior_entries:
+            ep_count = entry.get("episodes")
+            if ep_count is None:
+                # Cannot reliably calculate offset without episode counts
+                return -1
+            offset += ep_count
+        return offset
 
     async def _get_jellyfin_mappings(self) -> list[dict[str, Any]]:
         """Return all media_mappings rows for source='jellyfin'."""

@@ -661,6 +661,25 @@
                             <div class="text-muted" style="font-size:0.85rem">No libraries found.</div>
                         </div>
                     </div>
+                    <div style="margin-top:1rem; margin-bottom:1rem">
+                        <div class="section-label">Watch Sync Account</div>
+                        <p class="text-muted" style="font-size:0.85rem; margin:0 0 0.5rem">
+                            Link your Plex account to sync watch progress with AniList.
+                        </p>
+                        <div id="plex-ws-linked" class="hidden" style="display:flex;align-items:center;gap:0.5rem">
+                            <span class="badge badge-success">Linked</span>
+                            <span id="plex-ws-linked-name" style="font-weight:500"></span>
+                            <button class="btn btn-sm btn-danger" onclick="unlinkOnboardingPlex()">Unlink</button>
+                        </div>
+                        <div id="plex-ws-unlinked" style="display:flex;gap:0.5rem;align-items:flex-end;flex-wrap:wrap">
+                            <div>
+                                <select id="plex-ws-account-select" class="form-input" style="min-width:180px">
+                                    <option value="">Loading accounts…</option>
+                                </select>
+                            </div>
+                            <button class="btn btn-primary btn-sm" onclick="linkOnboardingPlex()">Link Account</button>
+                        </div>
+                    </div>
                     <div style="display:flex;align-items:center;gap:0.75rem">
                         <button class="btn btn-primary btn-sm" onclick="savePlexSettings()">Save Plex Settings</button>
                         <span id="plex-save-badge" class="test-badge hidden"></span>
@@ -727,6 +746,25 @@
                         <div class="section-label">Libraries to sync</div>
                         <div class="library-check-list" id="jf-library-list">
                             <div class="text-muted" style="font-size:0.85rem">No libraries found.</div>
+                        </div>
+                    </div>
+                    <div style="margin-top:1rem; margin-bottom:1rem">
+                        <div class="section-label">Watch Sync Account</div>
+                        <p class="text-muted" style="font-size:0.85rem; margin:0 0 0.5rem">
+                            Link your Jellyfin user to sync watch progress with AniList.
+                        </p>
+                        <div id="jf-ws-linked" class="hidden" style="display:flex;align-items:center;gap:0.5rem">
+                            <span class="badge badge-success">Linked</span>
+                            <span id="jf-ws-linked-name" style="font-weight:500"></span>
+                            <button class="btn btn-sm btn-danger" onclick="unlinkOnboardingJellyfin()">Unlink</button>
+                        </div>
+                        <div id="jf-ws-unlinked" style="display:flex;gap:0.5rem;align-items:flex-end;flex-wrap:wrap">
+                            <div>
+                                <select id="jf-ws-user-select" class="form-input" style="min-width:180px">
+                                    <option value="">Loading users…</option>
+                                </select>
+                            </div>
+                            <button class="btn btn-primary btn-sm" onclick="linkOnboardingJellyfin()">Link Account</button>
                         </div>
                     </div>
                     <div style="margin-top:1rem">
@@ -1893,9 +1931,11 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
                     // Auto-save the full library list so it can be restored on reload
                     savePlexSettings(data.libraries);
                 }
+                loadOnboardingPlexAccounts();
                 break;
             case 'jellyfin':
                 showEl('jf-success-section');
+                loadOnboardingJellyfinUsers();
                 if (data.libraries && data.libraries.length) {
                     el('jf-library-list').innerHTML = data.libraries.map(function (lib) {
                         return '<label class="toggle">' +
@@ -2237,6 +2277,116 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
 
     // Expose goToStep globally for inline onclick
     window.goToStep = goToStep;
+
+    /* ── Watch Sync account linking (onboarding) ─────────────────── */
+
+    async function _apiFetch(url, opts) {
+        try { var r = await fetch(url, opts); return await r.json(); }
+        catch (e) { return { ok: false, error: String(e) }; }
+    }
+
+    window.loadOnboardingJellyfinUsers = async function () {
+        var sel = el('jf-ws-user-select');
+        if (!sel) return;
+        sel.innerHTML = '<option value="">Loading…</option>';
+        var data = await _apiFetch('/api/jellyfin/users');
+        if (!data.ok) {
+            sel.innerHTML = '<option value="">— error —</option>';
+            return;
+        }
+        sel.innerHTML = '<option value="">— select user —</option>';
+        (data.users || []).forEach(function (u) {
+            var opt = document.createElement('option');
+            opt.value = JSON.stringify({ id: u.id, name: u.name });
+            opt.textContent = u.name;
+            sel.appendChild(opt);
+        });
+    };
+
+    window.linkOnboardingJellyfin = async function () {
+        var sel = el('jf-ws-user-select');
+        if (!sel || !sel.value) return;
+        var user = JSON.parse(sel.value);
+        var data = await _apiFetch('/api/watch-sync/jellyfin/link', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jf_user_id: user.id, jf_username: user.name }),
+        });
+        if (data.ok) {
+            hideEl('jf-ws-unlinked');
+            var linked = el('jf-ws-linked');
+            if (linked) { linked.classList.remove('hidden'); linked.style.display = 'flex'; }
+            var nameEl = el('jf-ws-linked-name');
+            if (nameEl) nameEl.textContent = user.name;
+        }
+    };
+
+    window.unlinkOnboardingJellyfin = async function () {
+        var data = await _apiFetch('/api/watch-sync/jellyfin/unlink', { method: 'POST' });
+        if (data.ok) {
+            var linked = el('jf-ws-linked');
+            if (linked) { linked.classList.add('hidden'); linked.style.display = 'none'; }
+            var unlinked = el('jf-ws-unlinked');
+            if (unlinked) { unlinked.style.display = 'flex'; }
+            loadOnboardingJellyfinUsers();
+        }
+    };
+
+    window.loadOnboardingPlexAccounts = async function () {
+        var sel = el('plex-ws-account-select');
+        if (!sel) return;
+        sel.innerHTML = '<option value="">Loading…</option>';
+        var data = await _apiFetch('/api/plex/accounts');
+        if (!data.ok) {
+            sel.innerHTML = '<option value="">— error —</option>';
+            return;
+        }
+        var accounts = data.accounts || [];
+        sel.innerHTML = '<option value="">— select account —</option>';
+        if (accounts.length === 0) {
+            var opt = document.createElement('option');
+            opt.value = JSON.stringify({ id: '1', name: 'Admin' });
+            opt.textContent = 'Admin (single-user Plex)';
+            sel.appendChild(opt);
+            return;
+        }
+        accounts.forEach(function (a) {
+            var opt = document.createElement('option');
+            opt.value = JSON.stringify({ id: a.id, name: a.name });
+            opt.textContent = a.name || ('Account ' + a.id);
+            sel.appendChild(opt);
+        });
+    };
+
+    window.linkOnboardingPlex = async function () {
+        var sel = el('plex-ws-account-select');
+        if (!sel || !sel.value) return;
+        var account = JSON.parse(sel.value);
+        var data = await _apiFetch('/api/watch-sync/plex/link', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ plex_username: account.name, plex_uuid: account.id }),
+        });
+        if (data.ok) {
+            hideEl('plex-ws-unlinked');
+            var linked = el('plex-ws-linked');
+            if (linked) { linked.classList.remove('hidden'); linked.style.display = 'flex'; }
+            var nameEl = el('plex-ws-linked-name');
+            if (nameEl) nameEl.textContent = account.name;
+        }
+    };
+
+    window.unlinkOnboardingPlex = async function () {
+        var data = await _apiFetch('/api/watch-sync/plex/unlink', { method: 'POST' });
+        if (data.ok) {
+            var linked = el('plex-ws-linked');
+            if (linked) { linked.classList.add('hidden'); linked.style.display = 'none'; }
+            var unlinked = el('plex-ws-unlinked');
+            if (unlinked) { unlinked.style.display = 'flex'; }
+            loadOnboardingPlexAccounts();
+        }
+    };
+
 })();
 </script>
 {% endblock %}

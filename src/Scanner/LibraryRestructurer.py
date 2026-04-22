@@ -146,20 +146,51 @@ def _delete_support_files(directory: str) -> int:
     return deleted
 
 
-def _write_tvshow_nfo(folder_path: str, title: str) -> None:
-    """Write a minimal tvshow.nfo so Jellyfin classifies the folder as a TV show.
+def _xml_escape(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _write_tvshow_nfo(
+    folder_path: str,
+    title: str,
+    *,
+    anilist_id: int = 0,
+    imdb_id: str = "",
+    tvdb_id: str = "",
+    tvmaze_id: str = "",
+) -> None:
+    """Write a tvshow.nfo so Jellyfin classifies the folder as a TV show.
+
+    When provider IDs are available (from anilist_cache), they are included
+    so Jellyfin plugins (TVDB, TMDB, TVMaze, AniList) can resolve per-episode
+    metadata without a manual identification step.
 
     Safe to call on every restructure/rename — already-correct files are
     overwritten with the same content so the title stays current.
     """
     nfo_path = os.path.join(folder_path, "tvshow.nfo")
-    safe_title = title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    content = (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
-        "<tvshow>\n"
-        f"  <title>{safe_title}</title>\n"
-        "</tvshow>\n"
-    )
+    lines: list[str] = [
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+        "<tvshow>",
+        f"  <title>{_xml_escape(title)}</title>",
+    ]
+    if imdb_id:
+        lines.append(f"  <imdb_id>{imdb_id}</imdb_id>")
+    if tvdb_id:
+        lines.append(f"  <id>{tvdb_id}</id>")
+        lines.append(f"  <tvdbid>{tvdb_id}</tvdbid>")
+    if tvmaze_id:
+        lines.append(f"  <tvmazeid>{tvmaze_id}</tvmazeid>")
+    if anilist_id:
+        lines.append(f"  <anilistid>{anilist_id}</anilistid>")
+        lines.append(
+            f'  <uniqueid type="AniList" default="true">{anilist_id}</uniqueid>'
+        )
+    # Locking disabled — prevents our own updates from propagating on
+    # Jellyfin rescans.  Uncomment to re-enable if needed.
+    # lines.append("  <lockdata>true</lockdata>")
+    lines.append("</tvshow>")
+    content = "\n".join(lines) + "\n"
     try:
         with open(nfo_path, "w", encoding="utf-8") as fh:
             fh.write(content)
@@ -1464,8 +1495,17 @@ class LibraryRestructurer:
                     if _ei and _ei.source_season is not None and _ei.source_season > 0:
                         _sxxexx_seasons.add(_ei.source_season)
             _all_distinct_seasons = _sg_dir_set | _sxxexx_seasons
+            # Also trigger series group lookup when files are all one season
+            # but there are more video files than the matched AniList entry
+            # has episodes (e.g. 23 files but AniList says 11 eps → likely
+            # two AniList entries under one folder, Structure C).
+            _needs_group_lookup = len(_all_distinct_seasons) > 1 or (
+                si.anilist_episodes
+                and si.anilist_episodes > 0
+                and len(video_files) > si.anilist_episodes
+            )
             sg_season_map: dict[int, dict] = {}
-            if len(_all_distinct_seasons) > 1 and si.anilist_id:
+            if _needs_group_lookup and si.anilist_id:
                 try:
                     _, _group_entries = await self._group_builder.get_or_build_group(
                         si.anilist_id
@@ -1494,6 +1534,18 @@ class LibraryRestructurer:
                             _target_order = _matched_order + _sn - 1
                             if _target_order in _so_map:
                                 sg_season_map[_sn] = _so_map[_target_order]
+                        # When files use a single season but episodes overflow
+                        # into subsequent AniList entries (Structure C), also
+                        # populate sg_season_map with the continuation seasons
+                        # so the overflow walk has entries to land on.
+                        if len(_all_distinct_seasons) == 1:
+                            _file_sn = next(iter(_all_distinct_seasons))
+                            _next_sn = _file_sn + 1
+                            _next_order = _matched_order + _next_sn - 1
+                            while _next_order in _so_map:
+                                sg_season_map[_next_sn] = _so_map[_next_order]
+                                _next_sn += 1
+                                _next_order += 1
                 except Exception as _exc:
                     logger.warning(
                         "Series group lookup failed for %s: %s", si.title, _exc
@@ -1677,6 +1729,56 @@ class LibraryRestructurer:
                             file_season = ep_info.source_season
                         else:
                             file_season = 1
+
+                        # --- Episode overflow detection ---
+                        # When Sonarr uses absolute numbering (1 season, 25 eps)
+                        # but AniList splits into multiple seasons (S1=13, S2=12),
+                        # files like S01E14 should overflow into S02E01.
+                        # Only apply when sg_season_map is populated (multi-season
+                        # series group) and the episode number exceeds the AniList
+                        # episode count for the detected season.
+                        if (
+                            sg_season_map
+                            and file_season in sg_season_map
+                            and ep_info.number.isdigit()
+                        ):
+                            _ep_num = int(ep_info.number)
+                            _sg_eps = sg_season_map[file_season].get("episodes")
+                            if _sg_eps and _ep_num > _sg_eps:
+                                # Walk forward through seasons, consuming
+                                # episode counts, until we find where this
+                                # episode actually belongs.
+                                _remaining = _ep_num
+                                _cur_season = file_season
+                                while _cur_season in sg_season_map:
+                                    _cap = (
+                                        sg_season_map[_cur_season].get("episodes") or 0
+                                    )
+                                    if _cap <= 0 or _remaining <= _cap:
+                                        break
+                                    _remaining -= _cap
+                                    _cur_season += 1
+                                if _cur_season != file_season:
+                                    logger.debug(
+                                        "Episode overflow: %s S%02dE%s -> S%02dE%02d"
+                                        " (season %d has %d eps)",
+                                        filename,
+                                        file_season,
+                                        ep_info.number,
+                                        _cur_season,
+                                        _remaining,
+                                        file_season,
+                                        _sg_eps,
+                                    )
+                                    file_season = _cur_season
+                                    ep_info = EpisodeInfo(
+                                        number=str(_remaining).zfill(
+                                            len(ep_info.number)
+                                        ),
+                                        source_season=file_season,
+                                        variant=ep_info.variant,
+                                    )
+
                         file_dest_dir = _get_season_dir(file_season)
                         # Keyword-only extras (NCOP, NCED, Creditless, etc.) all
                         # return ep="00". When multiple extras are present they
@@ -2582,6 +2684,29 @@ class LibraryRestructurer:
             return await self._execute_full_restructure(plan, progress, plan_id)
         return await self._execute_rename(plan, progress, plan_id)
 
+    async def _get_provider_ids(self, anilist_id: int) -> dict[str, str | int]:
+        """Return provider IDs from the anilist_cache for an entry.
+
+        Falls back to empty strings when no cache row exists so the NFO
+        writer still produces a valid (title-only) file.
+        """
+        if not anilist_id:
+            return {"anilist_id": 0, "imdb_id": "", "tvdb_id": "", "tvmaze_id": ""}
+        cached = await self._db.get_cached_metadata(anilist_id)
+        if not cached:
+            return {
+                "anilist_id": anilist_id,
+                "imdb_id": "",
+                "tvdb_id": "",
+                "tvmaze_id": "",
+            }
+        return {
+            "anilist_id": anilist_id,
+            "imdb_id": cached.get("imdb_id") or "",
+            "tvdb_id": cached.get("tvdb_id") or "",
+            "tvmaze_id": cached.get("tvmaze_id") or "",
+        }
+
     async def _execute_full_restructure(
         self,
         plan: RestructurePlan,
@@ -2705,7 +2830,8 @@ class LibraryRestructurer:
             # Write tvshow.nfo so Jellyfin classifies this folder as a TV show
             # rather than grouping its contents as movie versions.
             if os.path.isdir(group.target_folder):
-                _write_tvshow_nfo(group.target_folder, group.display_title)
+                ids = await self._get_provider_ids(group.anilist_id)
+                _write_tvshow_nfo(group.target_folder, group.display_title, **ids)
 
             stats["groups"] += 1
 
@@ -2903,7 +3029,8 @@ class LibraryRestructurer:
 
             # Write tvshow.nfo so Jellyfin classifies this folder as a TV show.
             if os.path.isdir(target_folder):
-                _write_tvshow_nfo(target_folder, group.display_title)
+                ids = await self._get_provider_ids(group.anilist_id)
+                _write_tvshow_nfo(target_folder, group.display_title, **ids)
 
             stats["groups"] += 1
 

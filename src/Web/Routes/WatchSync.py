@@ -330,6 +330,8 @@ async def watch_sync_page(request: Request):  # type: ignore[return]
             "plex_user": plex_user,
             "plex_watch_sync_enabled": config.plex.watch_sync_enabled,
             "jellyfin_watch_sync_enabled": config.jellyfin.watch_sync_enabled,
+            "jellyfin_configured": bool(config.jellyfin.url and config.jellyfin.api_key),
+            "plex_configured": bool(config.plex.url and config.plex.token),
             "sync_log": sync_log,
         },
     )

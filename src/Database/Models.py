@@ -561,7 +561,8 @@ TABLES: dict[str, str] = {
             after_status TEXT NOT NULL DEFAULT '',
             after_progress INTEGER NOT NULL DEFAULT 0,
             applied_at TEXT NOT NULL DEFAULT (datetime('now')),
-            undone_at TEXT
+            undone_at TEXT,
+            direction TEXT NOT NULL DEFAULT 'to_anilist'
         )
     """,
     "download_requests": """

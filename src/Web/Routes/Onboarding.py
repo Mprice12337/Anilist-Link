@@ -162,6 +162,15 @@ async def update_onboarding_status(request: Request) -> JSONResponse:
     # deferring here doesn't lose the scan — it just waits until the
     # user has applied or dismissed the plan.
     if status == "completed":
+        # If the user linked a watch sync account during onboarding,
+        # set flags so a backfill runs after the first scan-apply.
+        jf_user = await db.get_jellyfin_user()
+        plex_user = await db.get_plex_user()
+        if jf_user:
+            await db.set_setting("onboarding.pending_backfill_jellyfin", "true")
+        if plex_user:
+            await db.set_setting("onboarding.pending_backfill_plex", "true")
+
         app_state = request.app.state
         analyze_prog = getattr(app_state, "restructure_progress", None)
         exec_prog = getattr(app_state, "restructure_exec_progress", None)
@@ -1259,8 +1268,32 @@ async def onboarding_restructure_analyze(request: Request) -> JSONResponse:
     request.app.state.onboarding_source_dirs = source_dirs
     request.app.state.onboarding_output_dir = output_dir
 
+    # Store analyze params so fix-match rematch can replay the analysis
+    # with the same source dirs, output dir, and templates.
+    pending_templates: dict[str, str] = {}
+    for key, setting_key in [
+        ("episode", "naming.file_template"),
+        ("folder", "naming.folder_template"),
+        ("season", "naming.season_folder_template"),
+        ("movie", "naming.movie_file_template"),
+        ("illegal_char_replacement", "naming.illegal_char_replacement"),
+        ("title_pref", "app.title_display"),
+    ]:
+        val = (templates.get(key) or "").strip()
+        if val:
+            pending_templates[setting_key] = val
+    analyze_params = {
+        "source_dirs": list(source_dirs),
+        "output_dir": output_dir,
+        "level": level,
+        "templates": dict(pending_templates),
+    }
+    request.app.state.restructure_analyze_params = analyze_params
+    await db.set_setting("restructure.analyze_params", json.dumps(analyze_params))
+
     progress = RestructureProgress(status="running")
     request.app.state.restructure_progress = progress
+    request.app.state.restructure_exec_progress = None
 
     try:
         # Pre-count total folders across all source dirs so the progress
