@@ -5,12 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Anilist-Link{% endblock %}</title>
     <link rel="icon" type="image/png" href="/static/img/anilist.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Lexend+Deca:wght@100..900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <nav class="navbar">
         <div class="nav-brand">
-            <a href="/"><img src="/static/img/anilist.png" alt="AniList" class="nav-brand-logo">Anilist-Link</a>
+            <a href="/"><img src="/static/img/anilist.png" alt="AniList" class="nav-brand-logo"><span><span class="brand-anilist">Anilist</span><span class="brand-link">Link</span></span></a>
         </div>
         <div class="nav-links">
             <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">Dashboard</a>
@@ -264,6 +267,19 @@
         window._refreshNotifications = pollNotifications;
         pollNotifications();
         setInterval(pollNotifications, 5000);
+    })();
+
+    // Strip transient ?message= / ?error= from URL after render so that
+    // refreshing the page does not re-display the same flash notification.
+    (function () {
+        var url = new URL(window.location.href);
+        var changed = false;
+        ['message', 'error'].forEach(function (k) {
+            if (url.searchParams.has(k)) { url.searchParams.delete(k); changed = true; }
+        });
+        if (changed && window.history && window.history.replaceState) {
+            window.history.replaceState({}, '', url.toString());
+        }
     })();
 
     // --- Processing overlay for long-running forms ---

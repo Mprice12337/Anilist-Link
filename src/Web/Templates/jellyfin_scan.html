@@ -90,5 +90,51 @@ document.getElementById('liveForm') && document.addEventListener('change', funct
         if (liveInput) liveInput.checked = e.target.checked;
     }
 });
+
+// Progress-aware dismiss for the "Applying metadata in background" alert.
+// Polls /api/progress and fades the alert out once the jellyfin_apply task
+// is no longer present (same grace-period logic as the main progress widget).
+(function () {
+    var alertEl = document.querySelector('.alert.alert-success');
+    if (!alertEl) return; // no flash message on this load
+
+    var seenTask = false;
+    var emptyCount = 0;
+    var EMPTY_GRACE = 3; // consecutive empty polls before dismissing (~6s)
+    var interval = null;
+
+    function dismiss() {
+        clearInterval(interval);
+        alertEl.style.transition = 'opacity 0.6s ease';
+        alertEl.style.opacity = '0';
+        setTimeout(function () {
+            alertEl.style.display = 'none';
+        }, 650);
+    }
+
+    interval = setInterval(function () {
+        fetch('/api/progress').then(function (r) {
+            if (!r.ok) return;
+            return r.json();
+        }).then(function (data) {
+            if (!data) return;
+            var tasks = data.tasks || [];
+            var active = tasks.some(function (t) { return t.task_key === 'jellyfin_apply'; });
+
+            if (active) {
+                seenTask = true;
+                emptyCount = 0;
+            } else {
+                emptyCount++;
+                // Only dismiss after we've confirmed the task was running,
+                // or after enough empty polls (covers edge case where task
+                // finishes before the first poll).
+                if (seenTask || emptyCount >= EMPTY_GRACE) {
+                    dismiss();
+                }
+            }
+        }).catch(function () {});
+    }, 2000);
+})();
 </script>
 {% endblock %}
