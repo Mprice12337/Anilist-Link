@@ -35,8 +35,8 @@ async def sonarr_webhook(request: Request) -> JSONResponse:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
     config = request.app.state.config
-    if not config.download_sync.arr_enabled:
-        logger.debug("Sonarr webhook received but arr_enabled=false — ignored")
+    if not config.sonarr.url or not config.sonarr.api_key:
+        logger.debug("Sonarr webhook received but Sonarr is not configured — ignored")
         return JSONResponse({"ok": True})
 
     db = request.app.state.db
@@ -57,8 +57,8 @@ async def radarr_webhook(request: Request) -> JSONResponse:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
     config = request.app.state.config
-    if not config.download_sync.arr_enabled:
-        logger.debug("Radarr webhook received but arr_enabled=false — ignored")
+    if not config.radarr.url or not config.radarr.api_key:
+        logger.debug("Radarr webhook received but Radarr is not configured — ignored")
         return JSONResponse({"ok": True})
 
     db = request.app.state.db

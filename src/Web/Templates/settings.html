@@ -115,6 +115,32 @@
                 <span class="text-muted" style="font-size:0.85rem">Save a Jellyfin URL and API Key first, then reload to see libraries.</span>
                 {% endif %}
 
+                {% elif input_type == "monitor_mode_radio" %}
+                {% set _cur = display.get(key, 'future') %}
+                <div style="display:flex;flex-direction:column;gap:0.35rem;">
+                  {% for val, label in [("future", "Future episodes — new eps as they air"), ("all", "All episodes"), ("firstSeason", "First season"), ("latestSeason", "Latest season"), ("none", "Don't monitor — add unmonitored")] %}
+                  <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-weight:normal">
+                    <input type="radio" name="{{ key }}" value="{{ val }}"
+                           {% if _cur == val %}checked{% endif %}
+                           {% if key in env_overrides %}disabled{% endif %}>
+                    {{ label }}
+                  </label>
+                  {% endfor %}
+                </div>
+
+                {% elif input_type == "status_checkboxes" %}
+                {% set _selected = display.get(key, '').split(',') | map('trim') | list %}
+                <div class="status-checkboxes" style="display:flex;flex-wrap:wrap;gap:0.4rem 1rem;">
+                  {% for status in ["CURRENT", "PLANNING", "COMPLETED", "PAUSED", "DROPPED", "REPEATING"] %}
+                  <label class="toggle" style="margin:0">
+                    <input type="checkbox" name="{{ key }}" value="{{ status }}"
+                           {% if status in _selected %}checked{% endif %}
+                           {% if key in env_overrides %}disabled{% endif %}>
+                    <span class="toggle-label">{{ status.title() }}</span>
+                  </label>
+                  {% endfor %}
+                </div>
+
                 {% elif input_type == "select" %}
                 <select name="{{ key }}" id="{{ key }}"
                         {% if key in env_overrides %}disabled{% endif %}>

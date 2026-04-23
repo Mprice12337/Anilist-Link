@@ -161,20 +161,14 @@ FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
         "Downloads",
         [
             (
-                "downloads.arr_enabled",
-                "Enable Sonarr/Radarr integration (add, grab, post-process)",
-                "checkbox",
-            ),
-            (
                 "downloads.auto_statuses",
-                "Auto-add list statuses (comma-separated: "
-                "CURRENT,PLANNING — leave blank to disable)",
-                "text",
+                "Auto-add for these list statuses (leave all unchecked to disable)",
+                "status_checkboxes",
             ),
             (
                 "downloads.monitor_mode",
-                "Sonarr monitor mode (future/all/firstSeason/latestSeason)",
-                "text",
+                "Default Sonarr monitor mode",
+                "monitor_mode_radio",
             ),
             ("downloads.auto_search", "Search immediately on add", "checkbox"),
             (
@@ -359,6 +353,9 @@ async def _settings_save_impl(request: Request) -> RedirectResponse:
             # Multi-valued checkboxes: serialize selected keys as JSON list
             selected = form.getlist(key)
             value = json.dumps([str(v) for v in selected])
+        elif input_type == "status_checkboxes":
+            # Multi-valued checkboxes: join selected statuses as comma-separated string
+            value = ",".join(form.getlist(key))
         elif input_type == "checkbox":
             # Checkbox: present in form = true, absent = false
             value = "true" if form.get(key) else "false"

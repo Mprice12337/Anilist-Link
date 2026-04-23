@@ -82,7 +82,6 @@ class DownloadSyncConfig:
     monitor_mode: str = "future"
     auto_search: bool = False
     sync_interval_minutes: int = 60
-    arr_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -302,7 +301,6 @@ SETTINGS_MAP: dict[str, tuple[str, str]] = {
     "downloads.monitor_mode": ("DOWNLOAD_MONITOR_MODE", "future"),
     "downloads.auto_search": ("DOWNLOAD_AUTO_SEARCH", "false"),
     "downloads.sync_interval_minutes": ("DOWNLOAD_SYNC_INTERVAL", "60"),
-    "downloads.arr_enabled": ("DOWNLOADS_ARR_ENABLED", "true"),
 }
 
 # Keys that represent secret values (passwords, tokens, api keys)
@@ -427,7 +425,5 @@ def load_config_from_db_settings(
             auto_search=(r("downloads.auto_search") or "false").lower()
             in ("true", "1", "yes"),
             sync_interval_minutes=int(r("downloads.sync_interval_minutes") or "60"),
-            arr_enabled=(r("downloads.arr_enabled") or "true").lower()
-            not in ("false", "0", "no"),
         ),
     )

@@ -119,7 +119,9 @@ async def library_page(request: Request) -> HTMLResponse:
             status_counts[s] = status_counts.get(s, 0) + 1
 
     cfg = request.app.state.config
-    arr_enabled = cfg.download_sync.arr_enabled
+    arr_enabled = bool(cfg.sonarr.url and cfg.sonarr.api_key) or bool(
+        cfg.radarr.url and cfg.radarr.api_key
+    )
     title_display = await db.get_setting("app.title_display") or "romaji"
 
     # Fetch Sonarr/Radarr file stats to show local availability from *arr
@@ -596,9 +598,11 @@ async def add_to_arr(request: Request) -> JSONResponse:
     config = request.app.state.config
     anilist_client = request.app.state.anilist_client
 
-    if not config.download_sync.arr_enabled:
+    if not (config.sonarr.url and config.sonarr.api_key) and not (
+        config.radarr.url and config.radarr.api_key
+    ):
         return JSONResponse(
-            {"error": "Sonarr/Radarr integration is disabled in settings."},
+            {"error": "Sonarr/Radarr is not configured."},
             status_code=503,
         )
 

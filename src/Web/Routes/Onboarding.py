@@ -83,7 +83,6 @@ async def onboarding_page(request: Request) -> HTMLResponse:
         "radarr_path_prefix": await db.get_setting("radarr.path_prefix") or "",
         "radarr_local_path_prefix": await db.get_setting("radarr.local_path_prefix")
         or "",
-        "downloads_arr_enabled": await db.get_setting("downloads.arr_enabled") or "",
         "downloads_auto_statuses": await db.get_setting("downloads.auto_statuses")
         or "",
         "downloads_monitor_mode": await db.get_setting("downloads.monitor_mode")

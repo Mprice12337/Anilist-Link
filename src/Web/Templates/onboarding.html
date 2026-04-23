@@ -957,29 +957,35 @@
                         <div class="form-grid" style="margin-bottom:1rem">
                             <div class="form-group">
                                 <label class="toggle">
-                                    <input type="checkbox" id="arr-enabled" {{ 'checked' if settings.downloads_arr_enabled == 'true' else '' }}>
-                                    <span class="toggle-label">Enable Sonarr/Radarr integration</span>
-                                </label>
-                            </div>
-                            <div class="form-group">
-                                <label class="toggle">
                                     <input type="checkbox" id="arr-auto-search" {{ 'checked' if settings.downloads_auto_search == 'true' else '' }}>
                                     <span class="toggle-label">Search immediately on add</span>
                                 </label>
                             </div>
                             <div class="form-group">
-                                <label for="arr-auto-statuses">Auto-add list statuses</label>
-                                <input type="text" id="arr-auto-statuses" placeholder="CURRENT,PLANNING" value="{{ settings.downloads_auto_statuses }}">
-                                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.2rem">Comma-separated. Leave blank to disable auto-add.</div>
+                                <label>Auto-add list statuses</label>
+                                {% set _sel = settings.downloads_auto_statuses.split(',') | map('trim') | list %}
+                                <div style="display:flex;flex-wrap:wrap;gap:0.4rem 1rem;margin-top:0.25rem" id="arr-auto-statuses-group">
+                                  {% for status in ["CURRENT", "PLANNING", "COMPLETED", "PAUSED", "DROPPED", "REPEATING"] %}
+                                  <label class="toggle" style="margin:0">
+                                    <input type="checkbox" class="arr-auto-status-cb" value="{{ status }}"
+                                           {{ 'checked' if status in _sel else '' }}>
+                                    <span class="toggle-label">{{ status.title() }}</span>
+                                  </label>
+                                  {% endfor %}
+                                </div>
+                                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.35rem">Leave all unchecked to disable auto-add.</div>
                             </div>
                             <div class="form-group">
-                                <label for="arr-monitor-mode">Monitor mode</label>
-                                <select id="arr-monitor-mode" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:0.45rem 0.65rem;font-size:0.9rem">
-                                    <option value="future" {{ 'selected' if settings.downloads_monitor_mode == 'future' else '' }}>Future episodes only</option>
-                                    <option value="all" {{ 'selected' if settings.downloads_monitor_mode == 'all' else '' }}>All episodes</option>
-                                    <option value="firstSeason" {{ 'selected' if settings.downloads_monitor_mode == 'firstSeason' else '' }}>First season</option>
-                                    <option value="latestSeason" {{ 'selected' if settings.downloads_monitor_mode == 'latestSeason' else '' }}>Latest season</option>
-                                </select>
+                                <label>Monitor mode</label>
+                                {% set _mm = settings.downloads_monitor_mode or 'future' %}
+                                <div style="display:flex;flex-direction:column;gap:0.35rem;margin-top:0.25rem">
+                                  {% for val, lbl in [("future", "Future episodes — new eps as they air"), ("all", "All episodes"), ("firstSeason", "First season"), ("latestSeason", "Latest season"), ("none", "Don't monitor — add unmonitored")] %}
+                                  <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-weight:normal">
+                                    <input type="radio" name="arr-monitor-mode" value="{{ val }}" {{ 'checked' if _mm == val else '' }}>
+                                    {{ lbl }}
+                                  </label>
+                                  {% endfor %}
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1865,10 +1871,10 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
                 settings['sonarr.path_prefix'] = el('sonarr-path-prefix').value.trim();
                 settings['sonarr.local_path_prefix'] = el('sonarr-local-prefix').value.trim();
                 // Include download automation settings
-                settings['downloads.arr_enabled'] = el('arr-enabled').checked ? 'true' : 'false';
                 settings['downloads.auto_search'] = el('arr-auto-search').checked ? 'true' : 'false';
-                settings['downloads.auto_statuses'] = el('arr-auto-statuses').value.trim();
-                settings['downloads.monitor_mode'] = el('arr-monitor-mode').value;
+                settings['downloads.auto_statuses'] = Array.from(document.querySelectorAll('.arr-auto-status-cb:checked')).map(function(cb){return cb.value;}).join(',');
+                var _mmEl = document.querySelector('input[name="arr-monitor-mode"]:checked');
+                settings['downloads.monitor_mode'] = _mmEl ? _mmEl.value : 'future';
                 break;
             case 'radarr':
                 settings['radarr.url'] = el('radarr-url').value.trim();
@@ -1877,10 +1883,10 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
                 settings['radarr.path_prefix'] = el('radarr-path-prefix').value.trim();
                 settings['radarr.local_path_prefix'] = el('radarr-local-prefix').value.trim();
                 // Include download automation settings
-                settings['downloads.arr_enabled'] = el('arr-enabled').checked ? 'true' : 'false';
                 settings['downloads.auto_search'] = el('arr-auto-search').checked ? 'true' : 'false';
-                settings['downloads.auto_statuses'] = el('arr-auto-statuses').value.trim();
-                settings['downloads.monitor_mode'] = el('arr-monitor-mode').value;
+                settings['downloads.auto_statuses'] = Array.from(document.querySelectorAll('.arr-auto-status-cb:checked')).map(function(cb){return cb.value;}).join(',');
+                var _mmEl = document.querySelector('input[name="arr-monitor-mode"]:checked');
+                settings['downloads.monitor_mode'] = _mmEl ? _mmEl.value : 'future';
                 break;
         }
         if (!Object.keys(settings).length) return Promise.resolve();
