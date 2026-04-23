@@ -125,7 +125,7 @@
          data-folder-name="{{ item.folder_name }}"
          data-anilist-id="{{ item.anilist_id or '' }}"
          data-title-sort="{{ _sort_title }}"
-         data-year="{{ item.year or 0 }}"
+         data-year="{{ item.anilist_year or item.year or 0 }}"
          data-format="{{ item.anilist_format or '' }}"
          data-matched="{{ '1' if item.anilist_id else '0' }}"
          data-has-plex="{{ '1' if _in_plex else '0' }}"
@@ -165,10 +165,8 @@
             {% else %}
             <span class="title-romaji">{{ item.folder_name }}</span>
             {% endif %}
-            {% if item.anilist_id and item.folder_name != (item.title_romaji or item.anilist_title) %}
-            <span class="library-card-folder">{{ item.folder_name }}</span>
-            {% endif %}
-            {% if item.year %}<span class="library-card-year">{{ item.year }}</span>{% endif %}
+            {% set _year = item.anilist_year or item.year %}
+            {% if _year %}<span class="library-card-year">{{ _year }}</span>{% endif %}
         </div>
     </div>
     {% endfor %}
@@ -194,7 +192,7 @@
          data-folder-name="{{ item.folder_name }}"
          data-anilist-id="{{ item.anilist_id or '' }}"
          data-title-sort="{{ _sort_title }}"
-         data-year="{{ item.year or 0 }}"
+         data-year="{{ item.anilist_year or item.year or 0 }}"
          data-format="{{ item.anilist_format or '' }}"
          data-matched="{{ '1' if item.anilist_id else '0' }}"
          data-has-plex="{{ '1' if _in_plex_list else '0' }}"
@@ -210,10 +208,8 @@
             {% else %}
             <span class="title-romaji">{{ item.folder_name }}</span>
             {% endif %}
-            {% if item.anilist_id and item.folder_name != (item.title_romaji or item.anilist_title) %}
-            <span class="library-card-folder">{{ item.folder_name }}</span>
-            {% endif %}
-            {% if item.year %}<span class="library-card-year">{{ item.year }}</span>{% endif %}
+            {% set _year = item.anilist_year or item.year %}
+            {% if _year %}<span class="library-card-year">{{ _year }}</span>{% endif %}
         </div>
         {% if item.anilist_format %}
         <span class="format-badge">{{ item.anilist_format }}</span>

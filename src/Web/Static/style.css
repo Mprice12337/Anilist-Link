@@ -2345,8 +2345,20 @@ select:disabled {
     display: block;
 }
 
-.scroll-on-hover.is-scrolling {
-    overflow: visible;
+/* Anchor links: shrink to text width so only the text is clickable, not blank space */
+a.scroll-on-hover {
+    display: inline-block;
+    max-width: 100%;
+}
+
+/* Inner wrapper: animates while outer element clips */
+.scroll-on-hover > .scroll-inner {
+    display: inline;
+    white-space: nowrap;
+}
+
+.scroll-on-hover > .scroll-inner.is-scrolling {
+    display: inline-block;
     text-overflow: clip;
     animation: text-scroll 3.5s ease-in-out infinite alternate;
 }
@@ -2418,6 +2430,13 @@ select:disabled {
 
 .entry-detail-title:hover {
     color: var(--accent);
+}
+
+.entry-detail-alt-title {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-top: 0.2rem;
+    line-height: 1.3;
 }
 
 .entry-detail-subtitle {

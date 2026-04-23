@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros.html" import render_title %}
 {% block title %}Anilist-Link: My Library{% endblock %}
 {% block container_class %}container-wide{% endblock %}
 
@@ -182,10 +183,20 @@
         {% endif %}
       </td>
       <td class="entry-title" onclick="event.stopPropagation()">
+        {% if title_display == "english" %}
+          {% set _primary = entry.title_english or entry.title_romaji or entry.anilist_title or '(untitled)' %}
+          {% set _alt = entry.title_romaji or '' %}
+        {% else %}
+          {% set _primary = entry.title_romaji or entry.anilist_title or '(untitled)' %}
+          {% set _alt = entry.title_english or '' %}
+        {% endif %}
         <a href="https://anilist.co/anime/{{ aid }}" target="_blank" rel="noopener"
-           class="scroll-on-hover" style="display:block;max-width:220px">
-          {{ entry.anilist_title or '(untitled)' }}
+           class="scroll-on-hover" style="max-width:220px">
+          {{ _primary }}
         </a>
+        {% if _alt and _alt != _primary %}
+        <span class="title-english scroll-on-hover" style="display:block;max-width:220px">{{ _alt }}</span>
+        {% endif %}
       </td>
       <td>
         <span class="badge badge-{{ fmt_lower or 'unknown' }}">{{ fmt or '?' }}</span>
@@ -312,7 +323,10 @@
         <div class="watchlist-grid-progress-bar">
           <div class="watchlist-grid-progress-fill" style="width:{{ progress_pct }}%"></div>
         </div>
-        <div class="watchlist-grid-title">{{ entry.anilist_title or '(untitled)' }}</div>
+        <div class="watchlist-grid-title scroll-on-hover">
+          {% if title_display == "english" %}{{ entry.title_english or entry.title_romaji or entry.anilist_title or '(untitled)' }}
+          {% else %}{{ entry.title_romaji or entry.anilist_title or '(untitled)' }}{% endif %}
+        </div>
         <div class="watchlist-grid-ep">
           {% if entry.anilist_episodes %}Ep {{ entry.progress }}/{{ entry.anilist_episodes }}
           {% else %}Ep {{ entry.progress }}{% endif %}
@@ -507,6 +521,7 @@
 <script>
 var ENTRIES = {{ entries | tojson }};
 var arr_enabled = {{ 'true' if arr_enabled else 'false' }};
+var TITLE_DISPLAY = {{ title_display | tojson }};
 
 (function() {
   var currentFilter = 'ALL';
@@ -520,7 +535,20 @@ var arr_enabled = {{ 'true' if arr_enabled else 'false' }};
     var entry = ENTRIES[idx];
     if (!entry) return;
     document.getElementById('watchlistDetailModal').classList.remove('hidden');
-    document.getElementById('wdTitle').textContent = entry.anilist_title || '(untitled)';
+
+    // Resolve primary/alt title based on user preference
+    var _romaji = entry.title_romaji || entry.anilist_title || '(untitled)';
+    var _english = entry.title_english || '';
+    var _primary, _alt;
+    if (TITLE_DISPLAY === 'english' || TITLE_DISPLAY === 'both_english_primary') {
+      _primary = _english || _romaji;
+      _alt = (_romaji && _romaji !== _primary) ? _romaji : '';
+    } else {
+      _primary = _romaji;
+      _alt = (_english && _english !== _primary) ? _english : '';
+    }
+
+    document.getElementById('wdTitle').textContent = _primary;
 
     // Poster
     var posterWrap = document.getElementById('wdPosterWrap');
@@ -532,8 +560,11 @@ var arr_enabled = {{ 'true' if arr_enabled else 'false' }};
 
     // Title + AniList link
     var titleWrap = document.getElementById('wdTitleWrap');
+    var altHtml = _alt
+      ? '<div class="entry-detail-alt-title">' + _escHtml(_alt) + '</div>'
+      : '';
     titleWrap.innerHTML = '<a href="https://anilist.co/anime/' + entry.anilist_id + '" target="_blank" rel="noopener" class="entry-detail-title">'
-      + _escHtml(entry.anilist_title || '(untitled)') + '</a>';
+      + _escHtml(_primary) + '</a>' + altHtml;
 
     // Info grid
     var watchColors = {CURRENT:'#2e7d32',PLANNING:'#1565c0',COMPLETED:'#0277bd',PAUSED:'#546e7a',REPEATING:'#6a1b9a',DROPPED:'#b71c1c'};
@@ -1524,20 +1555,6 @@ var arr_enabled = {{ 'true' if arr_enabled else 'false' }};
 
   // Initialize view from localStorage
   setWatchlistView(currentView);
-
-  // Scroll-on-hover for title cells
-  document.querySelectorAll('.scroll-on-hover').forEach(function(el) {
-    el.addEventListener('mouseenter', function() {
-      if (el.scrollWidth > el.offsetWidth + 2) {
-        el.style.setProperty('--scroll-dist', -(el.scrollWidth - el.offsetWidth) + 'px');
-        el.classList.add('is-scrolling');
-      }
-    });
-    el.addEventListener('mouseleave', function() {
-      el.classList.remove('is-scrolling');
-      el.style.removeProperty('--scroll-dist');
-    });
-  });
 
 })();
 </script>

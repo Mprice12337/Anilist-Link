@@ -294,6 +294,40 @@
             overlay.classList.remove('hidden');
         });
     })();
+
+    // --- Scroll-on-hover for truncated titles ---
+    (function () {
+        function initScrollOnHover(root) {
+            (root || document).querySelectorAll('.scroll-on-hover').forEach(function (el) {
+                // Wrap content in .scroll-inner if not already done
+                if (!el.querySelector('.scroll-inner')) {
+                    var inner = document.createElement('span');
+                    inner.className = 'scroll-inner';
+                    while (el.firstChild) inner.appendChild(el.firstChild);
+                    el.appendChild(inner);
+                }
+                var inner = el.querySelector('.scroll-inner');
+                el.addEventListener('mouseenter', function () {
+                    // Use el.scrollWidth (reliable for block overflow:hidden containers)
+                    // rather than inner.scrollWidth (unreliable for inline elements)
+                    var overflow = el.scrollWidth - el.clientWidth;
+                    if (overflow > 2) {
+                        inner.style.setProperty('--scroll-dist', '-' + overflow + 'px');
+                        inner.classList.add('is-scrolling');
+                    }
+                });
+                el.addEventListener('mouseleave', function () {
+                    inner.classList.remove('is-scrolling');
+                    inner.style.removeProperty('--scroll-dist');
+                });
+            });
+        }
+        // Run immediately — script is at end of body, DOM is already available.
+        // Do not use DOMContentLoaded; it can be missed when registered this late.
+        initScrollOnHover(document);
+        // Expose globally so dynamic content (modals, etc.) can reinitialise
+        window.initScrollOnHover = initScrollOnHover;
+    })();
     </script>
 </body>
 </html>

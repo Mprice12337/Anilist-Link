@@ -45,8 +45,8 @@
 <!-- Grid view -->
 <div class="library-grid" id="gridView">
     {% for item in items %}
-    {% set primary_title = item.title_english if (title_display == 'english' and item.title_english) else (item.title_romaji or item.title) %}
-    {% set secondary_title = item.title_romaji if (title_display in ('both_english_primary',) and item.title_romaji and item.title_romaji != primary_title) else (item.title_english if (title_display in ('both_romaji_primary',) and item.title_english) else '') %}
+    {% set primary_title = item.title_english if (title_display in ('english', 'both_english_primary') and item.title_english) else (item.title_romaji or item.title) %}
+    {% set secondary_title = item.title_romaji if (title_display in ('english', 'both_english_primary') and item.title_romaji and item.title_romaji != primary_title) else (item.title_english if item.title_english and item.title_english != primary_title else '') %}
     <div class="library-card"
          data-title="{{ (item.title or '') | lower }} {{ (item.title_romaji or '') | lower }} {{ (item.title_english or '') | lower }}"
          data-matched="{{ 'yes' if item.anilist_id else 'no' }}"
@@ -108,7 +108,8 @@
         </thead>
         <tbody id="listBody">
             {% for item in items %}
-            {% set primary_title = item.title_english if (title_display == 'english' and item.title_english) else (item.title_romaji or item.title) %}
+            {% set primary_title = item.title_english if (title_display in ('english', 'both_english_primary') and item.title_english) else (item.title_romaji or item.title) %}
+            {% set secondary_title = item.title_romaji if (title_display in ('english', 'both_english_primary') and item.title_romaji and item.title_romaji != primary_title) else (item.title_english if item.title_english and item.title_english != primary_title else '') %}
             <tr class="library-row"
                 data-title="{{ (item.title or '') | lower }} {{ (item.title_romaji or '') | lower }} {{ (item.title_english or '') | lower }}"
                 data-matched="{{ 'yes' if item.anilist_id else 'no' }}"
@@ -129,12 +130,13 @@
                     {% if item.anilist_id %}
                     <a href="https://anilist.co/anime/{{ item.anilist_id }}" target="_blank" rel="noopener"
                        onclick="event.stopPropagation()"
-                       style="font-weight:500;color:inherit;text-decoration:none">{{ primary_title }}</a>
+                       class="scroll-on-hover"
+                       style="font-weight:500;color:inherit;text-decoration:none;max-width:220px">{{ primary_title }}</a>
                     {% else %}
-                    <div style="font-weight:500">{{ primary_title }}</div>
+                    <div class="scroll-on-hover" style="font-weight:500;max-width:220px">{{ primary_title }}</div>
                     {% endif %}
-                    {% if item.title_romaji and item.title_romaji != primary_title %}
-                    <div style="font-size:0.78rem;color:var(--text-muted)">{{ item.title_romaji }}</div>
+                    {% if secondary_title %}
+                    <div class="title-english scroll-on-hover" style="max-width:220px">{{ secondary_title }}</div>
                     {% endif %}
                 </td>
                 <td style="color:var(--text-muted)">{{ item.year or '—' }}</td>
@@ -165,20 +167,17 @@
                 </td>
                 <td>
                     {% if item.anilist_id %}
-                    <div style="font-size:0.85rem;font-weight:500">{{ item.title_romaji or '—' }}</div>
-                    {% if item.title_english and item.title_english != item.title_romaji %}
-                    <div style="font-size:0.78rem;color:var(--text-muted)">{{ item.title_english }}</div>
+                    <span class="badge badge-success" style="font-size:0.72rem;padding:0.1rem 0.4rem">Matched</span>
+                    {% if item.match_method %}
+                    <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.15rem">{{ item.match_method }}</div>
                     {% endif %}
                     {% else %}
-                    <span style="color:var(--danger)">Unmatched</span>
+                    <span class="badge badge-warning" style="font-size:0.72rem;padding:0.1rem 0.4rem">Unmatched</span>
                     {% endif %}
                 </td>
                 <td>
                     {% if item.match_confidence %}
                     <span style="font-size:0.85rem">{{ (item.match_confidence * 100) | int }}%</span>
-                    {% if item.match_method %}
-                    <div style="font-size:0.75rem;color:var(--text-muted)">{{ item.match_method }}</div>
-                    {% endif %}
                     {% else %}
                     <span style="color:var(--text-muted)">&mdash;</span>
                     {% endif %}
@@ -479,21 +478,6 @@ async function reindexAll() {
         btn.disabled = false;
     }
 }
-
-// Scroll-on-hover for titles
-document.querySelectorAll('.scroll-on-hover').forEach(function(el) {
-    el.addEventListener('mouseenter', function() {
-        if (el.scrollWidth > el.offsetWidth + 2) {
-            var dist = -(el.scrollWidth - el.offsetWidth);
-            el.style.setProperty('--scroll-dist', dist + 'px');
-            el.classList.add('is-scrolling');
-        }
-    });
-    el.addEventListener('mouseleave', function() {
-        el.classList.remove('is-scrolling');
-        el.style.removeProperty('--scroll-dist');
-    });
-});
 
 setView(currentView);
 </script>

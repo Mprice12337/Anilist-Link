@@ -9,20 +9,16 @@
 {% set romaji = item.title_romaji or "" %}
 {% set english = item.title_english or "" %}
 {% set fb = fallback %}
-{% if title_display == "english" %}
-    <span class="title-romaji">{{ english or romaji or fb }}</span>
-{% elif title_display == "both_romaji_primary" %}
-    <span class="title-romaji">{{ romaji or fb }}</span>
-    {% if english and english != (romaji or fb) %}
-    <span class="title-english">{{ english }}</span>
-    {% endif %}
-{% elif title_display == "both_english_primary" %}
-    <span class="title-romaji">{{ english or romaji or fb }}</span>
+{% if title_display == "english" or title_display == "both_english_primary" %}
+    <span class="title-romaji scroll-on-hover">{{ english or romaji or fb }}</span>
     {% if romaji and romaji != (english or fb) %}
-    <span class="title-english">{{ romaji }}</span>
+    <span class="title-english scroll-on-hover">{{ romaji }}</span>
     {% endif %}
-{% else %}{# romaji (default) #}
-    <span class="title-romaji">{{ romaji or fb }}</span>
+{% else %}{# romaji (default) — also handles both_romaji_primary #}
+    <span class="title-romaji scroll-on-hover">{{ romaji or fb }}</span>
+    {% if english and english != (romaji or fb) %}
+    <span class="title-english scroll-on-hover">{{ english }}</span>
+    {% endif %}
 {% endif %}
 {% endmacro %}
 

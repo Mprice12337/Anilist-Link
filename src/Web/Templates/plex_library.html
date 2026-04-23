@@ -125,9 +125,6 @@
             {% else %}
             <span class="title-romaji">{{ item.plex_title }}</span>
             {% endif %}
-            {% if item.folder_name and item.folder_name != item.plex_title %}
-            <span class="library-card-folder">{{ item.folder_name }}</span>
-            {% endif %}
             {% if item.plex_year %}<span class="library-card-year">{{ item.plex_year }}</span>{% endif %}
         </div>
     </div>
@@ -154,9 +151,6 @@
             {{ render_title(item, title_display, item.plex_title or "") }}
             {% else %}
             <span class="title-romaji">{{ item.plex_title }}</span>
-            {% endif %}
-            {% if item.folder_name and item.folder_name != item.plex_title %}
-            <span class="library-card-folder">{{ item.folder_name }}</span>
             {% endif %}
             {% if item.plex_year %}<span class="library-card-year">{{ item.plex_year }}</span>{% endif %}
         </div>

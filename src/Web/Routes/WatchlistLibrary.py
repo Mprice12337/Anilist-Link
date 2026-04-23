@@ -120,6 +120,7 @@ async def library_page(request: Request) -> HTMLResponse:
 
     cfg = request.app.state.config
     arr_enabled = cfg.download_sync.arr_enabled
+    title_display = await db.get_setting("app.title_display") or "romaji"
 
     # Fetch Sonarr/Radarr file stats to show local availability from *arr
     sonarr_stats: dict[int, dict] = {}  # sonarr_id -> {0: all, N: season}
@@ -219,6 +220,7 @@ async def library_page(request: Request) -> HTMLResponse:
             "user": user,
             "user_id": user_id,
             "arr_enabled": arr_enabled,
+            "title_display": title_display,
         },
     )
 

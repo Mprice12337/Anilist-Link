@@ -119,10 +119,8 @@
                 <select name="{{ key }}" id="{{ key }}"
                         {% if key in env_overrides %}disabled{% endif %}>
                     {% if key == "app.title_display" %}
-                    <option value="romaji" {% if display.get(key, "romaji") == "romaji" %}selected{% endif %}>Romaji</option>
-                    <option value="english" {% if display.get(key) == "english" %}selected{% endif %}>English</option>
-                    <option value="both_romaji_primary" {% if display.get(key) == "both_romaji_primary" %}selected{% endif %}>Both (Romaji primary)</option>
-                    <option value="both_english_primary" {% if display.get(key) == "both_english_primary" %}selected{% endif %}>Both (English primary)</option>
+                    <option value="romaji" {% if display.get(key, "romaji") in ("romaji", "both_romaji_primary") %}selected{% endif %}>Romaji</option>
+                    <option value="english" {% if display.get(key) in ("english", "both_english_primary") %}selected{% endif %}>English</option>
                     {% elif key == "naming.illegal_char_replacement" %}
                     <option value="" {% if display.get(key, "") == "" %}selected{% endif %}>Remove — Re:Zero → ReZero</option>
                     <option value="-" {% if display.get(key) == "-" %}selected{% endif %}>Hyphen — Re:Zero → Re-Zero</option>

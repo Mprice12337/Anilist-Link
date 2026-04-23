@@ -121,9 +121,6 @@
             {% else %}
             <span class="title-romaji">{{ item.jellyfin_title }}</span>
             {% endif %}
-            {% if item.folder_name and item.folder_name != item.jellyfin_title %}
-            <span class="library-card-folder">{{ item.folder_name }}</span>
-            {% endif %}
             {% if item.jellyfin_year %}<span class="library-card-year">{{ item.jellyfin_year }}</span>{% endif %}
         </div>
     </div>
@@ -149,9 +146,6 @@
             {{ render_title(item, title_display, item.jellyfin_title or "") }}
             {% else %}
             <span class="title-romaji">{{ item.jellyfin_title }}</span>
-            {% endif %}
-            {% if item.folder_name and item.folder_name != item.jellyfin_title %}
-            <span class="library-card-folder">{{ item.folder_name }}</span>
             {% endif %}
             {% if item.jellyfin_year %}<span class="library-card-year">{{ item.jellyfin_year }}</span>{% endif %}
         </div>
