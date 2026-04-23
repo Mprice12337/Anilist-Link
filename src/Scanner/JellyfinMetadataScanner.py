@@ -1106,6 +1106,48 @@ class JellyfinMetadataScanner:
 
         logger.info("  [applied] Jellyfin metadata written to '%s'", jellyfin_title)
 
+    async def _get_sibling_provider_ids(self, anilist_id: int) -> dict[str, str] | None:
+        """Check if a sibling in the same series group already has provider IDs.
+
+        TVMaze treats a show as one entity with multiple seasons, so all
+        entries in a series group share the same IMDB/TVDB/TVMaze IDs.  If
+        any sibling already has them cached we can skip the TVMaze API call.
+
+        Returns ``{"imdb_id": ..., "tvdb_id": ..., "tvmaze_id": ...}`` or
+        ``None`` if no sibling has provider IDs.
+        """
+        group = await self._db.get_series_group_by_anilist_id(anilist_id)
+        if not group:
+            return None
+
+        entries = await self._db.get_series_group_entries(group["id"])
+        sibling_ids = [
+            e["anilist_id"] for e in entries if e["anilist_id"] != anilist_id
+        ]
+        if not sibling_ids:
+            return None
+
+        for sid in sibling_ids:
+            cached = await self._db.get_cached_metadata(sid)
+            if not cached:
+                continue
+            imdb = cached.get("imdb_id") or ""
+            tvdb = cached.get("tvdb_id") or ""
+            tvmaze = cached.get("tvmaze_id") or ""
+            if imdb or tvdb or tvmaze:
+                logger.debug(
+                    "Reusing provider IDs from sibling %d for entry %d "
+                    "(imdb=%s, tvdb=%s, tvmaze=%s)",
+                    sid,
+                    anilist_id,
+                    imdb,
+                    tvdb,
+                    tvmaze,
+                )
+                return {"imdb_id": imdb, "tvdb_id": tvdb, "tvmaze_id": tvmaze}
+
+        return None
+
     async def _get_anilist_metadata(
         self, anilist_id: int, force_refresh: bool = False
     ) -> dict[str, Any] | None:
@@ -1129,10 +1171,21 @@ class JellyfinMetadataScanner:
             # was added), run the lookup now and persist the result so subsequent
             # runs don't need to hit TVMaze again.
             if not imdb_id and not tvdb_id and not tvmaze_id:
-                tvmaze_title = (
-                    cached.get("title_english") or cached.get("title_romaji") or ""
-                )
-                tvmaze_ids = await self._tvmaze.search_show(tvmaze_title)
+                # Try sibling reuse first — avoids TVMaze API calls for sequels.
+                sibling_ids = await self._get_sibling_provider_ids(anilist_id)
+                if sibling_ids:
+                    tvmaze_ids = sibling_ids
+                else:
+                    tvmaze_titles = [
+                        t
+                        for t in [
+                            cached.get("title_english") or "",
+                            cached.get("title_romaji") or "",
+                            cached.get("title_native") or "",
+                        ]
+                        if t
+                    ]
+                    tvmaze_ids = await self._tvmaze.search_show_multi(tvmaze_titles)
                 if tvmaze_ids:
                     imdb_id = tvmaze_ids.get("imdb_id") or ""
                     tvdb_id = tvmaze_ids.get("tvdb_id") or ""
@@ -1186,9 +1239,24 @@ class JellyfinMetadataScanner:
         cached_studio = studios_nodes[0].get("name") or "" if studios_nodes else ""
 
         # TVMaze lookup for IMDB/TVDB IDs — runs once per entry on cache miss.
-        # Try English title first (more likely to match TVMaze), fall back to romaji.
-        tvmaze_title = title_obj.get("english") or title_obj.get("romaji") or ""
-        tvmaze_ids = await self._tvmaze.search_show(tvmaze_title)
+        # Try sibling reuse first (all entries in a series group share the same
+        # TVMaze/TVDB/IMDB IDs since TVMaze treats a show as one entity).
+        tvmaze_ids = await self._get_sibling_provider_ids(anilist_id)
+        if not tvmaze_ids:
+            # No sibling IDs available — do the full multi-title search.
+            tvmaze_titles = [
+                t
+                for t in [
+                    title_obj.get("english") or "",
+                    title_obj.get("romaji") or "",
+                    title_obj.get("native") or "",
+                ]
+                if t
+            ]
+            for syn in metadata.get("synonyms") or []:
+                if syn and syn.strip():
+                    tvmaze_titles.append(syn.strip())
+            tvmaze_ids = await self._tvmaze.search_show_multi(tvmaze_titles)
         imdb_id = (tvmaze_ids or {}).get("imdb_id") or ""
         tvdb_id = (tvmaze_ids or {}).get("tvdb_id") or ""
         tvmaze_id = (tvmaze_ids or {}).get("tvmaze_id") or ""
