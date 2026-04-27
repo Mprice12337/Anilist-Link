@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros.html" import render_title %}
 {% block title %}Anilist-Link: Crunchyroll{% endblock %}
 {% block container_class %}container-wide{% endblock %}
 
@@ -385,16 +386,17 @@
           data-change-type="{{ 'new' if not entry.before_status else ('completed' if entry.after_status == 'COMPLETED' else 'progress') }}"
           data-run-id="{{ entry.sync_run_id }}"
           data-applied="{{ entry.applied_at | localtime if entry.applied_at else '' }}"
-          style="{% if entry.undone_at %}opacity:0.5{% endif %}">
-        <td>
+          data-hidx="{{ loop.index0 }}"
+          style="cursor:pointer;{% if entry.undone_at %}opacity:0.5{% endif %}"
+          onclick="openCrHistoryDetail({{ loop.index0 }})">
+        <td class="cr-history-title-cell">
           <div style="display:flex;align-items:center;gap:0.5rem">
             {% if entry.sync_run_id == latest_sync_run_id %}
             <span class="badge cr-badge-recent" title="From latest sync run">New</span>
             {% endif %}
-            <a href="https://anilist.co/anime/{{ entry.anilist_id }}" target="_blank"
-               rel="noopener" class="title-romaji">
-              {{ entry.show_title or ("AniList #" ~ entry.anilist_id) }}
-            </a>
+            <div style="min-width:0">
+              {{ render_title(entry, title_display, entry.show_title or ("AniList #" ~ entry.anilist_id)) }}
+            </div>
           </div>
         </td>
         <td style="font-size:0.82rem">
@@ -435,7 +437,7 @@
           <button type="button" class="btn btn-secondary btn-sm"
                   id="undo-btn-{{ entry.id }}"
                   {% if entry.undone_at %}disabled{% endif %}
-                  onclick="undoEntry({{ entry.id }}, {{ entry.show_title | tojson }})">
+                  onclick="event.stopPropagation(); undoEntry({{ entry.id }}, {{ entry.show_title | tojson }})">
             Undo
           </button>
         </td>
@@ -645,6 +647,32 @@
 
 .badge-info { background:rgba(61,180,242,0.15); color:var(--accent); }
 .badge-danger { background:rgba(232,93,117,0.15); color:var(--danger); }
+
+.cr-history-title-cell {
+  max-width: 280px;
+  vertical-align: middle;
+}
+.cr-history-title-cell .title-romaji {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+  font-size: 0.9rem;
+}
+.cr-history-title-cell .title-english {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+  font-size: 0.78rem;
+}
+.history-row:hover {
+  background: var(--bg-hover, rgba(255,255,255,0.03));
+}
+.history-row td {
+  padding-top: 0.6rem;
+  padding-bottom: 0.6rem;
+}
 </style>
 
 <script>
@@ -654,6 +682,40 @@
 var RUN_ID = {{ run_id | tojson }};
 var LATEST_SYNC_RUN = {{ latest_sync_run_id | tojson }};
 
+// ── History entry data for media detail modal ─────────────────────────
+var _crHistoryEntries = [
+  {% for entry in log_entries %}
+  {{ {
+    "anilist_id": entry.anilist_id,
+    "anilist_title": entry.show_title,
+    "title_romaji": entry.title_romaji or entry.show_title,
+    "title_english": entry.title_english or "",
+    "cover_image": entry.cover_image or "",
+    "list_status": entry.after_status or "",
+    "progress": entry.after_progress or 0,
+    "anilist_episodes": entry.anilist_episodes,
+    "anilist_format": entry.anilist_format or "",
+    "start_year": entry.start_year or 0,
+    "airing_status": entry.airing_status or "",
+    "description": entry.description or "",
+    "studio": entry.studio or "",
+    "rating": entry.rating,
+  } | tojson }},
+  {% endfor %}
+];
+
+if (typeof setMediaDetailTitleDisplay === 'function') {
+  setMediaDetailTitleDisplay({{ title_display | tojson }});
+}
+
+window.openCrHistoryDetail = function (idx) {
+  var entry = _crHistoryEntries[idx];
+  if (!entry || !entry.anilist_id) return;
+  if (typeof openMediaDetail === 'function') {
+    openMediaDetail(entry, 'dashboard');
+  }
+};
+
 // ── Tab switching ──────────────────────────────────────────────────────
 window.switchTab = function (tab) {
   ['preview','history'].forEach(function(t) {
@@ -662,9 +724,11 @@ window.switchTab = function (tab) {
     var ss = document.getElementById('stats-strip-' + t);
     if (ss) ss.style.display = t === tab ? '' : 'none';
   });
-  history.replaceState(null, '', window.location.pathname +
-    (RUN_ID ? '?run_id=' + encodeURIComponent(RUN_ID) : '') +
-    '&tab=' + tab);
+  var params = new URLSearchParams();
+  if (RUN_ID) params.set('run_id', RUN_ID);
+  params.set('tab', tab);
+  var qs = params.toString();
+  history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : ''));
 };
 
 // ── Run selector ───────────────────────────────────────────────────────
@@ -1153,6 +1217,8 @@ filterHistory();
 // Set initial sort arrow for history
 var initArrow = document.getElementById('hsa-applied_at');
 if (initArrow) initArrow.className = 'sort-arrow desc';
+// Init scroll-on-hover for truncated titles
+if (typeof initScrollOnHover === 'function') initScrollOnHover();
 
 // On load: resume polling if a scan is already in progress
 (function checkInFlightScan() {

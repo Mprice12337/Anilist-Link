@@ -311,6 +311,63 @@ async def trigger_plex_push(request: Request) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
+async def _enrich_log_entries(db: object, entries: list[dict]) -> list[dict]:
+    """Add full metadata to log entries for title display and the media
+    detail modal.
+
+    Tries ``anilist_cache`` first (TTL ignored — titles are stable), then
+    falls back to ``user_watchlist`` which has titles for anything on the
+    user's AniList (covers Crunchyroll-synced entries that were never
+    scanned into the metadata cache).
+    """
+    if not entries:
+        return entries
+    anilist_ids = list({e["anilist_id"] for e in entries if e.get("anilist_id")})
+    if not anilist_ids:
+        return entries
+
+    placeholders = ",".join("?" for _ in anilist_ids)
+
+    # Primary source: anilist_cache (has description, genres, studio, rating)
+    cache_rows = await db.fetch_all(  # type: ignore[attr-defined]
+        f"SELECT * FROM anilist_cache WHERE anilist_id IN ({placeholders})",
+        tuple(anilist_ids),
+    )
+    meta_map: dict[int, dict] = {r["anilist_id"]: dict(r) for r in cache_rows}
+
+    # Fallback: user_watchlist (has titles, cover, format, episodes, year)
+    missing = [aid for aid in anilist_ids if aid not in meta_map]
+    if missing:
+        wl_ph = ",".join("?" for _ in missing)
+        wl_rows = await db.fetch_all(  # type: ignore[attr-defined]
+            f"SELECT * FROM user_watchlist WHERE anilist_id IN ({wl_ph})",
+            tuple(missing),
+        )
+        for r in wl_rows:
+            aid = r["anilist_id"]
+            if aid not in meta_map:
+                meta_map[aid] = dict(r)
+
+    enriched = []
+    for e in entries:
+        row = dict(e)
+        m = meta_map.get(e.get("anilist_id", 0)) or {}
+        row["title_romaji"] = m.get("title_romaji", "")
+        row["title_english"] = m.get("title_english", "")
+        row["cover_image"] = m.get("cover_image", "")
+        # anilist_cache uses "episodes"; user_watchlist uses "anilist_episodes"
+        row["anilist_episodes"] = m.get("episodes") or m.get("anilist_episodes")
+        row["anilist_format"] = m.get("anilist_format", "")
+        row["start_year"] = m.get("year") or m.get("start_year") or 0
+        row["airing_status"] = m.get("status") or m.get("airing_status", "")
+        row["genres"] = m.get("genres", "[]")
+        row["rating"] = m.get("rating")
+        row["studio"] = m.get("studio", "")
+        row["description"] = m.get("description", "")
+        enriched.append(row)
+    return enriched
+
+
 @router.get("/watch-sync")
 async def watch_sync_page(request: Request):  # type: ignore[return]
     """Render the watch sync account linking and status page."""
@@ -322,6 +379,17 @@ async def watch_sync_page(request: Request):  # type: ignore[return]
     plex_user = await db.get_plex_user()
     sync_log = await db.get_watch_sync_log(limit=100)
 
+    # Crunchyroll data
+    cr_configured = bool(config.crunchyroll.email and config.crunchyroll.password)
+    cr_auto_approve = config.crunchyroll.auto_approve
+    cr_sync_log = await db.get_cr_sync_log(limit=100)
+
+    # Enrich with cached AniList titles for dual-language display
+    sync_log = await _enrich_log_entries(db, sync_log)
+    cr_sync_log = await _enrich_log_entries(db, cr_sync_log)
+
+    title_display = await db.get_setting("app.title_display") or "romaji"
+
     return templates.TemplateResponse(
         "watch_sync.html",
         {
@@ -330,9 +398,15 @@ async def watch_sync_page(request: Request):  # type: ignore[return]
             "plex_user": plex_user,
             "plex_watch_sync_enabled": config.plex.watch_sync_enabled,
             "jellyfin_watch_sync_enabled": config.jellyfin.watch_sync_enabled,
-            "jellyfin_configured": bool(config.jellyfin.url and config.jellyfin.api_key),
+            "jellyfin_configured": bool(
+                config.jellyfin.url and config.jellyfin.api_key
+            ),
             "plex_configured": bool(config.plex.url and config.plex.token),
             "sync_log": sync_log,
+            "cr_configured": cr_configured,
+            "cr_auto_approve": cr_auto_approve,
+            "cr_sync_log": cr_sync_log,
+            "title_display": title_display,
         },
     )
 

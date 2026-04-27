@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from src.Clients.CrunchyrollClient import CrunchyrollClient
 from src.Matching.TitleMatcher import TitleMatcher, get_primary_title
@@ -52,6 +52,50 @@ async def crunchyroll_hub(
         if log_entries:
             latest_sync_run_id = log_entries[0]["sync_run_id"]
 
+    # Enrich history entries — anilist_cache first, user_watchlist fallback
+    # (CR-synced entries often aren't in anilist_cache since the preview
+    # runner doesn't cache metadata; user_watchlist has titles after the
+    # post-sync watchlist refresh.)
+    cr_anilist_ids = list(
+        {e.get("anilist_id", 0) for e in log_entries if e.get("anilist_id")}
+    )
+    meta_map: dict[int, dict] = {}
+    if cr_anilist_ids:
+        placeholders = ",".join("?" for _ in cr_anilist_ids)
+        cache_rows = await db.fetch_all(
+            f"SELECT * FROM anilist_cache WHERE anilist_id IN ({placeholders})",
+            tuple(cr_anilist_ids),
+        )
+        meta_map = {r["anilist_id"]: dict(r) for r in cache_rows}
+        missing = [aid for aid in cr_anilist_ids if aid not in meta_map]
+        if missing:
+            wl_ph = ",".join("?" for _ in missing)
+            wl_rows = await db.fetch_all(
+                f"SELECT * FROM user_watchlist WHERE anilist_id IN ({wl_ph})",
+                tuple(missing),
+            )
+            for r in wl_rows:
+                aid = r["anilist_id"]
+                if aid not in meta_map:
+                    meta_map[aid] = dict(r)
+    enriched_log: list[dict] = []
+    for entry in log_entries:
+        row = dict(entry)
+        m = meta_map.get(entry.get("anilist_id", 0), {})
+        row["title_romaji"] = m.get("title_romaji", "")
+        row["title_english"] = m.get("title_english", "")
+        row["cover_image"] = m.get("cover_image", "")
+        row["anilist_episodes"] = m.get("episodes") or m.get("anilist_episodes")
+        row["anilist_format"] = m.get("anilist_format", "")
+        row["start_year"] = m.get("year") or m.get("start_year") or 0
+        row["airing_status"] = m.get("status") or m.get("airing_status", "")
+        row["description"] = m.get("description", "")
+        row["studio"] = m.get("studio", "")
+        row["rating"] = m.get("rating")
+        enriched_log.append(row)
+
+    title_display = await db.get_setting("app.title_display") or "romaji"
+
     return templates.TemplateResponse(
         "crunchyroll.html",
         {
@@ -59,10 +103,11 @@ async def crunchyroll_hub(
             "rows": rows,
             "run_id": active_run_id,
             "runs": runs,
-            "log_entries": log_entries,
+            "log_entries": enriched_log,
             "latest_sync_run_id": latest_sync_run_id,
             "user": user,
             "active_tab": tab,
+            "title_display": title_display,
             "version": "0.1.0",
         },
     )
@@ -73,61 +118,19 @@ async def crunchyroll_hub(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/crunchyroll/preview", response_class=HTMLResponse)
-async def cr_preview_page(request: Request, run_id: str = "") -> HTMLResponse:
-    """Render the Crunchyroll sync preview page."""
-    db = request.app.state.db
-    templates = request.app.state.templates
-
-    users = await db.get_users_by_service("anilist")
-    user = users[0] if users else None
-
-    rows: list[dict] = []
-    active_run_id = run_id
-    runs: list[dict] = []
-
-    if user:
-        runs = await db.get_cr_preview_runs(user["user_id"])
-        if not active_run_id and runs:
-            active_run_id = runs[0]["run_id"]
-        if active_run_id:
-            rows = await db.get_cr_preview_run(active_run_id)
-
-    return templates.TemplateResponse(
-        "crunchyroll_preview.html",
-        {
-            "request": request,
-            "rows": rows,
-            "run_id": active_run_id,
-            "runs": runs,
-            "user": user,
-            "version": "0.1.0",
-        },
-    )
+@router.get("/crunchyroll/preview")
+async def cr_preview_page(request: Request, run_id: str = "") -> RedirectResponse:
+    """Redirect legacy preview page to the unified hub."""
+    url = "/crunchyroll?tab=preview"
+    if run_id:
+        url += "&run_id=" + run_id
+    return RedirectResponse(url, status_code=301)
 
 
-@router.get("/crunchyroll/history", response_class=HTMLResponse)
-async def cr_history_page(request: Request) -> HTMLResponse:
-    """Render the Crunchyroll sync history page."""
-    db = request.app.state.db
-    templates = request.app.state.templates
-
-    users = await db.get_users_by_service("anilist")
-    user = users[0] if users else None
-
-    log_entries: list[dict] = []
-    if user:
-        log_entries = await db.get_cr_sync_log(user_id=user["user_id"], limit=200)
-
-    return templates.TemplateResponse(
-        "crunchyroll_history.html",
-        {
-            "request": request,
-            "log_entries": log_entries,
-            "user": user,
-            "version": "0.1.0",
-        },
-    )
+@router.get("/crunchyroll/history")
+async def cr_history_page(request: Request) -> RedirectResponse:
+    """Redirect legacy history page to the unified hub history tab."""
+    return RedirectResponse("/crunchyroll?tab=history", status_code=301)
 
 
 # ---------------------------------------------------------------------------

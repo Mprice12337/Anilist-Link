@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros.html" import render_title %}
 {% block title %}Anilist-Link: Watch Sync{% endblock %}
 {% block container_class %}container-medium{% endblock %}
 
@@ -57,10 +58,10 @@
 
     <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
       <button class="btn btn-primary" onclick="runJellyfinSync()">
-        ↑ Jellyfin → AniList
+        Jellyfin → AniList
       </button>
       <button class="btn btn-secondary" onclick="pushJellyfinSync()">
-        ↓ AniList → Jellyfin
+        AniList → Jellyfin
       </button>
       <button class="btn btn-danger" onclick="unlinkJellyfin()">
         Unlink
@@ -131,10 +132,10 @@
 
     <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
       <button class="btn btn-primary" onclick="runPlexSync()">
-        ↑ Plex → AniList
+        Plex → AniList
       </button>
       <button class="btn btn-secondary" onclick="pushPlexSync()">
-        ↓ AniList → Plex
+        AniList → Plex
       </button>
       <button class="btn btn-danger" onclick="unlinkPlex()">
         Unlink
@@ -162,14 +163,64 @@
   {% endif %}
 </div>
 
-{# ── Sync History ─────────────────────────────────────────────────────── #}
+{# ── Crunchyroll ────────────────────────────────────────────────────── #}
 <div class="card" style="margin-bottom:1.5rem">
   <div class="card-header" style="display:flex;align-items:center;gap:0.75rem">
-    <h2 style="margin:0;font-size:1.1rem">Sync History</h2>
-    <span class="text-muted" style="font-size:0.85rem">(Plex &amp; Jellyfin — last 100)</span>
+    <h2 style="margin:0;font-size:1.1rem">Crunchyroll</h2>
+    {% if not cr_configured %}
+    <span class="badge badge-gray">Not configured</span>
+    {% else %}
+    <span class="badge badge-green">Configured</span>
+    {% endif %}
+  </div>
+  {% if not cr_configured %}
+  <div class="card-body service-disabled">
+    <p class="text-muted" style="margin:0">
+      Configure Crunchyroll credentials in <a href="/settings" class="service-disabled-link">Settings</a> to enable watch sync.
+    </p>
+  </div>
+  {% else %}
+  <div class="card-body">
+    <p class="text-muted" style="margin:0 0 1rem;font-size:0.9rem">
+      Syncs your Crunchyroll watch history to AniList.
+      {% if cr_auto_approve %}
+      Auto-approve is <strong>enabled</strong> — changes are applied directly.
+      {% else %}
+      Auto-approve is <strong>disabled</strong> — changes go to preview for manual review.
+      {% endif %}
+    </p>
+
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
+      <button class="btn btn-primary" onclick="runCrunchyrollSync()">
+        Crunchyroll → AniList
+      </button>
+      <a href="/crunchyroll" class="btn btn-secondary">
+        Open Preview &amp; History Tool
+      </a>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+{# ── Sync History ─────────────────────────────────────────────────────── #}
+<div class="card" style="margin-bottom:1.5rem">
+  <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.75rem">
+    <div style="display:flex;align-items:center;gap:0.75rem">
+      <h2 style="margin:0;font-size:1.1rem">Sync History</h2>
+      <span class="text-muted" style="font-size:0.85rem">(last 100 per source)</span>
+    </div>
+    <div style="display:flex;gap:0.5rem;align-items:center">
+      <select id="history-source-filter" class="form-input" style="height:2rem;font-size:0.82rem;min-width:120px"
+              onchange="filterSyncHistory()">
+        <option value="">All sources</option>
+        <option value="plex">Plex</option>
+        <option value="jellyfin">Jellyfin</option>
+        <option value="crunchyroll">Crunchyroll</option>
+      </select>
+    </div>
   </div>
   <div class="card-body" style="padding:0">
-    {% if sync_log %}
+    {% if sync_log or cr_sync_log %}
     <div style="overflow-x:auto">
       <table class="data-table" style="margin:0">
         <thead>
@@ -183,8 +234,11 @@
           </tr>
         </thead>
         <tbody id="sync-log-tbody">
+          {# ── Plex / Jellyfin entries ── #}
           {% for entry in sync_log %}
-          <tr id="log-row-{{ entry.id }}" {% if entry.undone_at %}class="text-muted" style="opacity:0.55"{% endif %}>
+          <tr id="log-row-{{ entry.id }}" class="sync-history-row" data-source="{{ entry.source }}"
+              data-entry-idx="ws-{{ loop.index0 }}" style="cursor:pointer;{% if entry.undone_at %}opacity:0.55;{% endif %}"
+              onclick="openSyncDetail('ws-{{ loop.index0 }}')">
             <td style="white-space:nowrap">
               {% if entry.direction == 'to_media' %}
               <span class="direction-arrow" title="AniList → {{ entry.source|title }}">↓</span>
@@ -195,9 +249,8 @@
                 {{ entry.source|title }}
               </span>
             </td>
-            <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                title="{{ entry.show_title }}">
-              {{ entry.show_title or '—' }}
+            <td class="sync-title-cell">
+              {{ render_title(entry, title_display, entry.show_title or "—") }}
             </td>
             <td style="white-space:nowrap">
               {% if entry.before_status %}
@@ -214,13 +267,51 @@
             </td>
             <td>
               {% if entry.direction == 'to_media' %}
-              {# Backfill entries can't be undone — no API to unmark in Plex/Jellyfin #}
               {% elif entry.undone_at %}
               <span class="text-muted" style="font-size:0.8rem">Undone</span>
               {% else %}
               <button class="btn btn-sm btn-danger"
-                      onclick="undoEntry({{ entry.id }})"
+                      onclick="event.stopPropagation(); undoEntry({{ entry.id }})"
                       id="undo-btn-{{ entry.id }}">
+                Undo
+              </button>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+
+          {# ── Crunchyroll entries ── #}
+          {% for entry in cr_sync_log %}
+          <tr id="cr-log-row-{{ entry.id }}" class="sync-history-row" data-source="crunchyroll"
+              data-entry-idx="cr-{{ loop.index0 }}" style="cursor:pointer;{% if entry.undone_at %}opacity:0.55;{% endif %}"
+              onclick="openSyncDetail('cr-{{ loop.index0 }}')">
+            <td style="white-space:nowrap">
+              <span class="direction-arrow" title="Crunchyroll → AniList">↑</span>
+              <span class="badge badge-cr">Crunchyroll</span>
+            </td>
+            <td class="sync-title-cell">
+              {{ render_title(entry, title_display, entry.show_title or "—") }}
+            </td>
+            <td style="white-space:nowrap">
+              {% if entry.before_status %}
+              <span class="text-muted">{{ entry.before_status }}</span> ep {{ entry.before_progress }}
+              {% else %}
+              <span class="text-muted">new</span>
+              {% endif %}
+            </td>
+            <td style="white-space:nowrap">
+              <strong>{{ entry.after_status }}</strong> ep {{ entry.after_progress }}
+            </td>
+            <td style="white-space:nowrap;font-size:0.8rem" class="text-muted">
+              {{ entry.applied_at[:16] if entry.applied_at else '—' }}
+            </td>
+            <td>
+              {% if entry.undone_at %}
+              <span class="text-muted" style="font-size:0.8rem">Undone</span>
+              {% else %}
+              <button class="btn btn-sm btn-danger"
+                      onclick="event.stopPropagation(); undoCrEntry({{ entry.id }})"
+                      id="cr-undo-btn-{{ entry.id }}">
                 Undo
               </button>
               {% endif %}
@@ -247,9 +338,10 @@
     <ul style="margin:0;padding-left:1.25rem;line-height:1.8">
       <li><strong>Media server → AniList:</strong> reads watched episodes and updates your AniList progress. Only moves progress forward; won't decrease a count that's higher on AniList.</li>
       <li><strong>AniList → Media server:</strong> pushes your AniList progress back into Plex/Jellyfin by marking episodes as played. Useful for initial backfill.</li>
-      <li><strong>Auto-sync:</strong> disabled by default. Enable the toggle above to run automatically every 15 minutes.</li>
+      <li><strong>Crunchyroll → AniList:</strong> scans your Crunchyroll watch history and syncs to AniList. Use the <a href="/crunchyroll" style="color:var(--accent)">full Crunchyroll tool</a> for preview/approve workflow and detailed episode breakdowns.</li>
+      <li><strong>Auto-sync:</strong> disabled by default for Plex/Jellyfin. Enable the toggle to run automatically every 15 minutes.</li>
       <li><strong>Undo:</strong> each sync entry in the history can be individually reverted, restoring the previous AniList status and progress.</li>
-      <li>Requires that shows are already matched to AniList entries (run a Plex/Jellyfin metadata scan first).</li>
+      <li>Plex/Jellyfin sync requires shows to be matched to AniList entries (run a metadata scan first).</li>
     </ul>
   </div>
 </div>
@@ -269,6 +361,35 @@
   text-align: center;
   font-weight: 600;
   font-size: 0.95rem;
+}
+.badge-cr {
+  background: #f47521;
+  color: #fff;
+}
+.sync-title-cell {
+  max-width: 260px;
+  vertical-align: middle;
+}
+.sync-title-cell .title-romaji {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+  font-size: 0.9rem;
+}
+.sync-title-cell .title-english {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+  font-size: 0.78rem;
+}
+.sync-history-row:hover {
+  background: var(--bg-hover, rgba(255,255,255,0.03));
+}
+.sync-history-row td {
+  padding-top: 0.6rem;
+  padding-bottom: 0.6rem;
 }
 .toggle-switch {
   position: relative;
@@ -312,6 +433,58 @@
 <script>
 (function () {
   "use strict";
+
+  // ── Entry data for media detail modal ─────────────────────────────── //
+  var _wsEntries = {
+    {% for entry in sync_log %}
+    "ws-{{ loop.index0 }}": {{ {
+      "anilist_id": entry.anilist_id,
+      "anilist_title": entry.show_title,
+      "title_romaji": entry.title_romaji or entry.show_title,
+      "title_english": entry.title_english or "",
+      "cover_image": entry.cover_image or "",
+      "list_status": entry.after_status or "",
+      "progress": entry.after_progress or 0,
+      "anilist_episodes": entry.anilist_episodes,
+      "anilist_format": entry.anilist_format or "",
+      "start_year": entry.start_year or 0,
+      "airing_status": entry.airing_status or "",
+      "description": entry.description or "",
+      "studio": entry.studio or "",
+      "rating": entry.rating,
+    } | tojson }},
+    {% endfor %}
+    {% for entry in cr_sync_log %}
+    "cr-{{ loop.index0 }}": {{ {
+      "anilist_id": entry.anilist_id,
+      "anilist_title": entry.show_title,
+      "title_romaji": entry.title_romaji or entry.show_title,
+      "title_english": entry.title_english or "",
+      "cover_image": entry.cover_image or "",
+      "list_status": entry.after_status or "",
+      "progress": entry.after_progress or 0,
+      "anilist_episodes": entry.anilist_episodes,
+      "anilist_format": entry.anilist_format or "",
+      "start_year": entry.start_year or 0,
+      "airing_status": entry.airing_status or "",
+      "description": entry.description or "",
+      "studio": entry.studio or "",
+      "rating": entry.rating,
+    } | tojson }},
+    {% endfor %}
+  };
+
+  if (typeof setMediaDetailTitleDisplay === "function") {
+    setMediaDetailTitleDisplay({{ title_display | tojson }});
+  }
+
+  window.openSyncDetail = function (key) {
+    var entry = _wsEntries[key];
+    if (!entry || !entry.anilist_id) return;
+    if (typeof openMediaDetail === "function") {
+      openMediaDetail(entry, "dashboard");
+    }
+  };
 
   function showAlert(msg, type) {
     var el = document.getElementById("alert-banner");
@@ -507,6 +680,54 @@
     }
   };
 
+  // ── Crunchyroll ──────────────────────────────────────────────────── //
+
+  window.runCrunchyrollSync = async function () {
+    showAlert("Crunchyroll → AniList sync started…", "info");
+    var data = await apiFetch("/api/sync/crunchyroll/run", { method: "POST" });
+    if (data.ok) {
+      var msg = data.mode === "preview"
+        ? "Crunchyroll scan started in preview mode. Review at the Crunchyroll tool page."
+        : "Crunchyroll sync started — changes will be applied directly.";
+      showAlert(msg, "success");
+    } else {
+      showAlert("Error: " + (data.error || "unknown"), "error");
+    }
+  };
+
+  window.undoCrEntry = async function (logId) {
+    if (!confirm("Revert this Crunchyroll sync entry on AniList?")) return;
+    var btn = document.getElementById("cr-undo-btn-" + logId);
+    if (btn) { btn.disabled = true; btn.textContent = "Undoing…"; }
+    var data = await apiFetch("/api/crunchyroll/undo/" + logId, { method: "POST" });
+    if (data.ok) {
+      var row = document.getElementById("cr-log-row-" + logId);
+      if (row) { row.style.opacity = "0.55"; }
+      if (btn) btn.replaceWith(Object.assign(
+        document.createElement("span"),
+        { textContent: "Undone", className: "text-muted", style: "font-size:0.8rem" }
+      ));
+      showAlert("Reverted successfully.", "success");
+    } else {
+      if (btn) { btn.disabled = false; btn.textContent = "Undo"; }
+      showAlert("Error: " + (data.error || "unknown"), "error");
+    }
+  };
+
+  // ── History source filter ───────────────────────────────────────── //
+
+  window.filterSyncHistory = function () {
+    var source = document.getElementById("history-source-filter").value;
+    var rows = document.querySelectorAll(".sync-history-row");
+    rows.forEach(function (row) {
+      if (!source || row.dataset.source === source) {
+        row.style.display = "";
+      } else {
+        row.style.display = "none";
+      }
+    });
+  };
+
   // ── Undo ─────────────────────────────────────────────────────────── //
 
   window.undoEntry = async function (logId) {
@@ -534,6 +755,9 @@
   // ── Auto-load user lists on page load ──────────────────────────────── //
   if (document.getElementById("jf-user-select")) { loadJellyfinUsers(); }
   if (document.getElementById("plex-account-select")) { loadPlexAccounts(); }
+
+  // ── Init scroll-on-hover for truncated titles ─────────────────────── //
+  if (typeof initScrollOnHover === "function") { initScrollOnHover(); }
 
 })();
 </script>
