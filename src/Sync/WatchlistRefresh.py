@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
+import httpx
+
 from src.Clients.AnilistClient import AniListClient
 from src.Database.Connection import DatabaseManager
 
@@ -42,6 +44,13 @@ async def watchlist_refresh_task(
     async def _safe_refresh(user: dict) -> None:
         try:
             await _refresh_user(anilist_client, db, user)
+        except httpx.HTTPStatusError as exc:
+            logger.error(
+                "Watchlist refresh failed for user %s — HTTP %d: %s",
+                user.get("user_id"),
+                exc.response.status_code,
+                exc.response.text[:200] if exc.response.text else "(empty)",
+            )
         except Exception:
             logger.exception(
                 "Watchlist refresh failed for user %s", user.get("user_id")
