@@ -378,7 +378,7 @@ async def _settings_save_impl(request: Request) -> RedirectResponse:
             value = json.dumps([str(v) for v in selected])
         elif input_type == "status_checkboxes":
             # Multi-valued checkboxes: join selected statuses as comma-separated string
-            value = ",".join(form.getlist(key))
+            value = ",".join(str(v) for v in form.getlist(key))
         elif input_type == "checkbox":
             # Checkbox: present in form = true, absent = false
             value = "true" if form.get(key) else "false"

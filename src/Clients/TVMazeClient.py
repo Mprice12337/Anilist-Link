@@ -101,7 +101,7 @@ def _best_fuzzy_score(query: str, result_name: str) -> int:
     partial = max(fuzz.partial_ratio(q, r), fuzz.partial_ratio(r, q))
     scores.append(int(partial * 0.85))
 
-    return max(scores)
+    return int(max(scores))
 
 
 def _strip_season_part(title: str) -> str:

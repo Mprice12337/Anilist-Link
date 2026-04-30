@@ -1052,7 +1052,7 @@ async def restructure_rematch(request: Request) -> JSONResponse:
         await db.upsert_media_mapping(
             source="local",
             source_id=path,
-            source_title=os.path.basename(path.rstrip("/")) or path,
+            source_title=os.path.basename(str(path).rstrip("/")) or str(path),
             anilist_id=anilist_id,
             anilist_title=anilist_title,
             match_confidence=1.0,
@@ -1122,7 +1122,7 @@ async def restructure_rematch(request: Request) -> JSONResponse:
 
     rematched_shows: list[ShowInput] = []
     for path in source_paths:
-        folder_name = os.path.basename(path.rstrip("/")) or path
+        folder_name = os.path.basename(str(path).rstrip("/")) or str(path)
         rematched_shows.append(
             ShowInput(
                 title=folder_name,

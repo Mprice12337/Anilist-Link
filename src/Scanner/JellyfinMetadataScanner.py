@@ -1174,7 +1174,7 @@ class JellyfinMetadataScanner:
                 # Try sibling reuse first — avoids TVMaze API calls for sequels.
                 sibling_ids = await self._get_sibling_provider_ids(anilist_id)
                 if sibling_ids:
-                    tvmaze_ids = sibling_ids
+                    tvmaze_ids = sibling_ids  # type: ignore[assignment]
                 else:
                     tvmaze_titles = [
                         t
@@ -1185,7 +1185,7 @@ class JellyfinMetadataScanner:
                         ]
                         if t
                     ]
-                    tvmaze_ids = await self._tvmaze.search_show_multi(tvmaze_titles)
+                    tvmaze_ids = await self._tvmaze.search_show_multi(tvmaze_titles)  # type: ignore[assignment]
                 if tvmaze_ids:
                     imdb_id = tvmaze_ids.get("imdb_id") or ""
                     tvdb_id = tvmaze_ids.get("tvdb_id") or ""
@@ -1241,7 +1241,7 @@ class JellyfinMetadataScanner:
         # TVMaze lookup for IMDB/TVDB IDs — runs once per entry on cache miss.
         # Try sibling reuse first (all entries in a series group share the same
         # TVMaze/TVDB/IMDB IDs since TVMaze treats a show as one entity).
-        tvmaze_ids = await self._get_sibling_provider_ids(anilist_id)
+        tvmaze_ids = await self._get_sibling_provider_ids(anilist_id)  # type: ignore[assignment]
         if not tvmaze_ids:
             # No sibling IDs available — do the full multi-title search.
             tvmaze_titles = [
@@ -1256,7 +1256,7 @@ class JellyfinMetadataScanner:
             for syn in metadata.get("synonyms") or []:
                 if syn and syn.strip():
                     tvmaze_titles.append(syn.strip())
-            tvmaze_ids = await self._tvmaze.search_show_multi(tvmaze_titles)
+            tvmaze_ids = await self._tvmaze.search_show_multi(tvmaze_titles)  # type: ignore[assignment]
         imdb_id = (tvmaze_ids or {}).get("imdb_id") or ""
         tvdb_id = (tvmaze_ids or {}).get("tvdb_id") or ""
         tvmaze_id = (tvmaze_ids or {}).get("tvmaze_id") or ""

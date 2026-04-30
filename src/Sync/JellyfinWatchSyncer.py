@@ -336,7 +336,7 @@ class JellyfinWatchSyncer(WatchSyncBase):
                 season_number,
             ),
         )
-        return cursor.lastrowid
+        return cursor.lastrowid or 0
 
     # ==================================================================
     # AniList → Jellyfin

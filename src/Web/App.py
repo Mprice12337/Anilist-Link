@@ -196,7 +196,7 @@ def spawn_background_task(
     task.add_done_callback(tasks.discard)
 
     if task_key:
-        registry: dict = getattr(app_state, "cancellable_tasks", None)  # type: ignore[attr-defined]
+        registry: dict = getattr(app_state, "cancellable_tasks", None)  # type: ignore[attr-defined, assignment]
         if registry is None:
             registry = {}
             app_state.cancellable_tasks = registry  # type: ignore[attr-defined]
