@@ -908,6 +908,8 @@ class LibraryRestructurer:
         progress: RestructureProgress,
         level: str = "full_restructure",
         output_dir: str | None = None,
+        movie_output_dir: str | None = None,
+        tv_output_dir: str | None = None,
     ) -> RestructurePlan:
         """Analyze shows and build a restructure plan.
 
@@ -917,12 +919,22 @@ class LibraryRestructurer:
             level: One of "folder_rename", "folder_file_rename", "full_restructure".
             output_dir: If provided, all target folders are placed under this
                 directory instead of alongside their source folders.
+            movie_output_dir: When movie/TV split is enabled, MOVIE-format
+                entries go here instead of output_dir.
+            tv_output_dir: When movie/TV split is enabled, all non-MOVIE
+                entries go here instead of output_dir.
         """
         progress.status = "analyzing"
         progress.phase = "Analyzing shows"
         progress.started_at = time.monotonic()
         progress.total = len(shows)
         progress.processed = 0
+
+        # When split paths are provided, they override the single output_dir.
+        # The per-show resolution happens inside the analysis methods via
+        # _resolve_output_dir.
+        self._movie_output_dir = movie_output_dir
+        self._tv_output_dir = tv_output_dir
 
         plan = RestructurePlan(groups=[], operation_level=level)
 
@@ -937,6 +949,27 @@ class LibraryRestructurer:
         progress.status = "complete"
         progress.phase = "Analysis complete"
         return plan
+
+    def _resolve_output_dir(
+        self,
+        output_dir: str | None,
+        anilist_format: str,
+        fallback_path: str,
+    ) -> str:
+        """Pick the correct output directory for a show.
+
+        When movie/TV split is enabled (both ``_movie_output_dir`` and
+        ``_tv_output_dir`` are set), MOVIE-format entries go to the movie
+        dir and everything else to the TV dir.  Otherwise falls back to
+        the single ``output_dir``, or the source folder's parent.
+        """
+        movie_dir = getattr(self, "_movie_output_dir", None)
+        tv_dir = getattr(self, "_tv_output_dir", None)
+        if movie_dir and tv_dir:
+            if (anilist_format or "").upper() == "MOVIE":
+                return movie_dir
+            return tv_dir
+        return output_dir if output_dir else os.path.dirname(fallback_path)
 
     @staticmethod
     def detect_conflicts(plan: "RestructurePlan") -> list[dict]:
@@ -1096,7 +1129,6 @@ class LibraryRestructurer:
             # Build folder tokens from the group ROOT entry (not first-on-disk)
             # so the merged folder always uses the canonical series name
             first_path = shows_in_group[0]["local_path"]
-            parent_dir = output_dir if output_dir else os.path.dirname(first_path)
 
             root_anilist_id = group_info["root_anilist_id"] if group_info else 0
             root_cache = (
@@ -1104,6 +1136,12 @@ class LibraryRestructurer:
                 if root_anilist_id
                 else None
             )
+
+            # Resolve output directory (movie/TV split aware)
+            root_format = (root_cache.get("format") or "") if root_cache else ""
+            if not root_format:
+                root_format = shows_in_group[0].get("format", "")
+            parent_dir = self._resolve_output_dir(output_dir, root_format, first_path)
 
             # Start with display_title (always the root's title) as baseline
             safe_display = self._san(display_title)
@@ -1190,14 +1228,6 @@ class LibraryRestructurer:
 
                 season_folder_name = self._render_season_folder(season_num, group_si)
                 season_dir = os.path.join(target_folder, season_folder_name)
-
-                # Keep season_name/season_year for cross-season file routing below
-                season_name = (
-                    _resolve_display_title(group_si, self._title_pref)
-                    if group_si
-                    else show_info["title"]
-                )
-                season_year = str(group_si.year) if group_si and group_si.year else ""
 
                 if not os.path.isdir(src_folder):
                     warnings.append(f"Source folder not found: {src_folder}")
@@ -1438,7 +1468,9 @@ class LibraryRestructurer:
                     r'[<>:"/\\|?*]', "", si.anilist_title or si.title
                 ).strip()
 
-            parent_dir = output_dir if output_dir else os.path.dirname(si.local_path)
+            parent_dir = self._resolve_output_dir(
+                output_dir, si.anilist_format, si.local_path
+            )
             target_folder = os.path.join(parent_dir, rendered_folder)
 
             if not os.path.isdir(si.local_path):
@@ -2300,7 +2332,9 @@ class LibraryRestructurer:
                     plan.unchanged_group_ids[si.anilist_id] = sg_group_id
                 continue
 
-            parent_dir = output_dir if output_dir else os.path.dirname(si.local_path)
+            parent_dir = self._resolve_output_dir(
+                output_dir, si.anilist_format, si.local_path
+            )
             target_folder = os.path.join(parent_dir, rendered_folder)
 
             if target_folder in seen_targets:
@@ -2324,7 +2358,8 @@ class LibraryRestructurer:
                 if file_moves and existing_group.operation_type == "rename_folder":
                     existing_group.operation_type = "rename_file"
                 logger.debug(
-                    "Merged duplicate rename target '%s': source '%s' folded into existing group",
+                    "Merged duplicate rename target '%s': "
+                    "source '%s' folded into existing group",
                     target_folder,
                     si.local_path,
                 )

@@ -518,7 +518,8 @@ class JellyfinWatchSyncer(WatchSyncBase):
                 )
 
         logger.debug(
-            "AniList #%d → JF series=%s season=%s uuid=%s user=%s progress=%d offset=%d",
+            "AniList #%d JF series=%s season=%s uuid=%s "
+            "user=%s progress=%d offset=%d",
             anilist_id,
             series_id,
             season_number,

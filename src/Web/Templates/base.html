@@ -28,6 +28,29 @@
     <!-- Persistent notification bar -->
     <div id="notification-bar" class="notification-bar"></div>
 
+    <!-- Shared media detail modal + script (loaded before page content so inline scripts can use it) -->
+    <div class="modal-backdrop hidden" id="mediaDetailModal" onclick="if(event.target===this)closeMediaDetail()">
+      <div class="modal-box entry-detail-box" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <h2 id="mdTitle">Details</h2>
+          <button class="modal-close" onclick="closeMediaDetail()">&times;</button>
+        </div>
+        <div class="modal-body entry-detail-body">
+          <div class="entry-detail-poster-col">
+            <div id="mdPosterWrap"></div>
+          </div>
+          <div class="entry-detail-info-col">
+            <div class="entry-detail-top-row">
+              <div id="mdTitleWrap" style="flex:1;min-width:0"></div>
+              <div id="mdToolbar" class="entry-detail-toolbar"></div>
+            </div>
+            <div id="mdInfoGrid" class="entry-detail-grid"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script src="/static/media-detail.js"></script>
+
     <main class="{% block container_class %}container{% endblock %}">
         {% block content %}{% endblock %}
     </main>

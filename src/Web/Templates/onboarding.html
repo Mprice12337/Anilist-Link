@@ -322,6 +322,10 @@
         </div>
         <div class="wizard-step-marker" id="prog-4">
             <div class="step-circle">4</div>
+            <span class="step-label">Settings</span>
+        </div>
+        <div class="wizard-step-marker" id="prog-5">
+            <div class="step-circle">5</div>
             <span class="step-label">Done</span>
         </div>
     </div>
@@ -413,6 +417,30 @@
                 </div>
                 <div style="margin-top: 0.25rem; font-size: 0.78rem; color: var(--text-muted)">
                     Click a folder to select it as the output. Double-click to navigate into it.
+                </div>
+            </div>
+
+            <!-- Movie/TV split (hidden in skip mode) -->
+            <div id="step2-split-section" style="margin-bottom:1.5rem;display:none">
+                <div class="section-label">Split Movies and TV</div>
+                <div style="padding:0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);font-size:0.85rem;margin-bottom:0.75rem">
+                    Plex and Jellyfin require separate libraries for Movies and TV to correctly index metadata. When enabled, movie-format entries go to a dedicated Movies directory and everything else goes to a TV directory.
+                </div>
+                <label class="toggle" style="margin-bottom:0.75rem">
+                    <input type="checkbox" id="ob-split-toggle" onchange="onboardingSplitToggle()">
+                    <span class="toggle-label">Enable separate Movie and TV directories</span>
+                </label>
+                <div id="ob-split-pickers" class="hidden">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Movie output directory</label>
+                            <div id="ob-dp-movie-out"></div>
+                        </div>
+                        <div class="form-group">
+                            <label>TV / Everything Else output directory</label>
+                            <div id="ob-dp-tv-out"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -842,6 +870,21 @@
                         </div>
                     </div>
                 </div>
+                <div style="border-top:1px solid var(--border);padding-top:1rem;margin-top:0.75rem">
+                    <div class="section-label">Sync Schedule</div>
+                    <div class="form-grid" style="margin-bottom:0.5rem">
+                        <div class="form-group">
+                            <label for="cr-sync-time">Daily sync time (HH:MM, 24h)</label>
+                            <input type="text" id="cr-sync-time" placeholder="02:00" value="{{ settings.cr_sync_time }}" style="width:100px">
+                            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.2rem">Runs once daily at this time</div>
+                        </div>
+                        <div class="form-group">
+                            <label for="cr-sync-interval">Sync interval (minutes)</label>
+                            <input type="number" id="cr-sync-interval" min="1" value="{{ settings.cr_sync_interval }}" style="width:100px">
+                            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.2rem">Used if no daily time is set</div>
+                        </div>
+                    </div>
+                </div>
                 <div id="cr-service-status" style="display:none; margin-top:0.75rem; font-size:0.85rem; color:var(--text-muted)">
                     Skipped
                 </div>
@@ -1004,9 +1047,103 @@
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════
-         STEP 4 — Review & Done
+         STEP 4 — Settings & Preferences
     ═══════════════════════════════════════════════════════════ -->
     <div class="step-panel" id="step-4">
+        <div class="card">
+            <h2>Settings &amp; Preferences</h2>
+            <p class="text-muted hint">Configure display, scheduling, and download preferences. You can change all of these later from the Settings page.</p>
+
+            <!-- Title Display -->
+            <div style="margin-bottom:1.5rem">
+                <div class="section-label">Display</div>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="ob-title-display">Title display</label>
+                        <select id="ob-title-display" style="width:160px">
+                            <option value="romaji" {{ 'selected' if settings.title_display == 'romaji' else '' }}>Romaji</option>
+                            <option value="english" {{ 'selected' if settings.title_display == 'english' else '' }}>English</option>
+                        </select>
+                        <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.2rem">Which title language to show as the primary title across the app</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Scheduling -->
+            <div style="margin-bottom:1.5rem">
+                <div class="section-label">Scheduling</div>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="ob-scan-interval">Scan interval (hours)</label>
+                        <input type="number" id="ob-scan-interval" min="1" value="{{ settings.scan_interval_hours }}" style="width:100px">
+                        <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.2rem">How often to re-scan media libraries</div>
+                    </div>
+                    <div class="form-group">
+                        <label for="ob-reindex-interval">Library re-index interval (hours)</label>
+                        <input type="number" id="ob-reindex-interval" min="1" value="{{ settings.library_reindex_hours }}" style="width:100px">
+                        <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.2rem">How often to re-index library items from disk</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Downloads (only shown if Sonarr or Radarr configured) -->
+            <div id="ob-downloads-section" style="margin-bottom:1.5rem">
+                <div class="section-label">Downloads</div>
+                <p class="text-muted" style="font-size:0.82rem;margin-bottom:0.75rem">
+                    These settings control how Anilist-Link automatically adds entries to Sonarr/Radarr from your AniList watchlist.
+                </p>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label>Auto-add for these list statuses</label>
+                        {% set _ob_sel = settings.downloads_auto_statuses.split(',') | map('trim') | list %}
+                        <div style="display:flex;flex-wrap:wrap;gap:0.4rem 1rem;margin-top:0.25rem">
+                          {% for status in ["CURRENT", "PLANNING", "COMPLETED", "PAUSED", "DROPPED", "REPEATING"] %}
+                          <label class="toggle" style="margin:0">
+                            <input type="checkbox" class="ob-auto-status-cb" value="{{ status }}"
+                                   {{ 'checked' if status in _ob_sel else '' }}>
+                            <span class="toggle-label">{{ status.title() }}</span>
+                          </label>
+                          {% endfor %}
+                        </div>
+                        <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.35rem">Leave all unchecked to disable auto-add.</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Default Sonarr monitor mode</label>
+                        {% set _ob_mm = settings.downloads_monitor_mode or 'future' %}
+                        <div style="display:flex;flex-direction:column;gap:0.35rem;margin-top:0.25rem">
+                          {% for val, lbl in [("future", "Future episodes — new eps as they air"), ("all", "All episodes"), ("firstSeason", "First season"), ("latestSeason", "Latest season"), ("none", "Don't monitor — add unmonitored")] %}
+                          <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-weight:normal">
+                            <input type="radio" name="ob-monitor-mode" value="{{ val }}" {{ 'checked' if _ob_mm == val else '' }}>
+                            {{ lbl }}
+                          </label>
+                          {% endfor %}
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="toggle">
+                            <input type="checkbox" id="ob-auto-search" {{ 'checked' if settings.downloads_auto_search == 'true' else '' }}>
+                            <span class="toggle-label">Search immediately on add</span>
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label for="ob-sync-interval">Auto-sync interval (minutes)</label>
+                        <input type="number" id="ob-sync-interval" min="1" value="{{ settings.downloads_sync_interval }}" style="width:100px">
+                    </div>
+                </div>
+            </div>
+
+            <div class="step-nav">
+                <button class="btn btn-secondary" onclick="goToStep(3)">← Back</button>
+                <div class="spacer"></div>
+                <button class="btn btn-primary" id="step4-next-btn" onclick="saveSettingsAndContinue()">Next →</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         STEP 5 — Review & Done
+    ═══════════════════════════════════════════════════════════ -->
+    <div class="step-panel" id="step-5">
         <div class="card">
             <h2>Review &amp; finish</h2>
             <p class="text-muted hint">Here's a summary of what you've configured. You can go back to make changes or finish setup.</p>
@@ -1055,7 +1192,7 @@
             </div>
 
             <div class="step-nav">
-                <button class="btn btn-secondary" onclick="goToStep(3)">← Back</button>
+                <button class="btn btn-secondary" onclick="goToStep(4)">← Back</button>
                 <div class="spacer"></div>
                 <a href="/" class="btn btn-secondary">Return to Dashboard</a>
                 <button class="btn btn-primary" id="done-btn" onclick="finishOnboarding()">Done</button>
@@ -1088,6 +1225,7 @@
 
 <script src="/static/naming-templates.js"></script>
 <script src="/static/file-browser.js"></script>
+<script src="/static/directory-picker.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init({ defaultPreset: 'english_season_names' }); });
 
@@ -1198,12 +1336,14 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
         saveProgress(n);
         window.scrollTo({ top: 0, behavior: 'smooth' });
 
-        if (n === 4) { buildReview(); loadRestructureReport(); }
+        if (n === 4) { initStep4(); }
+        if (n === 5) { buildReview(); loadRestructureReport(); }
     }
 
     function updateProgressBar(step) {
-        for (var i = 1; i <= 4; i++) {
+        for (var i = 1; i <= 5; i++) {
             var marker = el('prog-' + i);
+            if (!marker) continue;
             marker.classList.remove('active', 'done');
             if (i < step) marker.classList.add('done');
             else if (i === step) marker.classList.add('active');
@@ -1254,7 +1394,7 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
     function applySkipMode() {
         var skip = state.skipMode;
         // Toggle visibility of restructure-only sections
-        var hide = ['step2-output-section', 'step2-templates-section', 'step2-analyze-section'];
+        var hide = ['step2-output-section', 'step2-split-section', 'step2-templates-section', 'step2-analyze-section'];
         hide.forEach(function (id) {
             var el_ = document.getElementById(id);
             if (el_) el_.style.display = skip ? 'none' : '';
@@ -1327,6 +1467,50 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
     };
 
     /* (Skip-scan review is on its own page at /library/scan/results) */
+
+    /* ── Movie/TV split pickers ─────────────────────────────── */
+    var obMoviePicker = new DirectoryPicker({
+        containerId: 'ob-dp-movie-out',
+        hiddenName: '', // not in a form — we read values programmatically
+        mode: 'single',
+        initialPath: '/media',
+    });
+    var obTvPicker = new DirectoryPicker({
+        containerId: 'ob-dp-tv-out',
+        hiddenName: '',
+        mode: 'single',
+        initialPath: '/media',
+    });
+    var _splitPickersInit = false;
+
+    window.onboardingSplitToggle = function () {
+        var checked = el('ob-split-toggle').checked;
+        var pickers = el('ob-split-pickers');
+        if (pickers) pickers.classList.toggle('hidden', !checked);
+        if (checked && !_splitPickersInit) {
+            obMoviePicker.init();
+            obTvPicker.init();
+            _splitPickersInit = true;
+        }
+        // Persist split toggle immediately so restructure analyze picks it up
+        _saveSplitSettings();
+    };
+
+    function _saveSplitSettings() {
+        var enabled = el('ob-split-toggle') && el('ob-split-toggle').checked;
+        var moviePath = obMoviePicker.getSelected() || '';
+        var tvPath = obTvPicker.getSelected() || '';
+        var settings = {
+            'library.split_movies_tv': enabled ? 'true' : 'false',
+            'library.movie_output_path': moviePath,
+            'library.tv_output_path': tvPath,
+        };
+        fetch('/onboarding/save-service-settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ settings: settings }),
+        }).catch(function () { /* non-fatal */ });
+    }
 
     /* ── File browsers (uses shared FileBrowser class) ─────── */
     var fb = new FileBrowser({
@@ -1407,6 +1591,9 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
                 title_pref: NamingTemplates.getSelectedTitlePref() || null,
             },
         };
+
+        // Save movie/TV split paths before analyze reads them
+        _saveSplitSettings();
 
         // Immediately advance — processing continues in the background
         state.restructureStatus = 'analyzing';
@@ -1557,8 +1744,8 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
                         if (errors > 0) toastBody = errors + ' file' + (errors !== 1 ? 's' : '') + ' had errors — see the report below';
                         showToast('File organization complete', msg + (toastBody ? '\n' + toastBody : ''), errors > 0 ? 'warn' : 'ok', 12000);
 
-                        // If user is already on step 4, reload the report and review
-                        if (state.currentStep === 4) {
+                        // If user is already on step 5, reload the report and review
+                        if (state.currentStep === 5) {
                             _reportLoaded = false;
                             loadRestructureReport();
                             buildReview();
@@ -1674,6 +1861,61 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
             goToStep(2);
             applySkipMode();
         }
+    };
+
+    /* ── Step 4: Settings & Preferences ─────────────────────── */
+
+    function initStep4() {
+        // Show downloads section only if Sonarr or Radarr was configured
+        var hasArr = state.services.sonarr === 'ok' || state.services.radarr === 'ok';
+        var dlSection = el('ob-downloads-section');
+        if (dlSection) dlSection.style.display = hasArr ? '' : 'none';
+    }
+
+    window.saveSettingsAndContinue = function () {
+        setSpinner('step4-next-btn', true);
+
+        // Collect auto-add statuses
+        var statuses = [];
+        document.querySelectorAll('.ob-auto-status-cb').forEach(function (cb) {
+            if (cb.checked) statuses.push(cb.value);
+        });
+
+        // Collect monitor mode
+        var monitorMode = 'future';
+        document.querySelectorAll('input[name="ob-monitor-mode"]').forEach(function (r) {
+            if (r.checked) monitorMode = r.value;
+        });
+
+        var payload = {
+            title_display: (el('ob-title-display') || {}).value || 'romaji',
+            scan_interval_hours: (el('ob-scan-interval') || {}).value || '24',
+            library_reindex_hours: (el('ob-reindex-interval') || {}).value || '6',
+            downloads_auto_statuses: statuses.join(','),
+            downloads_monitor_mode: monitorMode,
+            downloads_auto_search: (el('ob-auto-search') || {}).checked ? 'true' : 'false',
+            downloads_sync_interval: (el('ob-sync-interval') || {}).value || '60',
+        };
+
+        fetch('/onboarding/save-settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            setSpinner('step4-next-btn', false);
+            if (data.ok) {
+                goToStep(5);
+            } else {
+                showToast('Settings save failed', data.error || 'Unknown error', 'error', 5000);
+            }
+        })
+        .catch(function (e) {
+            setSpinner('step4-next-btn', false);
+            // Non-fatal — advance anyway
+            goToStep(5);
+        });
     };
 
     // AniList callback URL hint
@@ -1863,6 +2105,8 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
                 settings['crunchyroll.email'] = el('cr-email').value.trim();
                 settings['crunchyroll.password'] = el('cr-password').value;
                 settings['crunchyroll.flaresolverr_url'] = el('cr-flaresolverr').value.trim();
+                if (el('cr-sync-time')) settings['scheduler.cr_sync_time'] = el('cr-sync-time').value.trim();
+                if (el('cr-sync-interval')) settings['scheduler.sync_interval_minutes'] = el('cr-sync-interval').value.trim();
                 break;
             case 'sonarr':
                 settings['sonarr.url'] = el('sonarr-url').value.trim();
@@ -2257,7 +2501,9 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
     (function init() {
         var startStep = {{ current_step | default(1) }};
         // Clamp to valid range
-        if (startStep < 1 || startStep > 4) startStep = 1;
+        if (startStep < 1 || startStep > 5) startStep = 1;
+        // Map old step 4 (review) to new step 5 for users mid-onboarding
+        if (startStep === 4) startStep = 4;
         updateProgressBar(startStep);
         el('step-' + startStep).classList.add('active');
         state.currentStep = startStep;
@@ -2272,11 +2518,14 @@ document.addEventListener('DOMContentLoaded', function () { NamingTemplates.init
             initFileBrowsers();
         }
 
-        // If landing on step 4, load review data
-        if (startStep === 4) {
+        // If landing on step 4, init downloads section visibility
+        if (startStep === 4) { initStep4(); }
+
+        // If landing on step 5, load review data
+        if (startStep === 5) {
             buildReview();
             loadRestructureReport();
-                    }
+        }
 
         fb.renderSourceTags();
     })();

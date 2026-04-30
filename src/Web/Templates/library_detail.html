@@ -106,21 +106,24 @@
 </div>
 
 <!-- Grid View -->
-<div class="library-grid" id="view-grid">
+<div class="media-grid" data-context="library" id="view-grid">
     {% for item in items %}
     {% set _romaji = item.title_romaji or "" %}
     {% set _english = item.title_english or "" %}
     {% set _folder = item.folder_name or "" %}
-    {% if title_display == "english" %}
+    {% if title_display in ("english", "both_english_primary") %}
         {% set _sort_title = (_english or _romaji or item.anilist_title or _folder)|lower %}
-    {% elif title_display == "both_english_primary" %}
-        {% set _sort_title = (_english or _romaji or item.anilist_title or _folder)|lower %}
+        {% set _primary = _english or _romaji or item.anilist_title or _folder %}
+        {% set _secondary = _romaji if (_romaji and _romaji != _primary) else '' %}
     {% else %}
         {% set _sort_title = (_romaji or item.anilist_title or _folder)|lower %}
+        {% set _primary = _romaji or item.anilist_title or _folder %}
+        {% set _secondary = _english if (_english and _english != _primary) else '' %}
     {% endif %}
+    {% if not item.anilist_id %}{% set _secondary = 'Unmatched' %}{% endif %}
     {% set _in_plex = item.folder_name in plex_matches %}
     {% set _in_jellyfin = item.folder_name in jellyfin_matches %}
-    <div class="library-card {% if item.anilist_id %}matched{% else %}unmatched{% endif %}"
+    <div class="media-card {% if item.anilist_id %}matched{% else %}unmatched{% endif %}"
          data-item-id="{{ item.id }}"
          data-folder-name="{{ item.folder_name }}"
          data-anilist-id="{{ item.anilist_id or '' }}"
@@ -130,25 +133,29 @@
          data-matched="{{ '1' if item.anilist_id else '0' }}"
          data-has-plex="{{ '1' if _in_plex else '0' }}"
          data-has-jellyfin="{{ '1' if _in_jellyfin else '0' }}">
-        <div class="library-card-poster">
+        <div class="media-card-poster">
             {% if item.display_cover %}
             <img src="{{ item.display_cover }}" alt="{{ item.folder_name }}" loading="lazy">
             {% else %}
-            <div class="poster-placeholder"></div>
+            <div class="media-card-poster-empty">?</div>
             {% endif %}
-            {% if item.anilist_id %}
-            <span class="badge badge-success library-card-badge">Matched</span>
-            {% else %}
-            <span class="badge badge-warning library-card-badge">Unmatched</span>
+            <span class="media-card-badge {{ 'badge-success' if item.anilist_id else 'badge-warning' }}">
+                {{ "Matched" if item.anilist_id else "Unmatched" }}
+            </span>
+            {% if _in_plex or _in_jellyfin %}
+            <div class="media-card-sources" style="top:auto;bottom:0.35rem;left:0.35rem">
+                {% if _in_plex %}<span class="source-dot source-dot-plex" title="Plex"></span>{% endif %}
+                {% if _in_jellyfin %}<span class="source-dot source-dot-jellyfin" title="Jellyfin"></span>{% endif %}
+            </div>
             {% endif %}
-            {% if _in_plex %}
-            <span class="badge badge-plex library-card-badge" style="left:auto;right:0.35rem">Plex</span>
-            {% endif %}
-            {% if item.anilist_format %}
-            <span class="format-badge">{{ item.anilist_format }}</span>
-            {% endif %}
-            <div class="library-card-actions">
-                <button class="btn btn-sm btn-primary" onclick="openEditModal(this.closest('.library-card'))">
+            <div class="media-card-overlay">
+                <div class="media-card-title scroll-on-hover">{{ _primary }}</div>
+                {% if _secondary %}
+                <div class="media-card-subtitle scroll-on-hover">{{ _secondary }}</div>
+                {% endif %}
+            </div>
+            <div class="media-card-actions">
+                <button class="btn btn-sm btn-primary" onclick="openEditModal(this.closest('.media-card'))">
                     {{ "Edit" if item.anilist_id else "Match" }}
                 </button>
                 {% if _in_plex and item.anilist_id %}
@@ -158,15 +165,6 @@
                 <button class="btn btn-sm btn-secondary" onclick="syncToJellyfin({{ item.id }}, this)">Sync to Jellyfin</button>
                 {% endif %}
             </div>
-        </div>
-        <div class="library-card-info">
-            {% if item.anilist_id %}
-            {{ render_title(item, title_display, item.anilist_title or item.folder_name or "") }}
-            {% else %}
-            <span class="title-romaji">{{ item.folder_name }}</span>
-            {% endif %}
-            {% set _year = item.anilist_year or item.year %}
-            {% if _year %}<span class="library-card-year">{{ _year }}</span>{% endif %}
         </div>
     </div>
     {% endfor %}

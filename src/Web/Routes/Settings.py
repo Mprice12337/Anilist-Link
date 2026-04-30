@@ -34,7 +34,7 @@ FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
         "Library",
         [
             ("library.name", "Library Name", "text"),
-            ("library.paths", "Anime Library Paths", "textarea"),
+            ("library.paths", "Anime Library Paths", "dir_picker_multi"),
         ],
     ),
     (
@@ -47,6 +47,16 @@ FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
             ("crunchyroll.max_pages", "Max pages", "number"),
             ("crunchyroll.auto_sync_enabled", "Auto sync enabled", "checkbox"),
             ("crunchyroll.auto_approve", "Auto-approve changes", "checkbox"),
+            (
+                "scheduler.cr_sync_time",
+                "Daily sync time (HH:MM, 24h)",
+                "text",
+            ),
+            (
+                "scheduler.sync_interval_minutes",
+                "Sync interval (minutes, used if no time set)",
+                "number",
+            ),
         ],
     ),
     (
@@ -120,16 +130,6 @@ FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
                 "App URL (used for webhooks — must be reachable by Sonarr/Radarr)",
                 "url",
             ),
-            (
-                "scheduler.cr_sync_time",
-                "Crunchyroll daily sync time (HH:MM, 24h)",
-                "text",
-            ),
-            (
-                "scheduler.sync_interval_minutes",
-                "Crunchyroll sync interval (minutes, used if no time set)",
-                "number",
-            ),
             ("scheduler.scan_interval_hours", "Scan interval (hours)", "number"),
             (
                 "scheduler.library_reindex_interval_hours",
@@ -141,20 +141,28 @@ FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
         ],
     ),
     (
-        "Library Restructuring",
-        [
-            ("restructure.plex_path_prefix", "Plex path prefix", "text"),
-            ("restructure.local_path_prefix", "Local path prefix", "text"),
-        ],
-    ),
-    (
-        "Naming Templates",
+        "Naming Templates & Restructuring",
         [
             ("naming.file_template", "Episode file naming", "text"),
             ("naming.movie_file_template", "Movie file naming", "text"),
             ("naming.folder_template", "Show folder naming", "text"),
             ("naming.season_folder_template", "Season folder naming", "text"),
             ("naming.illegal_char_replacement", "Illegal character handling", "select"),
+            (
+                "library.split_movies_tv",
+                "Separate Movies and TV output directories",
+                "checkbox",
+            ),
+            (
+                "library.movie_output_path",
+                "Movie output directory",
+                "dir_picker_single",
+            ),
+            (
+                "library.tv_output_path",
+                "TV / Everything Else output directory",
+                "dir_picker_single",
+            ),
         ],
     ),
     (
@@ -211,11 +219,12 @@ async def settings_page(request: Request, saved: int = 0) -> HTMLResponse:
 
     # Populate library fields from the libraries table (not app_settings)
     libraries = await db.get_all_libraries()
+    library_path_list: list[str] = []
     if libraries:
         lib = libraries[0]
         display["library.name"] = lib["name"]
-        path_list = json.loads(lib["paths"]) if lib["paths"] else []
-        display["library.paths"] = "\n".join(path_list)
+        library_path_list = json.loads(lib["paths"]) if lib["paths"] else []
+        display["library.paths"] = ""  # not used for display anymore
     else:
         display["library.name"] = ""
         display["library.paths"] = ""
@@ -310,6 +319,9 @@ async def settings_page(request: Request, saved: int = 0) -> HTMLResponse:
             "jellyfin_libraries": jellyfin_libraries,
             "selected_jellyfin_ids": selected_jellyfin_ids,
             "naming_presets": NAMING_PRESETS,
+            "library_path_list": library_path_list,
+            "movie_output_path": display.get("library.movie_output_path", ""),
+            "tv_output_path": display.get("library.tv_output_path", ""),
             "setup": request.query_params.get("setup", ""),
         },
     )
@@ -333,8 +345,10 @@ async def _settings_save_impl(request: Request) -> RedirectResponse:
 
     # Handle library fields (stored in libraries table, not app_settings)
     lib_name = str(form.get("library.name", "")).strip()
-    lib_paths_raw = str(form.get("library.paths", "")).strip()
-    lib_path_list = [p.strip() for p in lib_paths_raw.splitlines() if p.strip()]
+    # Library paths come as multiple hidden inputs from the directory picker
+    lib_path_list = [
+        str(p).strip() for p in form.getlist("library.paths") if str(p).strip()
+    ]
     if lib_name and lib_path_list:
         libraries = await db.get_all_libraries()
         if libraries:
@@ -349,7 +363,16 @@ async def _settings_save_impl(request: Request) -> RedirectResponse:
         is_secret = key in SECRET_KEYS
         input_type = _get_input_type(key)
 
-        if input_type in ("plex_library_select", "jellyfin_library_select"):
+        if input_type == "dir_picker_multi":
+            # Handled separately (e.g. library paths go to libraries table)
+            continue
+        elif input_type == "dir_picker_single":
+            # Single directory picker uses a hidden input
+            raw = form.get(key) or ""
+            value = raw.strip() if isinstance(raw, str) else ""
+            await db.set_setting(key, value)
+            continue
+        elif input_type in ("plex_library_select", "jellyfin_library_select"):
             # Multi-valued checkboxes: serialize selected keys as JSON list
             selected = form.getlist(key)
             value = json.dumps([str(v) for v in selected])

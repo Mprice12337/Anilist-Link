@@ -88,7 +88,7 @@ class ArrPostProcessor:
         # folder (safe_dir) is appended beneath it.  When falling back to
         # series_path, that IS already the show-level folder; appending safe_dir
         # again would create a nested structure (show/show/Season N).
-        library_path = await self._get_library_output_path()
+        library_path = await self._get_library_output_path(anilist_format="TV")
         if library_path:
             local_series = str(
                 Path(self._to_local(library_path, arr_prefix, local_prefix)) / safe_dir
@@ -177,7 +177,7 @@ class ArrPostProcessor:
         safe_dir = await self._get_folder_name(title_info)
 
         # Use library output path as target root; fall back to Radarr movie root
-        library_path = await self._get_library_output_path()
+        library_path = await self._get_library_output_path(anilist_format="MOVIE")
         arr_prefix = self._config.radarr.path_prefix
         local_prefix = self._config.radarr.local_path_prefix
 
@@ -268,7 +268,7 @@ class ArrPostProcessor:
 
             # When library_path is set it is the library root — safe_dir is appended.
             # When absent, series_path IS the show folder; don't nest safe_dir under it.
-            library_path = await self._get_library_output_path()
+            library_path = await self._get_library_output_path(anilist_format="TV")
             if library_path:
                 local_target_root: str | None = self._to_local(
                     library_path, arr_prefix, local_prefix
@@ -529,7 +529,7 @@ class ArrPostProcessor:
                 return {"ok": True, "moved": 0, "skipped": 0, "errors": 0}
 
             # Use library output path as target root; fall back to Radarr movie root
-            library_path = await self._get_library_output_path()
+            library_path = await self._get_library_output_path(anilist_format="MOVIE")
             if library_path:
                 target_root = library_path
             else:
@@ -675,8 +675,29 @@ class ArrPostProcessor:
         )
         return int(row["anilist_id"]) if row else None
 
-    async def _get_library_output_path(self) -> str | None:
-        """Return the first configured library path, or None."""
+    async def _get_library_output_path(self, anilist_format: str = "") -> str | None:
+        """Return the appropriate library output path.
+
+        When movie/TV split is enabled and *anilist_format* is ``MOVIE``,
+        returns the movie output directory; otherwise the TV directory.
+        Falls back to the first configured library path.
+        """
+        split_enabled = (
+            await self._db.get_setting("library.split_movies_tv") or ""
+        ).lower() in ("true", "1", "yes")
+
+        if split_enabled:
+            movie_path = (
+                await self._db.get_setting("library.movie_output_path") or ""
+            ).strip()
+            tv_path = (
+                await self._db.get_setting("library.tv_output_path") or ""
+            ).strip()
+            if movie_path and tv_path:
+                if (anilist_format or "").upper() == "MOVIE":
+                    return movie_path
+                return tv_path
+
         libraries = await self._db.get_all_libraries()
         if not libraries:
             return None

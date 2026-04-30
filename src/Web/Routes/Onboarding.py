@@ -50,7 +50,7 @@ async def onboarding_page(request: Request) -> HTMLResponse:
     if step_override:
         try:
             override_val = int(step_override)
-            if 1 <= override_val <= 4:
+            if 1 <= override_val <= 5:
                 current_step = override_val
         except ValueError:
             pass
@@ -88,6 +88,21 @@ async def onboarding_page(request: Request) -> HTMLResponse:
         "downloads_monitor_mode": await db.get_setting("downloads.monitor_mode")
         or "future",
         "downloads_auto_search": await db.get_setting("downloads.auto_search") or "",
+        "downloads_sync_interval": await db.get_setting(
+            "downloads.sync_interval_minutes"
+        )
+        or "60",
+        # Scheduling / display prefs (for Step 4)
+        "cr_sync_time": await db.get_setting("scheduler.cr_sync_time") or "02:00",
+        "cr_sync_interval": await db.get_setting("scheduler.sync_interval_minutes")
+        or "15",
+        "scan_interval_hours": await db.get_setting("scheduler.scan_interval_hours")
+        or "24",
+        "library_reindex_hours": await db.get_setting(
+            "scheduler.library_reindex_interval_hours"
+        )
+        or "6",
+        "title_display": await db.get_setting("app.title_display") or "romaji",
     }
 
     # Connection status flags (set after successful tests)
@@ -637,6 +652,48 @@ async def _auto_index_local_libraries(app_state: object) -> None:
     except Exception:
         logger.exception("_auto_index_local_libraries: failed")
         scan_progress.status = "error"
+
+
+# ---------------------------------------------------------------------------
+# Settings (Step 4)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/onboarding/save-settings")
+async def save_onboarding_settings(request: Request) -> JSONResponse:
+    """Persist options chosen in onboarding Step 4 (Settings & Preferences)."""
+    from src.Utils.Config import load_config_from_db_settings
+
+    db = request.app.state.db
+    body = await request.json()
+
+    # Map of JSON keys -> DB setting keys
+    KEY_MAP = {
+        "title_display": "app.title_display",
+        "scan_interval_hours": "scheduler.scan_interval_hours",
+        "library_reindex_hours": "scheduler.library_reindex_interval_hours",
+        "downloads_auto_statuses": "downloads.auto_statuses",
+        "downloads_monitor_mode": "downloads.monitor_mode",
+        "downloads_auto_search": "downloads.auto_search",
+        "downloads_sync_interval": "downloads.sync_interval_minutes",
+    }
+
+    for json_key, db_key in KEY_MAP.items():
+        value = body.get(json_key)
+        if value is not None:
+            await db.set_setting(db_key, str(value))
+
+    # Rebuild config so scheduler picks up new intervals
+    db_settings = await db.get_all_settings()
+    new_config = load_config_from_db_settings(db_settings)
+    request.app.state.config = new_config
+
+    # Reschedule jobs if intervals changed
+    scheduler = request.app.state.scheduler
+    scheduler.update_intervals(new_config.scheduler)
+
+    logger.info("Saved onboarding settings (step 4)")
+    return JSONResponse({"ok": True})
 
 
 # ---------------------------------------------------------------------------
@@ -1383,13 +1440,41 @@ async def onboarding_restructure_analyze(request: Request) -> JSONResponse:
             output_dir or "(alongside source)",
         )
 
+        # Read movie/TV split settings
+        _split = (await db.get_setting("library.split_movies_tv") or "").lower() in (
+            "true",
+            "1",
+            "yes",
+        )
+        _m_out = (
+            (await db.get_setting("library.movie_output_path") or "").strip()
+            if _split
+            else None
+        )
+        _t_out = (
+            (await db.get_setting("library.tv_output_path") or "").strip()
+            if _split
+            else None
+        )
+
         plan = await restructurer.analyze(
-            deduped_shows, progress, level=level, output_dir=output_dir or None
+            deduped_shows,
+            progress,
+            level=level,
+            output_dir=output_dir or None,
+            movie_output_dir=_m_out if (_m_out and _t_out) else None,
+            tv_output_dir=_t_out if (_m_out and _t_out) else None,
         )
         request.app.state.onboarding_restructure_plan = plan
 
         # Create/reuse a library for post-restructure seeding
-        lib_paths = [output_dir] if output_dir else list(source_dirs)
+        lib_paths = []
+        if _m_out and _t_out and _split:
+            lib_paths = [_m_out, _t_out]
+        elif output_dir:
+            lib_paths = [output_dir]
+        else:
+            lib_paths = list(source_dirs)
         libraries = await db.get_all_libraries()
         if libraries:
             lib_id = libraries[0]["id"]

@@ -1,0 +1,86 @@
+{#
+    Unified media card macro.
+
+    Usage:
+        {% from "_media_card.html" import media_card %}
+        {{ media_card(
+            cover_image="https://...",
+            title="Attack on Titan",
+            subtitle="Shingeki no Kyojin",
+            anilist_id=16498,
+            badge_text="Matched",
+            badge_class="badge-success",
+            badge_style="",
+            progress_pct=75,
+            source_dots=["plex", "local"],
+            actions_html='<button class="btn btn-sm btn-primary">Edit</button>',
+            extra_classes="",
+            onclick="",
+            data_attrs="",
+        ) }}
+#}
+
+{% macro media_card(
+    cover_image="",
+    title="",
+    subtitle="",
+    anilist_id=0,
+    badge_text="",
+    badge_class="",
+    badge_style="",
+    progress_pct=-1,
+    source_dots=none,
+    actions_html="",
+    extra_classes="",
+    onclick="",
+    data_attrs="",
+    link_url=""
+) %}
+{% set tag = "a" if link_url else "div" %}
+<{{ tag }}
+    class="media-card {{ extra_classes }}"
+    {% if link_url %}href="{{ link_url }}"{% endif %}
+    {% if onclick %}onclick="{{ onclick }}"{% endif %}
+    {{ data_attrs }}
+>
+    <div class="media-card-poster">
+        {% if cover_image %}
+        <img src="{{ cover_image }}" alt="{{ title }}" loading="lazy">
+        {% else %}
+        <div class="media-card-poster-empty">?</div>
+        {% endif %}
+
+        {% if badge_text %}
+        <span class="media-card-badge {{ badge_class }}" {% if badge_style %}style="{{ badge_style }}"{% endif %}>
+            {{ badge_text }}
+        </span>
+        {% endif %}
+
+        {% if source_dots %}
+        <div class="media-card-sources">
+            {% for src in source_dots %}
+            <span class="source-dot source-dot-{{ src }}" title="{{ src | title }}"></span>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="media-card-overlay">
+            {% if progress_pct >= 0 %}
+            <div class="media-card-progress-bar">
+                <div class="media-card-progress-fill" style="width:{{ progress_pct }}%"></div>
+            </div>
+            {% endif %}
+            <div class="media-card-title scroll-on-hover">{{ title }}</div>
+            {% if subtitle %}
+            <div class="media-card-subtitle scroll-on-hover">{{ subtitle }}</div>
+            {% endif %}
+        </div>
+
+        {% if actions_html %}
+        <div class="media-card-actions">
+            {{ actions_html }}
+        </div>
+        {% endif %}
+    </div>
+</{{ tag }}>
+{% endmacro %}

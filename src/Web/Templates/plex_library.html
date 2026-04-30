@@ -90,42 +90,49 @@
 </div>
 
 <!-- Grid View -->
-<div class="library-grid" id="view-grid">
+<div class="media-grid" data-context="metadata" id="view-grid">
     {% for item in items %}
-    <div class="library-card {% if item.anilist_id %}matched{% else %}unmatched{% endif %}"
+    {% set _romaji = item.title_romaji or '' %}
+    {% set _english = item.title_english or '' %}
+    {% if title_display == 'english' or title_display == 'both_english_primary' %}
+        {% set _primary = _english or _romaji or item.plex_title %}
+        {% set _secondary = _romaji if (_romaji and _romaji != _primary) else '' %}
+    {% else %}
+        {% set _primary = _romaji or item.plex_title %}
+        {% set _secondary = _english if (_english and _english != _primary) else '' %}
+    {% endif %}
+    <div class="media-card {% if item.anilist_id %}matched{% else %}unmatched{% endif %}"
          data-rating-key="{{ item.rating_key }}"
          data-plex-title="{{ item.plex_title }}"
          data-anilist-id="{{ item.anilist_id or '' }}"
          data-folder-name="{{ item.folder_name or '' }}">
-        <div class="library-card-poster">
+        <div class="media-card-poster">
             {% if item.anilist_id and item.cover_image %}
             <img src="{{ item.cover_image }}" alt="{{ item.plex_title }}" loading="lazy">
             {% elif item.thumb %}
             <img src="/api/plex/thumb?path={{ item.thumb }}" alt="{{ item.plex_title }}" loading="lazy">
             {% else %}
-            <div class="poster-placeholder"></div>
+            <div class="media-card-poster-empty">?</div>
             {% endif %}
-            <span class="badge {% if item.anilist_id %}badge-success{% else %}badge-warning{% endif %} library-card-badge">
+            <span class="media-card-badge {{ 'badge-success' if item.anilist_id else 'badge-warning' }}">
                 {{ "Matched" if item.anilist_id else "Unmatched" }}
             </span>
-            <div class="library-card-actions">
-                <button class="btn btn-sm btn-primary" onclick="openEditModal(this.closest('.library-card'))">
+            <div class="media-card-overlay">
+                <div class="media-card-title scroll-on-hover">{{ _primary }}</div>
+                {% if _secondary %}
+                <div class="media-card-subtitle scroll-on-hover">{{ _secondary }}</div>
+                {% endif %}
+            </div>
+            <div class="media-card-actions">
+                <button class="btn btn-sm btn-primary" onclick="openEditModal(this.closest('.media-card'))">
                     {{ "Edit" if item.anilist_id else "Match" }}
                 </button>
                 {% if item.anilist_id %}
-                <button class="btn btn-sm btn-secondary library-card-apply" onclick="applySingle('{{ item.rating_key }}', this)">
+                <button class="btn btn-sm btn-secondary" onclick="applySingle('{{ item.rating_key }}', this)">
                     Apply
                 </button>
                 {% endif %}
             </div>
-        </div>
-        <div class="library-card-info">
-            {% if item.anilist_id %}
-            {{ render_title(item, title_display, item.plex_title or "") }}
-            {% else %}
-            <span class="title-romaji">{{ item.plex_title }}</span>
-            {% endif %}
-            {% if item.plex_year %}<span class="library-card-year">{{ item.plex_year }}</span>{% endif %}
         </div>
     </div>
     {% endfor %}

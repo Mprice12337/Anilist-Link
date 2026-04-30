@@ -21,6 +21,7 @@ from src.Utils.NamingTranslator import (
     is_movie_format,
 )
 from src.Web.App import spawn_background_task
+from src.Web.Routes.Helpers import enrich_watchlist_entries
 
 logger = logging.getLogger(__name__)
 
@@ -42,77 +43,7 @@ async def library_page(request: Request) -> HTMLResponse:
 
     if user_id:
         raw_entries = await db.get_watchlist(user_id)
-
-        # Local library presence
-        local_anilist_ids: set[int] = set()
-        mappings = await db.fetch_all("SELECT DISTINCT anilist_id FROM media_mappings")
-        for row in mappings:
-            local_anilist_ids.add(row["anilist_id"])
-
-        # Sonarr tracking
-        sonarr_info: dict[int, dict] = {}
-        sonarr_rows = await db.fetch_all(
-            "SELECT anilist_id, sonarr_id, sonarr_season,"
-            " sonarr_monitored, monitor_type"
-            " FROM anilist_sonarr_mapping WHERE in_sonarr=1"
-        )
-        for row in sonarr_rows:
-            sonarr_info[row["anilist_id"]] = {
-                "sonarr_id": row["sonarr_id"],
-                "sonarr_season": row["sonarr_season"],
-                "sonarr_monitored": bool(row["sonarr_monitored"]),
-                "monitor_type": row["monitor_type"] or "future",
-            }
-
-        # Radarr tracking
-        radarr_info: dict[int, dict] = {}
-        radarr_rows = await db.fetch_all(
-            "SELECT anilist_id, radarr_id, radarr_monitored, monitor_type"
-            " FROM anilist_radarr_mapping WHERE in_radarr=1"
-        )
-        for row in radarr_rows:
-            radarr_info[row["anilist_id"]] = {
-                "radarr_id": row["radarr_id"],
-                "radarr_monitored": bool(row["radarr_monitored"]),
-                "monitor_type": row["monitor_type"] or "future",
-            }
-
-        for entry in raw_entries:
-            aid = entry["anilist_id"]
-            local_status = "have" if aid in local_anilist_ids else "missing"
-
-            enriched = dict(entry)
-            enriched["local_status"] = local_status
-
-            if aid in sonarr_info:
-                si = sonarr_info[aid]
-                enriched["arr_status"] = (
-                    "monitored" if si["sonarr_monitored"] else "tracked"
-                )
-                enriched["arr_service"] = "sonarr"
-                enriched["sonarr_id"] = si["sonarr_id"]
-                enriched["radarr_id"] = None
-                enriched["sonarr_season"] = si["sonarr_season"]
-                enriched["monitor_type"] = si["monitor_type"]
-            elif aid in radarr_info:
-                ri = radarr_info[aid]
-                enriched["arr_status"] = (
-                    "monitored" if ri["radarr_monitored"] else "tracked"
-                )
-                enriched["arr_service"] = "radarr"
-                enriched["sonarr_id"] = None
-                enriched["radarr_id"] = ri["radarr_id"]
-                enriched["sonarr_season"] = None
-                enriched["monitor_type"] = ri["monitor_type"]
-            else:
-                enriched["arr_status"] = "untracked"
-                enriched["arr_service"] = ""
-                enriched["sonarr_id"] = None
-                enriched["radarr_id"] = None
-                enriched["sonarr_season"] = None
-                enriched["monitor_type"] = ""
-
-            entries.append(enriched)
+        entries = await enrich_watchlist_entries(db, raw_entries)
 
         for entry in entries:
             s = entry.get("list_status", "")
@@ -130,11 +61,7 @@ async def library_page(request: Request) -> HTMLResponse:
 
     if entries:
         unique_sonarr_ids = {e["sonarr_id"] for e in entries if e.get("sonarr_id")}
-        unique_radarr_ids = {
-            radarr_info[e["anilist_id"]]["radarr_id"]
-            for e in entries
-            if e["anilist_id"] in radarr_info
-        }
+        unique_radarr_ids = {e["radarr_id"] for e in entries if e.get("radarr_id")}
 
         if unique_sonarr_ids and cfg.sonarr.url and cfg.sonarr.api_key:
             try:
@@ -177,29 +104,24 @@ async def library_page(request: Request) -> HTMLResponse:
 
     # Attach file stats to each entry
     for entry in entries:
-        aid = entry["anilist_id"]
         arr_files = arr_total = 0
         arr_has_file = False
 
-        if aid in sonarr_info:
-            sid = sonarr_info[aid]["sonarr_id"]
-            season = sonarr_info[aid]["sonarr_season"]
-            if sid in sonarr_stats:
-                if season and season in sonarr_stats[sid]:
-                    # Known season — show per-season file/episode counts
-                    bucket = sonarr_stats[sid][season]
-                    arr_files = bucket.get("files", 0)
-                    arr_total = bucket.get("total", 0)
-                    arr_has_file = arr_files > 0
-                else:
-                    # No season assignment yet — report if any files exist in
-                    # the series but don't show a misleading total episode count
-                    all_bucket = sonarr_stats[sid].get("all", {})
-                    arr_has_file = all_bucket.get("files", 0) > 0
-                    arr_files = 0
-                    arr_total = 0
-        elif aid in radarr_info:
-            rid = radarr_info[aid]["radarr_id"]
+        sid = entry.get("sonarr_id")
+        rid = entry.get("radarr_id")
+        season = entry.get("sonarr_season")
+        if sid and sid in sonarr_stats:
+            if season and season in sonarr_stats[sid]:
+                bucket = sonarr_stats[sid][season]
+                arr_files = bucket.get("files", 0)
+                arr_total = bucket.get("total", 0)
+                arr_has_file = arr_files > 0
+            else:
+                all_bucket = sonarr_stats[sid].get("all", {})
+                arr_has_file = all_bucket.get("files", 0) > 0
+                arr_files = 0
+                arr_total = 0
+        elif rid:
             arr_has_file = radarr_has_file.get(rid, False)
             arr_files = 1 if arr_has_file else 0
             arr_total = 1

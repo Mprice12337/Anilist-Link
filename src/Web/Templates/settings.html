@@ -30,9 +30,7 @@
         <p class="text-muted hint">Set <strong>Anime root folder path</strong> to your anime directory (e.g. <code>/data/anime</code>) so new series land there instead of the default TV folder. Register <code>http://&lt;your-host&gt;:9876/api/webhook/sonarr</code> in Sonarr → Settings → Connect for post-download restructuring.</p>
         {% elif group_name == "Radarr" %}
         <p class="text-muted hint">Set <strong>Anime root folder path</strong> to your anime movies directory. Register <code>http://&lt;your-host&gt;:9876/api/webhook/radarr</code> in Radarr → Settings → Connect for post-download restructuring.</p>
-        {% elif group_name == "Library Restructuring" %}
-        <p class="text-muted hint">Map Plex's file paths to local paths (e.g. Plex sees <code>/data/anime</code>, local is <code>/mnt/media/anime</code>). Leave blank if paths are the same.</p>
-        {% elif group_name == "Naming Templates" %}
+        {% elif group_name == "Naming Templates & Restructuring" %}
         <p class="text-muted hint">Customize how files and folders are named during restructuring. Use tokens like <code>{title}</code>, <code>{year}</code>, <code>{season}</code>, <code>{episode}</code>, <code>{quality}</code>.</p>
         <div class="naming-presets" style="margin-bottom:1rem">
             <span class="text-muted" style="font-size:0.85rem;margin-right:0.5rem">Presets:</span>
@@ -155,6 +153,15 @@
                     {% endif %}
                 </select>
 
+                {% elif input_type == "dir_picker_multi" %}
+                <div id="dp-{{ key | replace('.', '-') }}"></div>
+
+                {% elif input_type == "dir_picker_single" %}
+                <div id="dp-{{ key | replace('.', '-') }}"
+                     {% if key in ("library.movie_output_path", "library.tv_output_path") %}
+                     class="split-path-picker"
+                     {% endif %}></div>
+
                 {% elif input_type == "textarea" %}
                 <textarea name="{{ key }}" id="{{ key }}" rows="3"
                           {% if key in env_overrides %}disabled{% endif %}
@@ -207,12 +214,12 @@
                 <input type="{{ input_type }}" name="{{ key }}" id="{{ key }}"
                        value="{{ display.get(key, '') }}"
                        {% if key in env_overrides %}disabled{% endif %}
-                       {% if group_name == "Naming Templates" %}class="naming-input"{% endif %}>
+                       {% if group_name == "Naming Templates & Restructuring" %}class="naming-input"{% endif %}>
                 {% endif %}
             </div>
             {% endfor %}
         </div>
-        {% if group_name == "Naming Templates" %}
+        {% if group_name == "Naming Templates & Restructuring" %}
         <div class="naming-preview" style="margin-top:1rem;padding:0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius)">
             <div class="text-muted" style="font-size:0.8rem;margin-bottom:0.5rem">Preview</div>
             <div style="font-size:0.85rem">
@@ -240,6 +247,9 @@
                 <div><code>{format.short}</code> — Short format (e.g. Movie)</div>
             </div>
         </details>
+        <div id="split-movies-tv-info" class="hidden" style="margin-top:1rem;padding:0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);font-size:0.85rem">
+            <strong>Why split Movies and TV?</strong> Plex and Jellyfin require separate libraries for Movies and TV Series to correctly index and display metadata. When enabled, the restructurer will route movie-format entries (AniList format = MOVIE) to a dedicated Movies directory, and all other formats (TV, OVA, ONA, Special, etc.) to a separate TV directory.
+        </div>
         {% endif %}
     </div>
     {% endfor %}
@@ -251,6 +261,59 @@
 </form>
 </div>{# end .settings-layout #}
 
+<script src="/static/directory-picker.js"></script>
+<script>
+(function() {
+    // Initialize directory picker for library paths
+    var libPathPicker = new DirectoryPicker({
+        containerId: 'dp-library-paths',
+        hiddenName: 'library.paths',
+        mode: 'multi',
+        initialPath: '/media',
+        initial: {{ library_path_list | tojson }},
+    });
+    libPathPicker.init();
+
+    // Initialize single-select directory pickers for movie/TV split
+    var moviePathPicker = new DirectoryPicker({
+        containerId: 'dp-library-movie_output_path',
+        hiddenName: 'library.movie_output_path',
+        mode: 'single',
+        initialPath: '/media',
+        initial: {{ (movie_output_path or '') | tojson }},
+    });
+    var tvPathPicker = new DirectoryPicker({
+        containerId: 'dp-library-tv_output_path',
+        hiddenName: 'library.tv_output_path',
+        mode: 'single',
+        initialPath: '/media',
+        initial: {{ (tv_output_path or '') | tojson }},
+    });
+
+    // Toggle movie/TV split pickers and info box
+    function updateSplitVisibility() {
+        var cb = document.getElementById('library.split_movies_tv');
+        var show = cb && cb.checked;
+        document.querySelectorAll('.split-path-picker').forEach(function(el) {
+            // Show/hide the picker container AND its parent form-group
+            var fg = el.closest('.form-group');
+            if (fg) fg.style.display = show ? '' : 'none';
+        });
+        var info = document.getElementById('split-movies-tv-info');
+        if (info) info.classList.toggle('hidden', !show);
+    }
+
+    var splitCb = document.getElementById('library.split_movies_tv');
+    if (splitCb) {
+        splitCb.addEventListener('change', updateSplitVisibility);
+    }
+
+    // Init pickers and visibility on load
+    moviePathPicker.init();
+    tvPathPicker.init();
+    updateSplitVisibility();
+})();
+</script>
 <script>
 (function() {
     var sampleTokens = {

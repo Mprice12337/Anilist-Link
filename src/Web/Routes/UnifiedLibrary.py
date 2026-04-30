@@ -286,6 +286,22 @@ async def unified_library(
         if not i.get("virtual") or set(i.get("sources", [])) != {"local"}
     ]
 
+    # Enrich with AniList watch status from user_watchlist
+    users = await db.get_users_by_service("anilist")
+    if users:
+        wl_user_id = users[0]["user_id"]
+        wl_rows = await db.fetch_all(
+            "SELECT anilist_id, list_status, progress"
+            " FROM user_watchlist WHERE user_id=?",
+            (wl_user_id,),
+        )
+        wl_map = {r["anilist_id"]: r for r in wl_rows}
+        for item in items:
+            aid = item.get("anilist_id")
+            if aid and aid in wl_map:
+                item["list_status"] = wl_map[aid]["list_status"]
+                item["progress"] = wl_map[aid]["progress"]
+
     matched_count = sum(1 for i in items if i.get("anilist_id"))
     title_display = await db.get_setting("app.title_display") or "romaji"
 

@@ -10,6 +10,7 @@ from starlette.responses import Response
 
 from src.Scheduler.Jobs import JOB_CRUNCHYROLL_SYNC
 from src.Web.App import spawn_background_task
+from src.Web.Routes.Helpers import enrich_watchlist_entries
 
 logger = logging.getLogger(__name__)
 
@@ -43,14 +44,15 @@ async def dashboard(
     plex_configured = bool(config.plex.url and config.plex.token)
     jellyfin_configured = bool(config.jellyfin.url and config.jellyfin.api_key)
 
-    # Currently watching (CURRENT entries for first linked user)
+    # Currently watching — enriched with local/*arr status
     currently_watching: list = []
     anilist_user = next((u for u in users if u["service"] == "anilist"), None)
     if anilist_user:
         try:
-            currently_watching = await db.get_watchlist(
+            raw_watching = await db.get_watchlist(
                 anilist_user["user_id"], list_statuses=["CURRENT"]
             )
+            currently_watching = await enrich_watchlist_entries(db, raw_watching)
         except Exception:
             logger.warning("Could not fetch currently-watching list")
 
@@ -79,6 +81,8 @@ async def dashboard(
             "currently_watching": currently_watching,
             "recent_activity": recent_activity,
             "next_sync": next_sync,
+            "arr_enabled": bool(config.sonarr.url or config.radarr.url),
+            "title_display": await db.get_setting("app.title_display") or "romaji",
             "error": error,
             "message": request.query_params.get("message"),
             "version": "0.1.0",

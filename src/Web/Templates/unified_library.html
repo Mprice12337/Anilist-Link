@@ -43,48 +43,42 @@
 </div>
 
 <!-- Grid view -->
-<div class="library-grid" id="gridView">
+<div class="media-grid" data-context="library" id="gridView">
     {% for item in items %}
     {% set primary_title = item.title_english if (title_display in ('english', 'both_english_primary') and item.title_english) else (item.title_romaji or item.title) %}
     {% set secondary_title = item.title_romaji if (title_display in ('english', 'both_english_primary') and item.title_romaji and item.title_romaji != primary_title) else (item.title_english if item.title_english and item.title_english != primary_title else '') %}
-    <div class="library-card"
+    {% if not item.anilist_id %}{% set secondary_title = 'Unmatched' %}{% endif %}
+    <div class="media-card"
          data-title="{{ (item.title or '') | lower }} {{ (item.title_romaji or '') | lower }} {{ (item.title_english or '') | lower }}"
          data-matched="{{ 'yes' if item.anilist_id else 'no' }}"
          data-source="{{ item.source }}"
          onclick="openEntryDetail({{ loop.index0 }})">
-        <div class="library-card-poster">
+        <div class="media-card-poster">
             {% if item.cover_url %}
             <img src="{{ item.cover_url }}" alt="{{ primary_title }}" loading="lazy">
             {% else %}
-            <div class="library-card-poster-empty"><span>?</span></div>
+            <div class="media-card-poster-empty">?</div>
             {% endif %}
-            <!-- Source dots (one per source, horizontal row) -->
-            <div class="lib-source-badges">
+            <div class="media-card-sources">
                 {% for s in item.sources %}
                 <span class="source-dot source-dot-{{ s }}" title="{{ s | title }}"></span>
                 {% endfor %}
             </div>
-            <!-- Edit overlay button (shows on hover) -->
-            <button class="lib-edit-btn" onclick="event.stopPropagation(); openMatchModal({{ loop.index0 }})" title="Edit AniList match">&#x270E;</button>
-            <!-- Refresh overlay button (shows on hover) -->
-            {% if item.anilist_id %}
-            <button class="lib-refresh-btn" onclick="event.stopPropagation(); refreshItem({{ loop.index0 }})" title="Refresh metadata from AniList">&#x21BB;</button>
-            {% endif %}
-        </div>
-        <div class="library-card-info">
-            {% if item.anilist_id %}
-            <a href="https://anilist.co/anime/{{ item.anilist_id }}" target="_blank" rel="noopener"
-               class="lib-title-link scroll-on-hover"
-               onclick="event.stopPropagation()">{{ primary_title }}</a>
-            {% else %}
-            <div class="lib-title-link scroll-on-hover">{{ primary_title }}</div>
-            {% endif %}
-            {% if secondary_title %}
-            <div class="title-english scroll-on-hover" style="font-size:0.7rem;color:var(--text-muted)">{{ secondary_title }}</div>
-            {% endif %}
-            {% if not item.anilist_id %}
-            <div class="library-card-year" style="color:var(--danger);font-size:0.7rem">Unmatched</div>
-            {% endif %}
+            <span class="media-card-badge {{ 'badge-success' if item.anilist_id else 'badge-warning' }}">
+                {{ "Matched" if item.anilist_id else "Unmatched" }}
+            </span>
+            <div class="media-card-overlay">
+                <div class="media-card-title scroll-on-hover">{{ primary_title }}</div>
+                {% if secondary_title %}
+                <div class="media-card-subtitle scroll-on-hover">{{ secondary_title }}</div>
+                {% endif %}
+            </div>
+            <div class="media-card-actions">
+                <button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); openMatchModal({{ loop.index0 }})" title="Edit AniList match">&#x270E;</button>
+                {% if item.anilist_id %}
+                <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation(); refreshItem({{ loop.index0 }})" title="Refresh metadata">&#x21BB;</button>
+                {% endif %}
+            </div>
         </div>
     </div>
     {% endfor %}
@@ -213,26 +207,7 @@
     </div>
 </div>
 
-<!-- Entry Detail Modal -->
-<div class="modal-backdrop hidden" id="entryDetailModal" onclick="if(event.target===this)closeEntryDetail()">
-    <div class="modal-box entry-detail-box" onclick="event.stopPropagation()">
-        <div class="modal-header">
-            <h2 id="edModalTitle">Details</h2>
-            <button class="modal-close" onclick="closeEntryDetail()">&#x2715;</button>
-        </div>
-        <div class="modal-body entry-detail-body">
-            <div class="entry-detail-poster-col">
-                <div id="edPosterWrap"></div>
-                <div id="edSourceBadges" class="entry-detail-badges" style="margin-top:0.25rem"></div>
-            </div>
-            <div class="entry-detail-info-col">
-                <div id="edTitleWrap"></div>
-                <div id="edInfoGrid" class="entry-detail-grid"></div>
-                <div id="edActions" class="entry-detail-actions"></div>
-            </div>
-        </div>
-    </div>
-</div>
+<!-- Entry detail uses the shared modal from base.html (#mediaDetailModal) -->
 
 <script>
 var ITEMS = {{ items | tojson }};
@@ -254,7 +229,7 @@ function setView(v) {
 function applyFilters() {
     var q = document.getElementById('searchInput').value.toLowerCase();
     var mf = document.getElementById('matchFilter').value;
-    var gridCards = document.querySelectorAll('#gridView .library-card');
+    var gridCards = document.querySelectorAll('#gridView .media-card');
     var listRows = document.querySelectorAll('#listView .library-row');
     function matches(el) {
         var title = el.dataset.title || '';
@@ -292,61 +267,18 @@ function sortLibrary(col) {
     rows.forEach(function(r) { tbody.appendChild(r); });
 }
 
+// Wire into shared media detail modal (from base.html / media-detail.js)
+setMediaDetailTitleDisplay({{ title_display | tojson }});
+
 function openEntryDetail(idx) {
     var item = ITEMS[idx];
     if (!item) return;
-    document.getElementById('entryDetailModal').classList.remove('hidden');
-    document.getElementById('edModalTitle').textContent = item.title_romaji || item.title || '(unknown)';
-
-    // Poster
-    var posterWrap = document.getElementById('edPosterWrap');
-    if (item.cover_url) {
-        posterWrap.innerHTML = '<img src="' + escHtml(item.cover_url) + '" class="entry-detail-poster" alt="">';
-    } else {
-        posterWrap.innerHTML = '<div class="entry-detail-poster-empty">?</div>';
-    }
-
-    // Source badges
-    var badgesEl = document.getElementById('edSourceBadges');
-    badgesEl.innerHTML = (item.sources || []).map(function(s) {
-        return '<span class="source-badge source-badge-' + s + '" style="position:static;display:inline-block">' + s.charAt(0).toUpperCase() + s.slice(1) + '</span>';
-    }).join('');
-
-    // Title
-    var titleWrap = document.getElementById('edTitleWrap');
-    if (item.anilist_id) {
-        titleWrap.innerHTML = '<a href="https://anilist.co/anime/' + item.anilist_id + '" target="_blank" rel="noopener" class="entry-detail-title">' + escHtml(item.title_romaji || item.title || '') + '</a>';
-        if (item.title_english && item.title_english !== item.title_romaji) {
-            titleWrap.innerHTML += '<div class="entry-detail-subtitle">' + escHtml(item.title_english) + '</div>';
-        }
-    } else {
-        titleWrap.innerHTML = '<div class="entry-detail-title">' + escHtml(item.title || item.folder_name || '') + '</div>';
-    }
-
-    // Info grid
-    var grid = document.getElementById('edInfoGrid');
-    var rows = [];
-    if (item.year) rows.push(['Year', item.year]);
-    if (item.episodes) rows.push(['Episodes', item.episodes]);
-    if (item.anilist_status) rows.push(['Status', item.anilist_status.charAt(0) + item.anilist_status.slice(1).toLowerCase()]);
-    if (item.match_method) rows.push(['Match', item.match_method + (item.match_confidence ? ' (' + Math.round(item.match_confidence * 100) + '%)' : '')]);
-    if (item.library_name) rows.push(['Library', item.library_name]);
-    if (item.folder_path || item.folder_name) rows.push(['Path', item.folder_path || item.folder_name]);
-    grid.innerHTML = rows.map(function(r) {
-        return '<span class="entry-detail-label">' + escHtml(r[0]) + '</span><span class="entry-detail-value" title="' + escHtml(String(r[1])) + '">' + escHtml(String(r[1])) + '</span>';
-    }).join('');
-
-    // Actions
-    var actions = document.getElementById('edActions');
-    var html = '<button class="btn btn-secondary btn-xs" onclick="closeEntryDetail(); openMatchModal(' + idx + ')">Edit Match</button>';
-    if (item.anilist_id) {
-        html += ' <button class="btn btn-secondary btn-xs" onclick="refreshItem(' + idx + ')">\u21BB Refresh</button>';
-    }
-    actions.innerHTML = html;
+    item._idx = idx; // pass index so actions can reference it
+    openMediaDetail(item, 'library');
 }
 
 function closeEntryDetail() {
-    document.getElementById('entryDetailModal').classList.add('hidden');
+    closeMediaDetail();
 }
 
 function openMatchModal(idx) {

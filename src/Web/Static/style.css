@@ -1769,7 +1769,7 @@ select:disabled {
     pointer-events: none;
 }
 
-.source-badge-local  { background: #37474f; color: #fff; }
+.source-badge-local  { background: var(--accent, #3db4f2); color: #fff; }
 .source-badge-plex   { background: #e5a00d; color: #000; }
 .source-badge-jellyfin { background: #9147ff; color: #fff; }
 
@@ -2003,7 +2003,7 @@ select:disabled {
     flex-shrink: 0;
 }
 
-.source-dot-local    { background: #37474f; }
+.source-dot-local    { background: var(--accent, #3db4f2); }
 .source-dot-plex     { background: #e5a00d; }
 .source-dot-jellyfin { background: #9147ff; }
 .source-dot-multi    { background: #26a69a; }
@@ -2373,27 +2373,27 @@ a.scroll-on-hover {
    ============================================================ */
 
 .entry-detail-box {
-    width: 680px;
+    width: 560px;
     max-width: 96vw;
 }
 
 .entry-detail-body {
     display: flex;
     gap: 1.25rem;
-    padding: 1rem 1.25rem 0.5rem !important;
+    padding: 1rem 1.25rem 1.25rem !important;
 }
 
 .entry-detail-poster-col {
     flex-shrink: 0;
-    width: 120px;
+    width: 160px;
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
 }
 
 .entry-detail-poster {
-    width: 120px;
-    height: 170px;
+    width: 160px;
+    height: 240px;
     object-fit: cover;
     border-radius: var(--radius);
     background: var(--border);
@@ -2401,8 +2401,8 @@ a.scroll-on-hover {
 }
 
 .entry-detail-poster-empty {
-    width: 120px;
-    height: 170px;
+    width: 160px;
+    height: 240px;
     border-radius: var(--radius);
     background: var(--border);
     display: flex;
@@ -2418,6 +2418,40 @@ a.scroll-on-hover {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
+}
+
+/* Top row: title left, toolbar buttons right */
+.entry-detail-top-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+}
+
+.entry-detail-toolbar {
+    display: flex;
+    gap: 0.35rem;
+    flex-shrink: 0;
+    margin-top: 0.15rem;
+}
+
+.entry-detail-toolbar button {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    border-radius: var(--radius);
+    width: 1.75rem;
+    height: 1.75rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+.entry-detail-toolbar button:hover {
+    color: var(--accent);
+    border-color: var(--accent);
 }
 
 .entry-detail-title {
@@ -2472,13 +2506,38 @@ a.scroll-on-hover {
     white-space: nowrap;
 }
 
-.entry-detail-actions {
-    margin-top: auto;
-    padding-top: 0.75rem;
-    border-top: 1px solid var(--border);
-    display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap;
+/* Source chips inside info grid */
+.entry-detail-source-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.12rem 0.45rem;
+    border-radius: 4px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    margin-right: 0.25rem;
+}
+
+.entry-detail-source-chip .source-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+@media (max-width: 500px) {
+    .entry-detail-body {
+        flex-direction: column;
+        align-items: center;
+    }
+    .entry-detail-poster-col {
+        width: 140px;
+    }
+    .entry-detail-poster,
+    .entry-detail-poster-empty {
+        width: 140px;
+        height: 210px;
+    }
 }
 
 /* ============================================================
@@ -3008,4 +3067,202 @@ details.advanced-section > summary::-webkit-details-marker { display: none; }
     border-radius: 50%;
     animation: spin 0.7s linear infinite;
     vertical-align: middle;
+}
+
+/* ============================================================
+   Unified Media Card
+   ============================================================
+   Single card component used across dashboard, watchlist,
+   library browsers, and metadata tools.
+
+   Context is set via a data-context attribute on .media-grid:
+     "dashboard"  — progress bar + ep count
+     "watchlist"  — status chip + progress bar + ep count
+     "library"    — source dots + match badge + alt title + hover actions
+   ============================================================ */
+
+.media-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 1rem;
+}
+
+.media-card {
+    display: flex;
+    flex-direction: column;
+    text-decoration: none;
+    color: inherit;
+    cursor: pointer;
+}
+
+.media-card-poster {
+    position: relative;
+    width: 100%;
+    padding-bottom: 142%; /* 2:3 aspect ratio */
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: 0 0 0 0 transparent;
+    transition: box-shadow 0.15s, transform 0.15s;
+    will-change: transform;
+}
+
+.media-card:hover .media-card-poster {
+    box-shadow: 0 0 0 2px var(--accent);
+    transform: scale(1.03);
+}
+
+.media-card-poster img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.media-card-poster-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--border);
+    color: var(--text-muted);
+    font-size: 1.5rem;
+}
+
+/* Top-left badge slot (status chip, match badge, etc.) */
+.media-card-badge {
+    position: absolute;
+    top: 0.3rem;
+    left: 0.3rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    font-size: 0.62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    pointer-events: none;
+    z-index: 2;
+}
+
+/* Source indicator dots (top-left, shown for library context) */
+.media-card-sources {
+    position: absolute;
+    top: 0.35rem;
+    left: 0.35rem;
+    display: flex;
+    gap: 3px;
+    z-index: 2;
+}
+
+.media-card-sources .source-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 1px solid rgba(0,0,0,0.3);
+}
+
+/* Solid-fill badge overrides when overlaid on poster images */
+.media-card-badge.badge-success {
+    background: #2e7d32;
+    color: #fff;
+}
+
+.media-card-badge.badge-warning {
+    background: #e65100;
+    color: #fff;
+}
+
+/* Bottom overlay (gradient with title, secondary line, progress bar) */
+.media-card-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(to top, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.55) 60%, transparent 100%);
+    padding: 1.5rem 0.5rem 0.45rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    z-index: 1;
+}
+
+.media-card-progress-bar {
+    width: 100%;
+    height: 3px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 0.15rem;
+}
+
+.media-card-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+}
+
+.media-card-title {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.3;
+}
+
+.media-card-subtitle {
+    font-size: 0.65rem;
+    color: rgba(255,255,255,0.7);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.3;
+}
+
+/* Hover action buttons */
+.media-card-actions {
+    position: absolute;
+    bottom: 0.4rem;
+    right: 0.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    opacity: 0;
+    transition: opacity 0.2s;
+    z-index: 3;
+}
+
+.media-card:hover .media-card-actions {
+    opacity: 1;
+}
+
+/* Context-based visibility:
+   Elements are hidden by default and shown when the grid context matches */
+.media-grid .media-card-progress-bar { display: none; }
+.media-grid .media-card-badge { display: none; }
+.media-grid .media-card-sources { display: none; }
+.media-grid .media-card-actions { display: none; }
+
+/* Dashboard: show progress bar */
+.media-grid[data-context="dashboard"] .media-card-progress-bar { display: block; }
+
+/* Watchlist: show status badge + progress bar */
+.media-grid[data-context="watchlist"] .media-card-badge { display: block; }
+.media-grid[data-context="watchlist"] .media-card-progress-bar { display: block; }
+
+/* Library: show source dots, hover actions (no match badge — dots serve as indicator) */
+.media-grid[data-context="library"] .media-card-sources { display: flex; }
+.media-grid[data-context="library"] .media-card-actions { display: flex; }
+
+/* Plex/Jellyfin metadata tools: show match badge, hover actions */
+.media-grid[data-context="metadata"] .media-card-badge { display: block; }
+.media-grid[data-context="metadata"] .media-card-actions { display: flex; }
+
+@media (max-width: 600px) {
+    .media-grid {
+        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+        gap: 0.75rem;
+    }
 }

@@ -89,6 +89,8 @@ async def _run_analysis_background(
     level: str,
     force_rescan: bool,
     templates: dict[str, str] | None = None,
+    movie_output_dir: str | None = None,
+    tv_output_dir: str | None = None,
 ) -> None:
     """Background coroutine: run restructure analysis without blocking the request.
 
@@ -152,7 +154,12 @@ async def _run_analysis_background(
         )
 
         plan = await restructurer.analyze(
-            all_shows, progress, level=level, output_dir=output_dir or None
+            all_shows,
+            progress,
+            level=level,
+            output_dir=output_dir or None,
+            movie_output_dir=movie_output_dir,
+            tv_output_dir=tv_output_dir,
         )
         app_state.onboarding_restructure_plan = plan  # type: ignore[attr-defined]
 
@@ -561,6 +568,23 @@ async def restructure_analyze_async(request: Request) -> JSONResponse:
     request.app.state.restructure_analyze_params = analyze_params
     await db.set_setting("restructure.analyze_params", json.dumps(analyze_params))
 
+    # Read movie/TV split settings
+    split_enabled = (await db.get_setting("library.split_movies_tv") or "").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+    movie_out = (
+        (await db.get_setting("library.movie_output_path") or "").strip()
+        if split_enabled
+        else None
+    )
+    tv_out = (
+        (await db.get_setting("library.tv_output_path") or "").strip()
+        if split_enabled
+        else None
+    )
+
     # Set up progress and launch background task
     progress = RestructureProgress(status="running")
     request.app.state.restructure_progress = progress
@@ -574,6 +598,8 @@ async def restructure_analyze_async(request: Request) -> JSONResponse:
             level=level,
             force_rescan=force_rescan,
             templates=pending_templates,
+            movie_output_dir=movie_out if (movie_out and tv_out) else None,
+            tv_output_dir=tv_out if (movie_out and tv_out) else None,
         ),
         task_key="restructure_analysis",
     )
@@ -1442,6 +1468,23 @@ async def restructure_plan_rerun(request: Request, plan_id: int) -> JSONResponse
     request.app.state.restructure_analyze_params = analyze_params
     await db.set_setting("restructure.analyze_params", json.dumps(analyze_params))
 
+    # Read movie/TV split settings
+    _split_on = (await db.get_setting("library.split_movies_tv") or "").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+    _m_out = (
+        (await db.get_setting("library.movie_output_path") or "").strip()
+        if _split_on
+        else None
+    )
+    _t_out = (
+        (await db.get_setting("library.tv_output_path") or "").strip()
+        if _split_on
+        else None
+    )
+
     spawn_background_task(
         request.app.state,
         _run_analysis_background(
@@ -1451,6 +1494,8 @@ async def restructure_plan_rerun(request: Request, plan_id: int) -> JSONResponse
             level=plan_row.get("level") or "full_restructure",
             force_rescan=False,
             templates=templates_dict,
+            movie_output_dir=_m_out if (_m_out and _t_out) else None,
+            tv_output_dir=_t_out if (_m_out and _t_out) else None,
         ),
         task_key="restructure_analysis",
     )

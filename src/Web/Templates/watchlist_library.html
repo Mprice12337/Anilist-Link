@@ -297,12 +297,14 @@
 </div><!-- end #tableView -->
 
 <!-- Grid view -->
-<div id="gridView" class="watchlist-grid hidden">
+<div id="gridView" class="media-grid hidden" data-context="watchlist">
   {% for entry in entries %}
   {% set ls = entry.list_status %}
   {% set progress_pct = ((entry.progress / entry.anilist_episodes) * 100) | int if entry.anilist_episodes else 0 %}
   {% set status_colors = {'CURRENT': '#2e7d32', 'COMPLETED': '#1565c0', 'PLANNING': '#f9a825', 'PAUSED': '#546e7a', 'DROPPED': '#b71c1c', 'REPEATING': '#6a1b9a'} %}
-  <div class="watchlist-grid-card"
+  {% set _title = (entry.title_english or entry.title_romaji or entry.anilist_title or '(untitled)') if title_display == 'english' else (entry.title_romaji or entry.anilist_title or '(untitled)') %}
+  {% set _ep = ('Ep ' ~ entry.progress ~ '/' ~ entry.anilist_episodes) if entry.anilist_episodes else ('Ep ' ~ entry.progress) %}
+  <div class="media-card"
        data-status="{{ ls }}"
        data-local="{{ entry.local_status }}"
        data-arr="{{ entry.arr_status }}"
@@ -310,27 +312,19 @@
        data-idx="{{ loop.index0 }}"
        onclick="openWatchlistDetail(this.dataset.idx)"
        style="cursor:pointer">
-    <div class="watchlist-grid-poster">
+    <div class="media-card-poster">
       {% if entry.cover_image %}
       <img src="{{ entry.cover_image }}" alt="{{ entry.anilist_title }}" loading="lazy">
       {% else %}
-      <div class="watchlist-grid-poster-empty">?</div>
+      <div class="media-card-poster-empty">?</div>
       {% endif %}
-      <!-- Status badge -->
-      <span class="watchlist-grid-status badge" style="background:{{ status_colors.get(ls, '#555') }};color:#fff;">{{ ls.title() }}</span>
-      <!-- Progress overlay -->
-      <div class="watchlist-grid-overlay">
-        <div class="watchlist-grid-progress-bar">
-          <div class="watchlist-grid-progress-fill" style="width:{{ progress_pct }}%"></div>
+      <span class="media-card-badge" style="background:{{ status_colors.get(ls, '#555') }};color:#fff;">{{ ls.title() }}</span>
+      <div class="media-card-overlay">
+        <div class="media-card-progress-bar">
+          <div class="media-card-progress-fill" style="width:{{ progress_pct }}%"></div>
         </div>
-        <div class="watchlist-grid-title scroll-on-hover">
-          {% if title_display == "english" %}{{ entry.title_english or entry.title_romaji or entry.anilist_title or '(untitled)' }}
-          {% else %}{{ entry.title_romaji or entry.anilist_title or '(untitled)' }}{% endif %}
-        </div>
-        <div class="watchlist-grid-ep">
-          {% if entry.anilist_episodes %}Ep {{ entry.progress }}/{{ entry.anilist_episodes }}
-          {% else %}Ep {{ entry.progress }}{% endif %}
-        </div>
+        <div class="media-card-title scroll-on-hover">{{ _title }}</div>
+        <div class="media-card-subtitle">{{ _ep }}</div>
       </div>
     </div>
   </div>
@@ -341,25 +335,7 @@
 
 {% endif %}
 
-<!-- Entry Detail Modal -->
-<div class="modal-backdrop hidden" id="watchlistDetailModal" onclick="if(event.target===this)closeWatchlistDetail()">
-  <div class="modal-box entry-detail-box" onclick="event.stopPropagation()">
-    <div class="modal-header">
-      <h2 id="wdTitle">Details</h2>
-      <button class="modal-close" onclick="closeWatchlistDetail()">&times;</button>
-    </div>
-    <div class="modal-body entry-detail-body">
-      <div class="entry-detail-poster-col">
-        <div id="wdPosterWrap"></div>
-      </div>
-      <div class="entry-detail-info-col">
-        <div id="wdTitleWrap"></div>
-        <div id="wdInfoGrid" class="entry-detail-grid"></div>
-        <div id="wdActions" class="entry-detail-actions"></div>
-      </div>
-    </div>
-  </div>
-</div>
+<!-- Entry detail uses the shared modal from base.html (#mediaDetailModal) -->
 
 <!-- Monitor dropdown menu -->
 <div id="monitorMenu" style="display:none;position:fixed;z-index:1000;background:var(--bg-primary,#fff);border:1px solid var(--border-color,#ddd);border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,0.15);min-width:210px;padding:0.25rem 0;">
@@ -529,91 +505,19 @@ var TITLE_DISPLAY = {{ title_display | tojson }};
   var sortCol = null;
   var sortDir = 1; // 1 = asc, -1 = desc
 
-  // Entry detail popup
+  // Wire into shared media detail modal (from base.html / media-detail.js)
+  setMediaDetailTitleDisplay(TITLE_DISPLAY);
+
   window.openWatchlistDetail = function(idxStr) {
     var idx = parseInt(idxStr, 10);
     var entry = ENTRIES[idx];
     if (!entry) return;
-    document.getElementById('watchlistDetailModal').classList.remove('hidden');
-
-    // Resolve primary/alt title based on user preference
-    var _romaji = entry.title_romaji || entry.anilist_title || '(untitled)';
-    var _english = entry.title_english || '';
-    var _primary, _alt;
-    if (TITLE_DISPLAY === 'english' || TITLE_DISPLAY === 'both_english_primary') {
-      _primary = _english || _romaji;
-      _alt = (_romaji && _romaji !== _primary) ? _romaji : '';
-    } else {
-      _primary = _romaji;
-      _alt = (_english && _english !== _primary) ? _english : '';
-    }
-
-    document.getElementById('wdTitle').textContent = _primary;
-
-    // Poster
-    var posterWrap = document.getElementById('wdPosterWrap');
-    if (entry.cover_image) {
-      posterWrap.innerHTML = '<img src="' + _escHtml(entry.cover_image) + '" class="entry-detail-poster" alt="">';
-    } else {
-      posterWrap.innerHTML = '<div class="entry-detail-poster-empty">?</div>';
-    }
-
-    // Title + AniList link
-    var titleWrap = document.getElementById('wdTitleWrap');
-    var altHtml = _alt
-      ? '<div class="entry-detail-alt-title">' + _escHtml(_alt) + '</div>'
-      : '';
-    titleWrap.innerHTML = '<a href="https://anilist.co/anime/' + entry.anilist_id + '" target="_blank" rel="noopener" class="entry-detail-title">'
-      + _escHtml(_primary) + '</a>' + altHtml;
-
-    // Info grid
-    var watchColors = {CURRENT:'#2e7d32',PLANNING:'#1565c0',COMPLETED:'#0277bd',PAUSED:'#546e7a',REPEATING:'#6a1b9a',DROPPED:'#b71c1c'};
-    var ls = entry.list_status || '';
-    var grid = document.getElementById('wdInfoGrid');
-    var rows = [];
-    if (ls) rows.push(['Watch Status', '<span class="badge" style="background:' + (watchColors[ls]||'#555') + ';color:#fff">' + ls.charAt(0) + ls.slice(1).toLowerCase() + '</span>']);
-    if (entry.airing_status) rows.push(['Airing', entry.airing_status.replace('_', ' ').toLowerCase().replace(/\b\w/g, function(c){return c.toUpperCase();})]);
-    if (entry.anilist_format) rows.push(['Format', entry.anilist_format]);
-    if (entry.start_year) rows.push(['Year', entry.start_year]);
-    if (entry.anilist_episodes) rows.push(['Episodes', entry.anilist_episodes]);
-    var progStr = entry.anilist_episodes ? (entry.progress + '/' + entry.anilist_episodes + ' eps') : (entry.progress + ' eps');
-    rows.push(['Progress', progStr]);
-    if (entry.local_status) rows.push(['Local', entry.local_status === 'have' ? '✓ Have' : entry.local_status === 'arr' ? 'via ' + (entry.arr_service||'') : '✗ Missing']);
-    if (entry.arr_status && entry.arr_status !== 'untracked') rows.push(['*arr', (entry.arr_service||'') + ' ' + (entry.arr_status==='monitored'?'●':'○')]);
-    grid.innerHTML = rows.map(function(r) {
-      return '<span class="entry-detail-label">' + escHtml(r[0]) + '</span>'
-        + '<span class="entry-detail-value">' + r[1] + '</span>';
-    }).join('');
-
-    // Actions
-    var actionsEl = document.getElementById('wdActions');
-    var html = '';
-    if (entry.arr_status && entry.arr_status !== 'untracked') {
-      html += '<button class="btn btn-primary btn-xs" onclick="closeWatchlistDetail(); openReleaseModal(' + entry.anilist_id + ', \'' + _escJs(entry.anilist_title||'') + '\', \'' + (entry.arr_service||'sonarr') + '\')">Search Releases</button> ';
-      if (entry.arr_service === 'sonarr' && entry.sonarr_id) {
-        html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); reprocessEntry(\'sonarr\',' + entry.sonarr_id + ',this,false)" title="Move downloaded files into your library folder">Move to Library</button> ';
-        html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); reprocessEntry(\'sonarr\',' + entry.sonarr_id + ',this,true)" title="Preview what files would be moved and where">Preview Move</button> ';
-        html += '<button class="btn btn-danger btn-xs" onclick="unlinkFromSonarr(' + entry.anilist_id + ', \'' + _escJs(entry.anilist_title||'') + '\')" title="Remove Sonarr link from our database (use if series was deleted from Sonarr)">Unlink</button>';
-      } else if (entry.arr_service === 'radarr' && entry.radarr_id) {
-        html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); reprocessEntry(\'radarr\',' + entry.radarr_id + ',this,false)" title="Move downloaded file into your library folder">Move to Library</button> ';
-        html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); reprocessEntry(\'radarr\',' + entry.radarr_id + ',this,true)" title="Preview what file would be moved and where">Preview Move</button>';
-      }
-    } else if (typeof arr_enabled !== 'undefined' && arr_enabled) {
-      html += '<button class="btn btn-secondary btn-xs" onclick="closeWatchlistDetail(); previewAdd(' + entry.anilist_id + ', \'' + _escJs(entry.anilist_title||'') + '\', this)" title="Add to Sonarr/Radarr">+ Add</button>';
-    }
-    actionsEl.innerHTML = html || '<span style="font-size:0.82rem;color:var(--text-muted)">No actions available.</span>';
+    openMediaDetail(entry, 'watchlist', { arrEnabled: arr_enabled });
   };
 
   window.closeWatchlistDetail = function() {
-    document.getElementById('watchlistDetailModal').classList.add('hidden');
+    closeMediaDetail();
   };
-
-  function _escHtml(s) {
-    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-  }
-  function _escJs(s) {
-    return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-  }
 
   // View toggle (table / grid)
   window.setWatchlistView = function(v) {
@@ -685,7 +589,7 @@ var TITLE_DISPLAY = {{ title_display | tojson }};
       if (show) visible++;
     });
     // Grid cards
-    document.querySelectorAll('#gridView .watchlist-grid-card').forEach(function(card) {
+    document.querySelectorAll('#gridView .media-card').forEach(function(card) {
       var status = card.getAttribute('data-status') || '';
       var local = card.getAttribute('data-local') || '';
       var title = card.getAttribute('data-title') || '';
@@ -1008,7 +912,7 @@ var TITLE_DISPLAY = {{ title_display | tojson }};
     });
 
     // Also update grid cards
-    document.querySelectorAll('#gridView .watchlist-grid-card').forEach(function(card) {
+    document.querySelectorAll('#gridView .media-card').forEach(function(card) {
       var addBtn = card.querySelector('button[onclick*="previewAdd(' + anilistId + ',"]');
       if (!addBtn) return;
       card.setAttribute('data-local', 'arr');

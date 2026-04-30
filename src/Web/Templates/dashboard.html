@@ -69,34 +69,27 @@
     {% elif not currently_watching %}
     <p class="text-muted">No series marked "Currently Watching" on AniList.</p>
     {% else %}
-    <div class="watching-grid">
+    <div class="media-grid" data-context="dashboard">
         {% for entry in currently_watching %}
         {% set progress_pct = ((entry.progress / entry.anilist_episodes) * 100) | int if entry.anilist_episodes else 0 %}
-        <a href="https://anilist.co/anime/{{ entry.anilist_id }}" target="_blank" rel="noopener" class="watching-card">
-            <div class="watching-poster">
+        {% set _title = entry.anilist_title_english if (title_display == 'english' and entry.anilist_title_english) else (entry.anilist_title or '(untitled)') %}
+        {% set _ep = ('Ep ' ~ entry.progress ~ '/' ~ entry.anilist_episodes) if entry.anilist_episodes else ('Ep ' ~ entry.progress) %}
+        <div class="media-card" data-idx="{{ loop.index0 }}" onclick="openDashboardDetail({{ loop.index0 }})" style="cursor:pointer">
+            <div class="media-card-poster">
                 {% if entry.cover_image %}
                 <img src="{{ entry.cover_image }}" alt="{{ entry.anilist_title }}" loading="lazy">
                 {% else %}
-                <div class="watching-poster-empty">?</div>
+                <div class="media-card-poster-empty">?</div>
                 {% endif %}
-                <div class="watching-overlay">
-                    <div class="watching-overlay-progress-bar">
-                        <div class="watching-overlay-progress-fill" style="width:{{ progress_pct }}%"></div>
+                <div class="media-card-overlay">
+                    <div class="media-card-progress-bar">
+                        <div class="media-card-progress-fill" style="width:{{ progress_pct }}%"></div>
                     </div>
-                    <div class="watching-overlay-text">
-                        <span class="watching-overlay-title scroll-on-hover">
-                            {% if title_display == 'english' and entry.anilist_title_english %}{{ entry.anilist_title_english }}
-                            {% elif title_display in ('both_romaji_primary', 'both_english_primary') %}{{ entry.anilist_title }}
-                            {% else %}{{ entry.anilist_title or '(untitled)' }}{% endif %}
-                        </span>
-                        <span class="watching-overlay-ep">
-                            {% if entry.anilist_episodes %}Ep {{ entry.progress }}/{{ entry.anilist_episodes }}
-                            {% else %}Ep {{ entry.progress }}{% endif %}
-                        </span>
-                    </div>
+                    <div class="media-card-title scroll-on-hover">{{ _title }}</div>
+                    <div class="media-card-subtitle">{{ _ep }}</div>
                 </div>
             </div>
-        </a>
+        </div>
         {% endfor %}
     </div>
     {% endif %}
@@ -126,6 +119,16 @@
 </section>
 
 <script>
+var _dashEntries = {{ currently_watching | tojson }};
+var _dashArrEnabled = {{ 'true' if arr_enabled is defined and arr_enabled else 'false' }};
+setMediaDetailTitleDisplay({{ title_display | tojson }});
+
+function openDashboardDetail(idx) {
+    var entry = _dashEntries[idx];
+    if (!entry) return;
+    openMediaDetail(entry, 'dashboard', { arrEnabled: _dashArrEnabled });
+}
+
 async function dashboardRescanLocal(btn) {
     if (!confirm('Rescan all local libraries? This may take several minutes depending on library size.')) {
         return;
@@ -138,8 +141,6 @@ async function dashboardRescanLocal(btn) {
         var data = await resp.json();
         if (data.ok) {
             btn.textContent = 'Scanning… (see widget)';
-            // Re-enable after 4s so the user can trigger again if they must.
-            // The floating progress widget tracks the actual scan.
             setTimeout(function() {
                 btn.textContent = orig;
                 btn.disabled = false;
@@ -155,21 +156,5 @@ async function dashboardRescanLocal(btn) {
         btn.disabled = false;
     }
 }
-
-// Trigger scroll-on-hover when hovering the entire watching-card
-document.querySelectorAll('.watching-card').forEach(function(card) {
-    var titleEl = card.querySelector('.watching-overlay-title');
-    if (!titleEl) return;
-    card.addEventListener('mouseenter', function() {
-        if (titleEl.scrollWidth > titleEl.offsetWidth + 2) {
-            titleEl.style.setProperty('--scroll-dist', -(titleEl.scrollWidth - titleEl.offsetWidth) + 'px');
-            titleEl.classList.add('is-scrolling');
-        }
-    });
-    card.addEventListener('mouseleave', function() {
-        titleEl.classList.remove('is-scrolling');
-        titleEl.style.removeProperty('--scroll-dist');
-    });
-});
 </script>
 {% endblock %}
