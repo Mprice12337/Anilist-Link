@@ -12,7 +12,6 @@ from src.Clients.ProwlarrClient import (
     _parse_quality,
 )
 
-
 # ------------------------------------------------------------------
 # _parse_quality (parametrized)
 # ------------------------------------------------------------------
@@ -290,7 +289,7 @@ class TestSearchAnimeDedup:
         client = self._make_client()
         client.search = AsyncMock(return_value=[self._release("a", 10)])
 
-        results = await client.search_anime("Same", titles=["Same", "Different"])
+        await client.search_anime("Same", titles=["Same", "Different"])
         # "Same" appears in both query and titles, should not duplicate search
         assert client.search.call_count == 2  # "Same" + "Different"
 
@@ -326,5 +325,5 @@ class TestSearchAnimeDedup:
         client = self._make_client()
         client.search = AsyncMock(return_value=[self._release("x", 5)])
 
-        results = await client.search_anime("Query", titles=["", None])
+        await client.search_anime("Query", titles=["", None])
         assert client.search.call_count == 1  # only main query

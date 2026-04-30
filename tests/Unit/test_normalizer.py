@@ -13,7 +13,6 @@ from src.Matching.Normalizer import (
     strip_bracket_tags,
 )
 
-
 # ---------------------------------------------------------------------------
 # normalize_title
 # ---------------------------------------------------------------------------
@@ -163,9 +162,9 @@ class TestCleanTitleForSearch:
             # Season removed
             ("Demon Slayer Season 2", "Demon Slayer"),
             ("Demon Slayer - Season 2", "Demon Slayer"),
-            # Part removed
-            ("Attack on Titan Part 2", "Attack on Titan"),
-            ("Attack on Titan - Part 2", "Attack on Titan"),
+            # Part N intentionally preserved (needed for disambiguation)
+            ("Attack on Titan Part 2", "Attack on Titan Part 2"),
+            ("Attack on Titan - Part 2", "Attack on Titan - Part 2"),
             # Nth Season removed
             ("My Hero Academia 2nd Season", "My Hero Academia"),
             ("Bungou Stray Dogs 4th Season", "Bungou Stray Dogs"),

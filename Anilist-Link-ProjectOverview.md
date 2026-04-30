@@ -10,8 +10,8 @@ Anilist-Link is a self-hosted Docker container that serves as a centralized brid
 |---|---|---|
 | **P2 — File Organization** | Rename/restructure anime files using AniList series data | ✅ Complete |
 | **P3 — Metadata** | Write AniList metadata to Plex and Jellyfin libraries | ✅ Complete |
-| **P1 — Watch Sync** | Sync Crunchyroll watch progress to AniList | ✅ Crunchyroll done; Plex/Jellyfin planned |
-| **P4 — Downloads** | Add anime to Sonarr/Radarr via AniList alt titles | 🔧 Partially implemented |
+| **P1 — Watch Sync** | Sync watch progress between Crunchyroll, Plex, Jellyfin, and AniList | ✅ Complete |
+| **P4 — Downloads** | Add anime to Sonarr/Radarr via AniList alt titles | ✅ Complete |
 
 ## Architecture
 
@@ -39,8 +39,8 @@ Anilist-Link is a self-hosted Docker container that serves as a centralized brid
 │  └──────────────────────────┘  └──────────────────────────────────┘  │
 │                                                                      │
 │  ┌────────────────────────────────────┐  ┌──────────────────────┐    │
-│  │         SQLite Database (v17)      │  │   Sync Scheduler     │    │
-│  │  24 tables — mappings, users,      │  │   (APScheduler)      │    │
+│  │         SQLite Database (v1)      │  │   Sync Scheduler     │    │
+│  │  29 tables — mappings, users,      │  │   (APScheduler)      │    │
 │  │  cache, series groups, downloads   │  └──────────────────────┘    │
 │  └────────────────────────────────────┘                              │
 └──────────────────────────────────────────────────────────────────────┘
@@ -76,7 +76,10 @@ Analyzes and reorganizes anime file libraries into a standardized structure. Sup
 Orchestrates the scan → match → cache → apply pipeline for Plex and Jellyfin. Enumerates library items, matches to AniList via the matching engine, builds series groups, caches AniList metadata, writes metadata back to the media server.
 
 ### Watch Syncer (`src/Sync/WatchSyncer.py`)
-Crunchyroll → AniList watch sync. Fetches paginated watch history, matches episodes to AniList entries, updates per-user AniList status with transitions (PLANNING → CURRENT → COMPLETED). Plex/Jellyfin sync is planned (P1).
+Crunchyroll → AniList watch sync. Fetches paginated watch history, matches episodes to AniList entries, updates per-user AniList status with transitions (PLANNING → CURRENT → COMPLETED).
+
+### Plex/Jellyfin Watch Syncer (`src/Sync/PlexWatchSyncer.py`, `JellyfinWatchSyncer.py`)
+Bidirectional Plex/Jellyfin ↔ AniList watch sync with COMPLETED status protection, circular sync prevention, and full audit trail with per-entry undo.
 
 ### Download Manager (`src/Download/DownloadManager.py`)
 Orchestrates AniList → Sonarr/Radarr add requests. Resolves AniList IDs to TVDB/TMDB IDs, sends add requests with AniList alternative titles for better indexer matching. P4.
@@ -84,7 +87,7 @@ Orchestrates AniList → Sonarr/Radarr add requests. Resolves AniList IDs to TVD
 ### Web Dashboard (`src/Web/`)
 FastAPI + Jinja2 server-rendered dashboard. Routes for all 4 pillars plus onboarding wizard, settings, connection testing, and unified library view.
 
-## Data Model (SQLite v17)
+## Data Model (SQLite v1)
 
 Key tables:
 
@@ -102,7 +105,7 @@ Key tables:
 - **anilist_sonarr_mapping / anilist_radarr_mapping** — P4 download mapping tables
 - **user_watchlist** — AniList watchlist snapshot per user
 
-Full schema: see `src/Database/Models.py` and `src/Database/Migrations.py` (v1–v17).
+Full schema: see `src/Database/Models.py` and `src/Database/Migrations.py`.
 
 ## Known Technical Challenges
 
@@ -136,4 +139,4 @@ Anime titles vary significantly across platforms (romanization, English vs. Roma
 - **Predecessor project:** [Crunchyroll-Anilist-Sync](https://github.com/Mprice12337/Crunchyroll-Anilist-Sync)
 - **Full architecture docs:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
-**Last Updated:** 2026-03-19
+**Last Updated:** 2026-04-29

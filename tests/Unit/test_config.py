@@ -16,13 +16,12 @@ from src.Utils.Config import (
     RadarrConfig,
     SchedulerConfig,
     SonarrConfig,
-    load_config,
     _env_bool,
     _env_int,
     _parse_json_list,
     _redirect_host,
+    load_config,
 )
-
 
 # ---------------------------------------------------------------------------
 # Dataclass construction
@@ -83,7 +82,6 @@ class TestDataclassConstruction:
         assert cfg.monitor_mode == "future"
         assert cfg.auto_search is False
         assert cfg.sync_interval_minutes == 60
-        assert cfg.arr_enabled is True
 
     def test_app_config_full_construction(self) -> None:
         cfg = AppConfig(
@@ -140,7 +138,9 @@ class TestHelpers:
             monkeypatch.setenv("TEST_BOOL", val)
             assert _env_bool("TEST_BOOL") is False
 
-    def test_env_bool_missing_uses_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_env_bool_missing_uses_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("TEST_BOOL", raising=False)
         assert _env_bool("TEST_BOOL") is False
         assert _env_bool("TEST_BOOL", True) is True
@@ -149,11 +149,15 @@ class TestHelpers:
         monkeypatch.setenv("TEST_INT", "42")
         assert _env_int("TEST_INT", 10) == 42
 
-    def test_env_int_invalid_uses_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_env_int_invalid_uses_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("TEST_INT", "notanumber")
         assert _env_int("TEST_INT", 10) == 10
 
-    def test_env_int_missing_uses_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_env_int_missing_uses_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("TEST_INT", raising=False)
         assert _env_int("TEST_INT", 99) == 99
 
@@ -189,19 +193,35 @@ class TestLoadConfig:
         """load_config returns sensible defaults when no env vars are set."""
         # Clear relevant env vars to ensure defaults
         for var in (
-            "DEBUG", "PORT", "HOST", "TZ",
-            "ANILIST_CLIENT_ID", "ANILIST_CLIENT_SECRET",
-            "PLEX_URL", "PLEX_TOKEN",
-            "JELLYFIN_URL", "JELLYFIN_API_KEY",
-            "SONARR_URL", "SONARR_API_KEY",
-            "RADARR_URL", "RADARR_API_KEY",
-            "CRUNCHYROLL_EMAIL", "CRUNCHYROLL_PASSWORD",
-            "FLARESOLVERR_URL", "HEADLESS_MODE",
-            "MAX_PAGES", "CR_AUTO_SYNC_ENABLED", "CR_AUTO_APPROVE",
-            "SCAN_INTERVAL", "SYNC_INTERVAL", "CR_SYNC_TIME",
+            "DEBUG",
+            "PORT",
+            "HOST",
+            "TZ",
+            "ANILIST_CLIENT_ID",
+            "ANILIST_CLIENT_SECRET",
+            "PLEX_URL",
+            "PLEX_TOKEN",
+            "JELLYFIN_URL",
+            "JELLYFIN_API_KEY",
+            "SONARR_URL",
+            "SONARR_API_KEY",
+            "RADARR_URL",
+            "RADARR_API_KEY",
+            "CRUNCHYROLL_EMAIL",
+            "CRUNCHYROLL_PASSWORD",
+            "FLARESOLVERR_URL",
+            "HEADLESS_MODE",
+            "MAX_PAGES",
+            "CR_AUTO_SYNC_ENABLED",
+            "CR_AUTO_APPROVE",
+            "SCAN_INTERVAL",
+            "SYNC_INTERVAL",
+            "CR_SYNC_TIME",
             "PLEX_ANIME_LIBRARIES",
-            "DOWNLOAD_AUTO_STATUSES", "DOWNLOAD_MONITOR_MODE",
-            "DOWNLOAD_AUTO_SEARCH", "DOWNLOAD_SYNC_INTERVAL",
+            "DOWNLOAD_AUTO_STATUSES",
+            "DOWNLOAD_MONITOR_MODE",
+            "DOWNLOAD_AUTO_SEARCH",
+            "DOWNLOAD_SYNC_INTERVAL",
         ):
             monkeypatch.delenv(var, raising=False)
 
@@ -275,9 +295,7 @@ class TestLoadConfig:
         cfg = load_config()
         assert cfg.plex.anime_library_keys == ("1", "3", "5")
 
-    def test_load_config_download_sync(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_load_config_download_sync(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DOWNLOAD_AUTO_STATUSES", "CURRENT,PLANNING")
         monkeypatch.setenv("DOWNLOAD_MONITOR_MODE", "all")
         monkeypatch.setenv("DOWNLOAD_AUTO_SEARCH", "true")

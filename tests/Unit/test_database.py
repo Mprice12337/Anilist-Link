@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import pytest
-import pytest_asyncio
 from pathlib import Path
 
 import aiosqlite
+import pytest
+import pytest_asyncio
 
 from src.Database.Connection import DatabaseManager
-from src.Database.Models import INDEXES, TABLES
 from src.Database.Migrations import LATEST_VERSION
+from src.Database.Models import INDEXES, TABLES
 
 
 async def _init_in_memory_db(manager: DatabaseManager) -> None:
@@ -371,9 +371,7 @@ async def test_cleanup_expired_cache(db: DatabaseManager):
     # Fresh entry still exists
     assert await db.get_cached_metadata(1) is not None
     # Expired entry is gone
-    row = await db.fetch_one(
-        "SELECT * FROM anilist_cache WHERE anilist_id=?", (2,)
-    )
+    row = await db.fetch_one("SELECT * FROM anilist_cache WHERE anilist_id=?", (2,))
     assert row is None
 
 
@@ -385,9 +383,7 @@ async def test_set_cached_metadata_upserts(db: DatabaseManager):
     cached = await db.get_cached_metadata(10)
     assert cached is not None
     assert cached["title_romaji"] == "New"
-    rows = await db.fetch_all(
-        "SELECT * FROM anilist_cache WHERE anilist_id=?", (10,)
-    )
+    rows = await db.fetch_all("SELECT * FROM anilist_cache WHERE anilist_id=?", (10,))
     assert len(rows) == 1
 
 

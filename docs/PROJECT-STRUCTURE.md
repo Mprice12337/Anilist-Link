@@ -45,8 +45,14 @@ Anilist-Link/                                     # Project root
 │   │   ├── PlexClient.py                         # Plex API — library, metadata, watch
 │   │   ├── JellyfinClient.py                     # Jellyfin API — library, metadata, watch
 │   │   ├── CrunchyrollClient.py                  # Crunchyroll — reverse-engineered auth
-│   │   ├── SonarrClient.py                       # Sonarr API v3 — series add/lookup [P4]
+│   │   ├���─ SonarrClient.py                       # Sonarr API v3 — series add/lookup [P4]
 │   │   ├── RadarrClient.py                       # Radarr API v3 — movie add/lookup [P4]
+│   │   ├── ServarrBaseClient.py                  # Shared base for Sonarr/Radarr clients
+│   │   ├── ProwlarrClient.py                     # Prowlarr indexer manager integration
+│   │   ├── QBittorrentClient.py                  # qBittorrent torrent client
+│   │   ├── TVMazeClient.py                       # TVMaze API for provider ID lookups
+│   │   ├─��� JellyfinEventListener.py              # Jellyfin WebSocket event listener
+│   │   ├── NamingTranslator.py                   # AniList→TVDB/TMDB ID translation
 │   │
 │   ├── Matching/                                 # Title matching engine
 │   │   ├── __init__.py
@@ -67,6 +73,8 @@ Anilist-Link/                                     # Project root
 │   ├── Sync/                                     # Watch status synchronization
 │   │   ├── __init__.py
 │   │   ├── WatchSyncer.py                        # Crunchyroll→AniList watch sync
+│   │   ├── PlexWatchSyncer.py                    # Plex↔AniList bidirectional watch sync
+│   │   ├── JellyfinWatchSyncer.py                # Jellyfin↔AniList bidirectional watch sync
 │   │   ├── DownloadSyncer.py                     # Download status sync [P4]
 │   │   └── CrunchyrollPreviewRunner.py           # CR sync preview pipeline
 │   │
@@ -141,7 +149,7 @@ Anilist-Link/                                     # Project root
 │   │   ├── __init__.py
 │   │   ├── Connection.py                         # SQLite/aiosqlite connection management
 │   │   ├── Models.py                             # Table DDL definitions (TABLES dict)
-│   │   └── Migrations.py                         # Schema migrations v1–v17
+│   │   └── Migrations.py                         # Consolidated v1 schema baseline (29 tables)
 │   │
 │   ├── Scheduler/                                # Background job scheduling
 │   │   ├── __init__.py
@@ -345,7 +353,7 @@ Incorrect:
 
 ---
 
-## Database Schema (v17)
+## Database Schema (v1 — consolidated 1.0 baseline)
 
 Current tables (24 total):
 
@@ -383,7 +391,7 @@ Current tables (24 total):
 
 ## Test Suite Summary
 
-Total: ~315 tests across 10 files
+Total: 318 tests across 11 files
 
 | Test File | Coverage Focus | Tests |
 |---|---|---|
@@ -433,6 +441,6 @@ ls -la CLAUDE.md                                  # Verify symlink
 
 ---
 
-**Last Updated**: 2026-03-19
+**Last Updated**: 2026-04-29
 **Schema Version**: 17
-**Test Count**: ~315
+**Test Count**: 318

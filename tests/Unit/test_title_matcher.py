@@ -6,7 +6,6 @@ import pytest
 
 from src.Matching.TitleMatcher import TitleMatcher, get_primary_title
 
-
 # ======================================================================
 # Helpers — realistic AniList-style candidate factory
 # ======================================================================
@@ -55,22 +54,46 @@ class TestGetPrimaryTitle:
         "anime, expected",
         [
             pytest.param(
-                {"title": {"romaji": "Shingeki no Kyojin", "english": None, "native": None}},
+                {
+                    "title": {
+                        "romaji": "Shingeki no Kyojin",
+                        "english": None,
+                        "native": None,
+                    }
+                },
                 "Shingeki no Kyojin",
                 id="romaji_only",
             ),
             pytest.param(
-                {"title": {"romaji": None, "english": "Attack on Titan", "native": None}},
+                {
+                    "title": {
+                        "romaji": None,
+                        "english": "Attack on Titan",
+                        "native": None,
+                    }
+                },
                 "Attack on Titan",
                 id="english_only",
             ),
             pytest.param(
-                {"title": {"romaji": "Shingeki no Kyojin", "english": "Attack on Titan", "native": None}},
+                {
+                    "title": {
+                        "romaji": "Shingeki no Kyojin",
+                        "english": "Attack on Titan",
+                        "native": None,
+                    }
+                },
                 "Shingeki no Kyojin",
                 id="both_romaji_preferred",
             ),
             pytest.param(
-                {"title": {"romaji": None, "english": None, "native": "\u9032\u6483\u306e\u5de8\u4eba"}},
+                {
+                    "title": {
+                        "romaji": None,
+                        "english": None,
+                        "native": "\u9032\u6483\u306e\u5de8\u4eba",
+                    }
+                },
                 "\u9032\u6483\u306e\u5de8\u4eba",
                 id="native_only",
             ),
@@ -129,7 +152,9 @@ class TestCalculateTitleSimilarity:
         assert score < 0.3
 
     def test_partial_match(self) -> None:
-        candidate = _make_candidate(4, romaji="Jujutsu Kaisen 2nd Season", english="Jujutsu Kaisen Season 2")
+        candidate = _make_candidate(
+            4, romaji="Jujutsu Kaisen 2nd Season", english="Jujutsu Kaisen Season 2"
+        )
         score = self.matcher.calculate_title_similarity("Jujutsu Kaisen", candidate)
         assert 0.4 < score < 1.0
 
@@ -144,8 +169,12 @@ class TestCalculateTitleSimilarity:
         assert score >= 0.9
 
     def test_match_via_native_title(self) -> None:
-        candidate = _make_candidate(6, romaji="Bleach", native="\u30d6\u30ea\u30fc\u30c1")
-        score = self.matcher.calculate_title_similarity("\u30d6\u30ea\u30fc\u30c1", candidate)
+        candidate = _make_candidate(
+            6, romaji="Bleach", native="\u30d6\u30ea\u30fc\u30c1"
+        )
+        score = self.matcher.calculate_title_similarity(
+            "\u30d6\u30ea\u30fc\u30c1", candidate
+        )
         assert score >= 0.99
 
     def test_case_insensitive(self) -> None:
@@ -155,7 +184,9 @@ class TestCalculateTitleSimilarity:
 
     def test_dub_tag_ignored(self) -> None:
         candidate = _make_candidate(8, romaji="One Punch Man")
-        score = self.matcher.calculate_title_similarity("One Punch Man (Dub)", candidate)
+        score = self.matcher.calculate_title_similarity(
+            "One Punch Man (Dub)", candidate
+        )
         assert score >= 0.9
 
     def test_empty_target(self) -> None:
@@ -206,10 +237,24 @@ class TestFindBestMatchWithSeason:
 
     def test_season_2_detection(self) -> None:
         candidates = [
-            _make_candidate(1, romaji="Mushoku Tensei", english="Mushoku Tensei: Jobless Reincarnation", episodes=11, season_year=2021),
-            _make_candidate(2, romaji="Mushoku Tensei 2nd Season", english="Mushoku Tensei: Jobless Reincarnation Season 2", episodes=12, season_year=2023),
+            _make_candidate(
+                1,
+                romaji="Mushoku Tensei",
+                english="Mushoku Tensei: Jobless Reincarnation",
+                episodes=11,
+                season_year=2021,
+            ),
+            _make_candidate(
+                2,
+                romaji="Mushoku Tensei 2nd Season",
+                english="Mushoku Tensei: Jobless Reincarnation Season 2",
+                episodes=12,
+                season_year=2023,
+            ),
         ]
-        result = self.matcher.find_best_match_with_season("Mushoku Tensei", candidates, target_season=2)
+        result = self.matcher.find_best_match_with_season(
+            "Mushoku Tensei", candidates, target_season=2
+        )
         assert result is not None
         entry, _, season = result
         assert entry["id"] == 2
@@ -217,11 +262,28 @@ class TestFindBestMatchWithSeason:
 
     def test_season_3_via_part(self) -> None:
         candidates = [
-            _make_candidate(1, romaji="Re:Zero kara Hajimeru Isekai Seikatsu", episodes=25, season_year=2016),
-            _make_candidate(2, romaji="Re:Zero kara Hajimeru Isekai Seikatsu Part 2", episodes=25, season_year=2021),
-            _make_candidate(3, romaji="Re:Zero kara Hajimeru Isekai Seikatsu Part 3", episodes=16, season_year=2024),
+            _make_candidate(
+                1,
+                romaji="Re:Zero kara Hajimeru Isekai Seikatsu",
+                episodes=25,
+                season_year=2016,
+            ),
+            _make_candidate(
+                2,
+                romaji="Re:Zero kara Hajimeru Isekai Seikatsu Part 2",
+                episodes=25,
+                season_year=2021,
+            ),
+            _make_candidate(
+                3,
+                romaji="Re:Zero kara Hajimeru Isekai Seikatsu Part 3",
+                episodes=16,
+                season_year=2024,
+            ),
         ]
-        result = self.matcher.find_best_match_with_season("Re:Zero kara Hajimeru Isekai Seikatsu", candidates, target_season=3)
+        result = self.matcher.find_best_match_with_season(
+            "Re:Zero kara Hajimeru Isekai Seikatsu", candidates, target_season=3
+        )
         assert result is not None
         entry, _, season = result
         assert entry["id"] == 3
@@ -233,7 +295,9 @@ class TestFindBestMatchWithSeason:
             _make_candidate(2, romaji="Overlord II", episodes=13, season_year=2018),
             _make_candidate(3, romaji="Overlord III", episodes=13, season_year=2018),
         ]
-        result = self.matcher.find_best_match_with_season("Overlord", candidates, target_season=3)
+        result = self.matcher.find_best_match_with_season(
+            "Overlord", candidates, target_season=3
+        )
         assert result is not None
         entry, _, season = result
         assert entry["id"] == 3
@@ -243,8 +307,20 @@ class TestFindBestMatchWithSeason:
 
     def test_year_hint_boosts_correct_year(self) -> None:
         candidates = [
-            _make_candidate(1, romaji="Uzaki-chan wa Asobitai!", english="Uzaki-chan Wants to Hang Out!", episodes=12, season_year=2020),
-            _make_candidate(2, romaji="Uzaki-chan wa Asobitai! Double", english="Uzaki-chan Wants to Hang Out! Double", episodes=13, season_year=2022),
+            _make_candidate(
+                1,
+                romaji="Uzaki-chan wa Asobitai!",
+                english="Uzaki-chan Wants to Hang Out!",
+                episodes=12,
+                season_year=2020,
+            ),
+            _make_candidate(
+                2,
+                romaji="Uzaki-chan wa Asobitai! Double",
+                english="Uzaki-chan Wants to Hang Out! Double",
+                episodes=13,
+                season_year=2022,
+            ),
         ]
         result = self.matcher.find_best_match_with_season(
             "Uzaki-chan wa Asobitai!", candidates, year_hint=2022
@@ -256,13 +332,21 @@ class TestFindBestMatchWithSeason:
     def test_year_hint_zero_no_effect(self) -> None:
         """year_hint=0 (default) should not alter scoring."""
         candidates = [_make_candidate(1, romaji="Spy x Family", season_year=2022)]
-        result = self.matcher.find_best_match_with_season("Spy x Family", candidates, year_hint=0)
+        result = self.matcher.find_best_match_with_season(
+            "Spy x Family", candidates, year_hint=0
+        )
         assert result is not None
 
     def test_year_hint_penalizes_distant_year(self) -> None:
         candidates = [
             _make_candidate(1, romaji="Hunter x Hunter", episodes=62, season_year=1999),
-            _make_candidate(2, romaji="Hunter x Hunter", english="Hunter x Hunter (2011)", episodes=148, season_year=2011),
+            _make_candidate(
+                2,
+                romaji="Hunter x Hunter",
+                english="Hunter x Hunter (2011)",
+                episodes=148,
+                season_year=2011,
+            ),
         ]
         result = self.matcher.find_best_match_with_season(
             "Hunter x Hunter", candidates, year_hint=2011
@@ -280,7 +364,9 @@ class TestFindBestMatchWithSeason:
 
     def test_custom_threshold(self) -> None:
         matcher_strict = TitleMatcher(similarity_threshold=0.95)
-        candidates = [_make_candidate(1, romaji="Mob Psycho 100", english="Mob Psycho 100")]
+        candidates = [
+            _make_candidate(1, romaji="Mob Psycho 100", english="Mob Psycho 100")
+        ]
         result = matcher_strict.find_best_match_with_season("Mob Psycho", candidates)
         # "Mob Psycho" vs "Mob Psycho 100" — close but may not hit 0.95 + season boost
         # The test validates that threshold is respected; result may or may not match.
@@ -294,7 +380,9 @@ class TestFindBestMatchWithSeason:
         candidates = [
             _make_candidate(1, romaji="Suzume no Tojimari", format="MOVIE"),
         ]
-        result = self.matcher.find_best_match_with_season("Suzume no Tojimari", candidates)
+        result = self.matcher.find_best_match_with_season(
+            "Suzume no Tojimari", candidates
+        )
         assert result is None
 
     def test_movie_format_included_when_flag_set(self) -> None:
@@ -311,14 +399,20 @@ class TestFindBestMatchWithSeason:
         candidates = [
             _make_candidate(1, romaji="Attack on Titan OVA", format="OVA", episodes=5),
         ]
-        result = self.matcher.find_best_match_with_season("Attack on Titan OVA", candidates)
+        result = self.matcher.find_best_match_with_season(
+            "Attack on Titan OVA", candidates
+        )
         assert result is None
 
     def test_special_excluded_by_default(self) -> None:
         candidates = [
-            _make_candidate(1, romaji="Demon Slayer Special", format="SPECIAL", episodes=1),
+            _make_candidate(
+                1, romaji="Demon Slayer Special", format="SPECIAL", episodes=1
+            ),
         ]
-        result = self.matcher.find_best_match_with_season("Demon Slayer Special", candidates)
+        result = self.matcher.find_best_match_with_season(
+            "Demon Slayer Special", candidates
+        )
         assert result is None
 
     def test_include_all_formats_with_ova(self) -> None:
@@ -353,7 +447,13 @@ class TestFindBestMatchWithSeason:
     def test_movie_match_season_zero(self) -> None:
         candidates = [
             _make_candidate(1, romaji="Kimetsu no Yaiba", format="TV", episodes=26),
-            _make_candidate(2, romaji="Kimetsu no Yaiba: Mugen Ressha-hen", english="Demon Slayer: Mugen Train", format="MOVIE", episodes=1),
+            _make_candidate(
+                2,
+                romaji="Kimetsu no Yaiba: Mugen Ressha-hen",
+                english="Demon Slayer: Mugen Train",
+                format="MOVIE",
+                episodes=1,
+            ),
         ]
         result = self.matcher.find_best_match_with_season(
             "Kimetsu no Yaiba Movie", candidates, target_season=0
@@ -365,8 +465,16 @@ class TestFindBestMatchWithSeason:
 
     def test_movie_match_prefers_movie_over_special(self) -> None:
         candidates = [
-            _make_candidate(1, romaji="Violet Evergarden Movie", english="Violet Evergarden: The Movie", format="MOVIE", episodes=1),
-            _make_candidate(2, romaji="Violet Evergarden Special", format="SPECIAL", episodes=1),
+            _make_candidate(
+                1,
+                romaji="Violet Evergarden Movie",
+                english="Violet Evergarden: The Movie",
+                format="MOVIE",
+                episodes=1,
+            ),
+            _make_candidate(
+                2, romaji="Violet Evergarden Special", format="SPECIAL", episodes=1
+            ),
         ]
         result = self.matcher.find_best_match_with_season(
             "Violet Evergarden Movie", candidates, target_season=0
@@ -393,17 +501,23 @@ class TestDetectSeasonFromEntry:
             pytest.param("Boku no Hero Academia 4th Season", None, 4, id="4th_season"),
             pytest.param(None, "My Hero Academia Season 2", 2, id="season_N_english"),
             pytest.param("Shingeki no Kyojin Season 3", None, 3, id="season_N_romaji"),
-            pytest.param("Re:Zero kara Hajimeru Isekai Seikatsu Part 2", None, 2, id="part_N"),
+            pytest.param(
+                "Re:Zero kara Hajimeru Isekai Seikatsu Part 2", None, 2, id="part_N"
+            ),
             pytest.param("Overlord II", None, 2, id="roman_II"),
             pytest.param("Overlord III", None, 3, id="roman_III"),
             pytest.param("Overlord IV", None, 4, id="roman_IV"),
             pytest.param("Jujutsu Kaisen", None, 1, id="no_season_indicator"),
-            pytest.param("Steins;Gate", "Steins;Gate", 1, id="no_indicator_both_titles"),
+            pytest.param(
+                "Steins;Gate", "Steins;Gate", 1, id="no_indicator_both_titles"
+            ),
             pytest.param(None, None, 1, id="no_titles_at_all"),
             pytest.param("Mob Psycho 100", None, 1, id="number_in_title_not_season"),
         ],
     )
-    def test_detect_season(self, romaji: str | None, english: str | None, expected_season: int) -> None:
+    def test_detect_season(
+        self, romaji: str | None, english: str | None, expected_season: int
+    ) -> None:
         entry = _make_candidate(
             99,
             romaji=romaji,
@@ -425,5 +539,7 @@ class TestDetectSeasonFromEntry:
 
     def test_english_title_fallback(self) -> None:
         """When romaji has no indicator but english does, english is used."""
-        entry = _make_candidate(103, romaji="Kimetsu no Yaiba", english="Demon Slayer Season 3")
+        entry = _make_candidate(
+            103, romaji="Kimetsu no Yaiba", english="Demon Slayer Season 3"
+        )
         assert TitleMatcher._detect_season_from_entry(entry) == 3

@@ -7,8 +7,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from src.Clients.AnilistClient import RateLimiter, SCAN_RESERVE_TOKENS
-
+from src.Clients.AnilistClient import SCAN_RESERVE_TOKENS, RateLimiter
 
 # ---------------------------------------------------------------------------
 # Helpers

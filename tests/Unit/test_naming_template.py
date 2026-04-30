@@ -4,7 +4,6 @@ import pytest
 
 from src.Utils.NamingTemplate import QualityInfo, parse_quality
 
-
 # ---------------------------------------------------------------------------
 # Parametrized tests for parse_quality
 # ---------------------------------------------------------------------------

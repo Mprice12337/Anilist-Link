@@ -25,7 +25,7 @@ Implementation order: **P2 → P3 → P1 → P4**
 - **Shared**: AniList OAuth2 account linking, series group builder, fuzzy title matching, web dashboard with GUI settings
 
 ### Project Context
-- **Stage**: Pillar-based development — P2 and P3 partially implemented, P1 Crunchyroll sync done, P4 planned
+- **Stage**: v1.0.1 — All 4 pillars complete (P2 File Organization, P3 Metadata, P1 Watch Sync, P4 Downloads)
 - **Team Size**: Solo
 - **Priority Focus**: Functionality first, then polish
 
@@ -146,7 +146,7 @@ Implementation order: **P2 → P3 → P1 → P4**
 - **`QUICK-REFERENCE.md`**: Best practices and common commands
 
 ### Key Directories
-- **`src/Clients/`**: All external API client modules (AniList, Plex, Jellyfin, Crunchyroll)
+- **`src/Clients/`**: All external API client modules (AniList, Plex, Jellyfin, Crunchyroll, Sonarr, Radarr, Prowlarr, qBittorrent, TVMaze)
 - **`src/Matching/`**: Title matching engine with fuzzy algorithms and normalization
 - **`src/Scanner/`**: Metadata scanning pipeline (scan → match → cache → apply)
 - **`src/Sync/`**: Watch status synchronization from media platforms to AniList
@@ -355,8 +355,8 @@ Application-specific variables:
 
 ## Database
 
-### Schema Overview (v4)
-Current tables:
+### Schema Overview (v1 — consolidated 1.0 baseline)
+Current tables (29):
 - `media_mappings` - Maps media server library items to AniList IDs with confidence scores, match method, and optional series group reference
 - `users` - Linked AniList accounts with OAuth tokens
 - `sync_state` - Per-user, per-item sync tracking (last synced episode, timestamp, status)
@@ -368,7 +368,7 @@ Current tables:
 - `series_groups` - Groups of AniList entries connected by SEQUEL/PREQUEL relations
 - `series_group_entries` - Individual entries within a series group, ordered chronologically
 - `restructure_log` - File move operation audit trail
-- `restructure_plans` - Saved restructure plans with summary and status (v3)
+- `restructure_plans` - Saved restructure plans with summary and status
 - `jellyfin_media` - Persistent Jellyfin library item snapshot
 - `libraries` - Local library definitions (name, paths)
 - `library_items` - Items in a local library with match data
@@ -376,7 +376,7 @@ Current tables:
 - `jellyfin_users` - Per-user Jellyfin credentials
 - `cr_sync_preview` - Pending Crunchyroll sync changes awaiting approval
 - `cr_sync_log` - Applied CR sync changes with undo support
-- `watch_sync_log` - Plex/Jellyfin sync audit trail with undo support (v4)
+- `watch_sync_log` - Plex/Jellyfin sync audit trail with undo support
 - `download_requests` - Sonarr/Radarr add request tracking
 - `anilist_sonarr_mapping` - AniList↔Sonarr series mappings
 - `anilist_radarr_mapping` - AniList↔Radarr movie mappings
@@ -387,7 +387,8 @@ Current tables:
 - `user_watchlist` - Cached AniList watchlist per linked user
 
 ### Migration Strategy
-- Schema migrations handled via versioned SQL scripts in `src/Database/Migrations.py`
+- All tables and indexes defined in `src/Database/Models.py` (TABLES, INDEXES dicts)
+- Single v1 migration creates the complete schema baseline
 - Database auto-creates on first run if not present
 - Migrations run automatically at startup
 
@@ -702,7 +703,7 @@ alias alstop='docker-compose down'           # Stop Anilist-Link
 - Enable/disable toggles per source, default disabled (`plex.watch_sync_enabled`, `jellyfin.watch_sync_enabled`) ✅
 - COMPLETED status protection: never downgrades AniList entries already marked COMPLETED ✅
 - Circular sync fix: backfill always writes `sync_state` to prevent false forward-sync updates ✅
-- `watch_sync_log` table (v4): full audit trail with per-entry undo from the Watch Sync UI ✅
+- `watch_sync_log` table: full audit trail with per-entry undo from the Watch Sync UI ✅
 - Jellyfin webhook handler (`POST /jellyfin/webhook`) ✅ — receives events from Webhook plugin
 - Jellyfin virtual season cleanup ✅ — automated post-scan + 60s poller + webhook trigger
 - Plex webhook handler (real-time sync) not yet implemented

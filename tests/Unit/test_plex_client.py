@@ -15,7 +15,6 @@ from src.Clients.PlexClient import (
     _strip_html,
 )
 
-
 # ------------------------------------------------------------------
 # _strip_html
 # ------------------------------------------------------------------
@@ -224,9 +223,7 @@ class TestBuildMetadataParams:
         assert "studio.value" in params
 
     def test_none_values_skipped(self):
-        params = PlexClient.build_metadata_params(
-            title=None, summary=None, rating=None
-        )
+        params = PlexClient.build_metadata_params(title=None, summary=None, rating=None)
         assert params == {}
 
 

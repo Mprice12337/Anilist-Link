@@ -2,7 +2,7 @@
 
 This document defines the architecture of Anilist-Link, organized around its four functional pillars. It serves as the primary reference for understanding the system's design, components, and implementation status. Update this document as the codebase evolves.
 
-**Date of Last Update**: 2026-04-09
+**Date of Last Update**: 2026-04-29
 
 ---
 
@@ -14,8 +14,8 @@ Anilist-Link is a self-hosted Docker container that connects AniList with media 
 |---|--------|---------|----------|--------|
 | 2 | **File Organization** | Rename/reorganize anime files into a standardized folder structure using AniList data | 1st | ✅ Complete (L1/L2/L3) |
 | 3 | **Metadata from AniList** | Write AniList metadata (titles, descriptions, posters, genres, ratings) to Plex/Jellyfin | 2nd | ✅ Complete (Plex + Jellyfin) |
-| 1 | **Watch Status Sync** | Sync watch progress between Crunchyroll/Plex/Jellyfin and AniList | 3rd | Crunchyroll→AniList done; Plex/Jellyfin planned |
-| 4 | **Download Management** | Send add requests to Sonarr/Radarr with AniList alternative titles for matching | 4th | Partially implemented (clients, routes, DB) |
+| 1 | **Watch Status Sync** | Sync watch progress between Crunchyroll/Plex/Jellyfin and AniList | 3rd | ✅ Complete (CR + Plex + Jellyfin) |
+| 4 | **Download Management** | Send add requests to Sonarr/Radarr with AniList alternative titles for matching | 4th | ✅ Complete |
 
 **Implementation order**: P2 → P3 → P1 → P4
 
@@ -113,9 +113,9 @@ Used by: P2, P3 (and P1 for episode-to-entry resolution)
 
 - **`Connection.py`**: Async SQLite connection manager via aiosqlite with WAL mode, foreign key enforcement, and full CRUD for all tables
 - **`Models.py`**: Dataclass definitions for all tables plus `TABLES` dict (SQL DDL) and `INDEXES` list
-- **`Migrations.py`**: 4 versioned migrations (v1–v4), auto-run at startup
+- **`Migrations.py`**: Single consolidated v1 migration creates the full schema baseline (29 tables), auto-run at startup
 
-Current schema version: **4**
+Current schema version: **1**
 
 See [Section 10: Data Stores](#10-data-stores) for full table listing.
 
@@ -381,7 +381,7 @@ Integrates with Sonarr and Radarr to send add/search requests using AniList data
 | `anilist_sonarr_mapping` table | ✅ Implemented |
 | `anilist_radarr_mapping` table | ✅ Implemented |
 | `sonarr_series_cache` / `radarr_movie_cache` tables | ✅ Implemented |
-| Full automation (auto-search on new CURRENT status) | Partial — `DownloadSyncer` exists |
+| Full automation (auto-search on new CURRENT status) | ✅ Implemented — `DownloadSyncer` |
 
 ### 7.3. Architecture
 
@@ -524,6 +524,11 @@ Anilist-Link/
 │   │   ├── CrunchyrollClient.py                  # Crunchyroll reverse-engineered client [✅]
 │   │   ├── SonarrClient.py                       # Sonarr API v3 client [✅]
 │   │   ├── RadarrClient.py                       # Radarr API v3 client [✅]
+│   │   ├── ServarrBaseClient.py                  # Shared base for Sonarr/Radarr clients [✅]
+│   │   ├── ProwlarrClient.py                     # Prowlarr indexer manager integration [✅]
+│   │   ├── QBittorrentClient.py                  # qBittorrent torrent client [✅]
+│   │   ├── TVMazeClient.py                       # TVMaze API for provider ID lookups [✅]
+│   │   ├── JellyfinEventListener.py              # WebSocket real-time event listener [✅]
 │   ├── Matching/                                 # Title matching engine
 │   │   ├── TitleMatcher.py                       # Multi-algorithm fuzzy matching [✅]
 │   │   └── Normalizer.py                         # Anime-specific title normalization [✅]
@@ -576,7 +581,7 @@ Anilist-Link/
 │   ├── Database/                                 # Database layer
 │   │   ├── Connection.py                         # Async SQLite connection manager [✅]
 │   │   ├── Models.py                             # Table definitions and dataclasses [✅]
-│   │   └── Migrations.py                         # Versioned schema migrations (v1–v17) [✅]
+│   │   └── Migrations.py                         # Consolidated v1 schema baseline (29 tables) [✅]
 │   ├── Scheduler/                                # Background job scheduling
 │   │   └── Jobs.py                               # APScheduler job definitions [✅]
 │   ├── Utils/                                    # Shared utilities
@@ -610,39 +615,41 @@ Anilist-Link/
 
 **Location**: `/config/anilist_link.db` (Docker) or `./anilist_link.db` (local dev)
 
-**Current schema version**: **4**
+**Current schema version**: **1** (consolidated 1.0 baseline)
 
-| Table | Purpose | Added |
-|-------|---------|-------|
-| `schema_version` | Migration tracking | v1 |
-| `media_mappings` | Plex/Jellyfin → AniList mappings with confidence scores | v1 |
-| `users` | Linked AniList accounts with OAuth tokens | v1 |
-| `sync_state` | Per-user, per-item sync progress tracking (UNIQUE constraint added v2) | v1 |
-| `anilist_cache` | AniList metadata cache (7-day TTL) | v1 |
-| `manual_overrides` | User-specified title → AniList ID overrides | v1 |
-| `cr_session_cache` | Crunchyroll auth session persistence (30-day TTL) | v1 |
-| `app_settings` | GUI-managed configuration (encrypted secrets) | v1 |
-| `plex_media` | Persistent Plex library item snapshot | v1 |
-| `series_groups` | Series group metadata (root entry, display title) | v1 |
-| `series_group_entries` | Individual entries within a series group, ordered | v1 |
-| `restructure_log` | File move operation audit trail | v1 |
-| `restructure_plans` | Saved restructure plans with summary and status | v3 |
-| `jellyfin_media` | Persistent Jellyfin library item snapshot | v1 |
-| `libraries` | Local library definitions (name, paths) | v1 |
-| `library_items` | Items in a local library with match data | v1 |
-| `plex_users` | Per-user Plex tokens for watch tracking | v1 |
-| `jellyfin_users` | Per-user Jellyfin credentials | v1 |
-| `cr_sync_preview` | Pending Crunchyroll sync changes awaiting approval | v1 |
-| `cr_sync_log` | Applied CR sync changes with undo support | v1 |
-| `download_requests` | Sonarr/Radarr add request tracking | v1 |
-| `anilist_sonarr_mapping` | AniList↔Sonarr series mappings | v1 |
-| `anilist_radarr_mapping` | AniList↔Radarr movie mappings | v1 |
-| `anilist_sonarr_season_mapping` | Per-season Sonarr series mappings | v1 |
-| `anilist_arr_skip` | Entries skipped from auto-download | v1 |
-| `sonarr_series_cache` | Cached Sonarr series data (by TVDB ID) | v1 |
-| `radarr_movie_cache` | Cached Radarr movie data (by TMDB ID) | v1 |
-| `user_watchlist` | Cached AniList watchlist per linked user | v1 |
-| `watch_sync_log` | Plex/Jellyfin sync audit trail with undo support | v4 |
+All 29 tables are created in a single v1 migration. There are no incremental patches — the migration file creates the full schema baseline in one pass.
+
+| Table | Purpose |
+|-------|---------|
+| `schema_version` | Migration tracking |
+| `media_mappings` | Plex/Jellyfin → AniList mappings with confidence scores |
+| `users` | Linked AniList accounts with OAuth tokens |
+| `sync_state` | Per-user, per-item sync progress tracking |
+| `anilist_cache` | AniList metadata cache (7-day TTL) |
+| `manual_overrides` | User-specified title → AniList ID overrides |
+| `cr_session_cache` | Crunchyroll auth session persistence (30-day TTL) |
+| `app_settings` | GUI-managed configuration (encrypted secrets) |
+| `plex_media` | Persistent Plex library item snapshot |
+| `series_groups` | Series group metadata (root entry, display title) |
+| `series_group_entries` | Individual entries within a series group, ordered |
+| `restructure_log` | File move operation audit trail |
+| `restructure_plans` | Saved restructure plans with summary and status |
+| `jellyfin_media` | Persistent Jellyfin library item snapshot |
+| `libraries` | Local library definitions (name, paths) |
+| `library_items` | Items in a local library with match data |
+| `plex_users` | Per-user Plex tokens for watch tracking |
+| `jellyfin_users` | Per-user Jellyfin credentials |
+| `cr_sync_preview` | Pending Crunchyroll sync changes awaiting approval |
+| `cr_sync_log` | Applied CR sync changes with undo support |
+| `download_requests` | Sonarr/Radarr add request tracking |
+| `anilist_sonarr_mapping` | AniList↔Sonarr series mappings |
+| `anilist_radarr_mapping` | AniList↔Radarr movie mappings |
+| `anilist_sonarr_season_mapping` | Per-season Sonarr series mappings |
+| `anilist_arr_skip` | Entries skipped from auto-download |
+| `sonarr_series_cache` | Cached Sonarr series data (by TVDB ID) |
+| `radarr_movie_cache` | Cached Radarr movie data (by TMDB ID) |
+| `user_watchlist` | Cached AniList watchlist per linked user |
+| `watch_sync_log` | Plex/Jellyfin sync audit trail with undo support |
 
 ### 10.2. In-Memory Cache
 
@@ -660,6 +667,9 @@ Short-lived caching of frequently accessed data during active scan/sync operatio
 | Jellyfin | `JellyfinClient` | Library access, metadata writing, watch status | API key | ✅ Implemented |
 | Sonarr API v3 | `SonarrClient` | Add/search TV series with alt titles | API key | ✅ Implemented |
 | Radarr API v3 | `RadarrClient` | Add/search movies with alt titles | API key | ✅ Implemented |
+| Prowlarr | `ProwlarrClient` | Indexer manager integration | API key | ✅ Implemented |
+| qBittorrent | `QBittorrentClient` | Torrent client integration | Session cookie | ✅ Implemented |
+| TVMaze API | `TVMazeClient` | Provider ID lookups (TVDB/IMDB) | None (public) | ✅ Implemented |
 | Plex.tv API | (via `PlexClient`) | Per-user token retrieval | X-Plex-Token | Planned (P1) |
 
 ---
@@ -746,7 +756,7 @@ See `docker-compose.yml` and `docs/CLAUDE.md` for full Docker configuration.
 
 ### Test Suite
 
-315 unit tests across 10 test files. All pass. Run in 0.98s (in-memory SQLite, no external calls).
+318 unit tests across 10 test files. All pass. Run in 0.98s (in-memory SQLite, no external calls).
 
 | File | Tests | Focus |
 |------|-------|-------|

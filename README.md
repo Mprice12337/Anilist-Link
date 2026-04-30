@@ -6,7 +6,7 @@ A self-hosted Docker container that bridges AniList with Plex, Jellyfin, and Cru
 
 - **File Organization** — Rename and restructure anime files using AniList series data (L1/L2/L3 restructure wizard)
 - **Metadata** — AniList-powered metadata provider for Plex and Jellyfin anime libraries (titles, posters, summaries, genres, ratings)
-- **Watch Sync** — Sync watch progress from Crunchyroll to AniList; Plex/Jellyfin sync planned
+- **Watch Sync** — Sync watch progress between Crunchyroll, Plex, Jellyfin, and AniList (bidirectional for Plex/Jellyfin)
 - **Download Management** — Add anime to Sonarr/Radarr with AniList alternative titles
 - Per-user AniList account linking via OAuth2
 - Web dashboard for configuration, mapping review, sync monitoring, and onboarding

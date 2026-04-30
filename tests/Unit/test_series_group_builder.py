@@ -4,21 +4,20 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import aiosqlite
 import pytest
 import pytest_asyncio
 
 from src.Database.Connection import DatabaseManager
-from src.Database.Models import INDEXES, TABLES
 from src.Database.Migrations import LATEST_VERSION
+from src.Database.Models import INDEXES, TABLES
 from src.Scanner.SeriesGroupBuilder import (
     SeriesGroupBuilder,
     _format_start_date,
     _start_date_sort_key,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers to build mock AniList relation data
@@ -433,7 +432,7 @@ async def test_group_entries_have_season_order(real_db: DatabaseManager):
 
 @pytest.mark.asyncio
 async def test_group_display_title_uses_root_entry(real_db: DatabaseManager):
-    """The series group display_title should come from the chronologically first entry."""
+    """display_title should come from the chronologically first entry."""
     entry_a = _make_entry(1, "Original Series", year=2018)
     entry_b = _make_entry(2, "The Sequel", year=2020)
 
