@@ -1629,6 +1629,42 @@ class DatabaseManager:
             (log_id,),
         )
 
+    async def was_cr_sync_target_undone(
+        self,
+        user_id: str,
+        anilist_id: int,
+        target_progress: int,
+        target_status: str,
+        within_days: int = 90,
+    ) -> bool:
+        """Return True if a sync writing this exact target was previously undone.
+
+        Used to suppress re-applying the same wrong update on the next sync
+        run — without this, the user undoes a misroute, the next CR scan
+        sees the same source data, picks the same target, and re-applies it.
+
+        Scoped to *within_days* so a stale undo doesn't permanently block
+        the entry; the default 90-day window matches typical anime release
+        cycles. Targets that differ in progress or status (e.g. user has
+        since watched past the wrongly-applied point) bypass the check.
+        """
+        row = await self.fetch_one(
+            """SELECT 1 FROM cr_sync_log
+                   WHERE user_id=? AND anilist_id=?
+                     AND after_progress=? AND after_status=?
+                     AND undone_at IS NOT NULL
+                     AND undone_at > datetime('now', ?)
+                   LIMIT 1""",
+            (
+                user_id,
+                anilist_id,
+                target_progress,
+                target_status,
+                f"-{within_days} days",
+            ),
+        )
+        return row is not None
+
     # ------------------------------------------------------------------
     # Watch Sync Log (Plex / Jellyfin)
     # ------------------------------------------------------------------

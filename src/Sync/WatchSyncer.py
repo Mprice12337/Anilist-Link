@@ -330,6 +330,29 @@ class WatchSyncer:
 
             total_episodes = matched_entry.get("episodes")
 
+            # Honor user undos: if this exact target was previously undone,
+            # don't re-apply on the next scan. The user expressed an explicit
+            # preference; re-applying overrides their intent.
+            expected_status = (
+                "COMPLETED"
+                if (total_episodes and actual_episode >= total_episodes)
+                else "CURRENT"
+            )
+            if await self._db.was_cr_sync_target_undone(
+                user_id, anime_id, actual_episode, expected_status
+            ):
+                logger.info(
+                    "Skipping %s S%dE%d — sync of (%d, %s) was previously "
+                    "undone by user",
+                    anime_title,
+                    actual_season,
+                    actual_episode,
+                    actual_episode,
+                    expected_status,
+                )
+                self._sync_results["skipped_episodes"] += 1
+                return False
+
             # Log match type
             if actual_season == cr_season and actual_episode == cr_episode:
                 logger.info(
@@ -406,6 +429,13 @@ class WatchSyncer:
             if episode_data:
                 episode_title = episode_data.get("episode_title", "").strip()
                 season_title = episode_data.get("season_title", "").strip()
+                logger.debug(
+                    "Movie episode_data — series_title=%r season_title=%r "
+                    "episode_title=%r",
+                    series_title,
+                    season_title,
+                    episode_title,
+                )
                 skip_indicators = [
                     "compilation",
                     "recap",
@@ -450,14 +480,19 @@ class WatchSyncer:
             # AniList has format=OVA.
             allowed_formats = {"MOVIE", "SPECIAL", "OVA", "ONA"}
 
+            seen_ids: set[int] = set()
             for query in search_queries:
                 results = await self._anilist.search_anime(query)
                 if not results:
                     continue
                 for result in results:
+                    rid = result.get("id")
+                    if rid is None or rid in seen_ids:
+                        continue
                     fmt = (result.get("format", "") or "").upper()
                     if fmt not in allowed_formats:
                         continue
+                    seen_ids.add(int(rid))
 
                     series_sim = self._matcher.calculate_title_similarity(
                         series_title, result
@@ -480,11 +515,36 @@ class WatchSyncer:
                     else:
                         similarity = series_sim
 
-                    # Light format-priority bonus: prefer MOVIE > OVA > SPECIAL
-                    # when similarities are otherwise close, since CR
-                    # usually labels actual movies as is_movie=True.
-                    if fmt == "MOVIE":
-                        similarity += 0.05
+                    # Penalize recap/compilation entries. AniList marks them
+                    # with title patterns like "(Re+)", " Recap", "Movie 1:"
+                    # and similar — these score high on substring match
+                    # against the series name but aren't what the user
+                    # actually watched when CR points at a sequel OVA.
+                    candidate_title_blob = " ".join(
+                        [
+                            (result.get("title") or {}).get("romaji") or "",
+                            (result.get("title") or {}).get("english") or "",
+                            (result.get("description") or "")[:300],
+                        ]
+                    ).lower()
+                    recap_markers = [
+                        "(re+)",
+                        "(recap)",
+                        " recap",
+                        "compilation",
+                        "summary",
+                        "digest",
+                    ]
+                    if any(m in candidate_title_blob for m in recap_markers):
+                        similarity -= 0.15
+
+                    logger.debug(
+                        "  candidate id=%s fmt=%s title=%r sim=%.2f",
+                        rid,
+                        fmt,
+                        get_primary_title(result),
+                        similarity,
+                    )
 
                     if similarity > best_similarity and similarity >= 0.75:
                         best_similarity = similarity
@@ -509,6 +569,19 @@ class WatchSyncer:
 
             if not await self._needs_update(anime_id, 1, access_token, anilist_user_id):
                 logger.info("Movie %s already completed, skipping", anime_title)
+                self._sync_results["movies_skipped"] += 1
+                return False
+
+            # Honor user undos: don't re-apply a movie completion that was
+            # explicitly reverted (e.g. the (Re+) recap mismatch the user
+            # undid because they hadn't watched it).
+            if await self._db.was_cr_sync_target_undone(
+                user_id, anime_id, 1, "COMPLETED"
+            ):
+                logger.info(
+                    "Skipping movie %s — completion was previously undone by user",
+                    anime_title,
+                )
                 self._sync_results["movies_skipped"] += 1
                 return False
 
