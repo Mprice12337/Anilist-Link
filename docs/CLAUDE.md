@@ -25,7 +25,7 @@ Implementation order: **P2 → P3 → P1 → P4**
 - **Shared**: AniList OAuth2 account linking, series group builder, fuzzy title matching, web dashboard with GUI settings
 
 ### Project Context
-- **Stage**: v1.0.1 — All 4 pillars complete (P2 File Organization, P3 Metadata, P1 Watch Sync, P4 Downloads)
+- **Stage**: v1.0.2 — All 4 pillars complete (P2 File Organization, P3 Metadata, P1 Watch Sync, P4 Downloads)
 - **Team Size**: Solo
 - **Priority Focus**: Functionality first, then polish
 

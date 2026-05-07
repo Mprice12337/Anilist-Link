@@ -105,7 +105,7 @@ def create_app(
 
     app = FastAPI(
         title="Anilist-Link",
-        version="0.1.0",
+        version="1.0.2",
         lifespan=lifespan,
     )
 
