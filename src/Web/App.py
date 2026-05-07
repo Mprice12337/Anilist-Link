@@ -9,15 +9,16 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from src.Clients.AnilistClient import AniListClient
 from src.Database.Connection import DatabaseManager
 from src.Scheduler.Jobs import JobScheduler
-from src.Sync.WatchlistRefresh import watchlist_refresh_task
+from src.Sync.WatchlistRefresh import watchlist_activity_loop
 from src.Utils.Config import AppConfig
+from src.Web.ActivityTracker import ActivityTracker
 
 logger = logging.getLogger(__name__)
 
@@ -73,11 +74,24 @@ def create_app(
         # Auto-register arr webhooks (fire-and-forget, non-blocking)
         asyncio.create_task(_register_arr_webhooks(config))
 
-        # Refresh AniList watchlist cache on startup (fire-and-forget)
-        asyncio.create_task(watchlist_refresh_task(db, anilist_client))
+        # Adaptive watchlist refresh loop: refreshes on startup, then every
+        # `watchlist_refresh_interval_minutes` only while the dashboard has
+        # seen recent activity.
+        loop_task = asyncio.create_task(
+            watchlist_activity_loop(
+                db,
+                anilist_client,
+                app.state.activity_tracker,
+                interval_minutes=(config.scheduler.watchlist_refresh_interval_minutes),
+            ),
+            name="watchlist-activity-loop",
+        )
+        app.state.watchlist_activity_loop_task = loop_task
 
         yield
         # Shutdown
+        if not loop_task.done():
+            loop_task.cancel()
         jf_listener = getattr(app.state, "jellyfin_listener", None)
         if jf_listener:
             logger.info("Stopping Jellyfin WebSocket listener")
@@ -100,6 +114,7 @@ def create_app(
     app.state.db = db
     app.state.anilist_client = anilist_client
     app.state.scheduler = scheduler
+    app.state.activity_tracker = ActivityTracker()
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
     def _utc_to_local(utc_str: str) -> str:
@@ -119,6 +134,20 @@ def create_app(
     # Map of task_key -> asyncio.Task for cancellable long-running ops.
     # See spawn_background_task(task_key=...) and cancel_task() below.
     app.state.cancellable_tasks = {}
+
+    # Activity tracking middleware. Marks the dashboard as "recently
+    # active" on user-driven requests so the adaptive watchlist loop
+    # only polls AniList while someone is using the UI. /api/progress
+    # is excluded because the floating progress widget polls it every
+    # 2s — counting that as activity would defeat the dormant detection.
+    @app.middleware("http")
+    async def _track_activity(request: Request, call_next):  # type: ignore[no-untyped-def]
+        path = request.url.path
+        if not (
+            path.startswith("/static") or path == "/api/progress" or path == "/health"
+        ):
+            app.state.activity_tracker.mark_active()
+        return await call_next(request)
 
     # Static files
     STATIC_DIR.mkdir(parents=True, exist_ok=True)

@@ -21,7 +21,10 @@ from src.Sync.CrunchyrollPreviewRunner import (
 from src.Sync.DownloadSyncer import DownloadSyncer
 from src.Sync.JellyfinWatchSyncer import JellyfinWatchSyncer
 from src.Sync.PlexWatchSyncer import PlexWatchSyncer
-from src.Sync.WatchlistRefresh import watchlist_refresh_task
+from src.Sync.WatchlistRefresh import (
+    periodic_refresh_during_job,
+    watchlist_refresh_task,
+)
 from src.Sync.WatchSyncer import WatchSyncer
 from src.Utils.Config import AppConfig, load_config, load_config_from_db_settings
 from src.Utils.Logging import get_logger, setup_logging
@@ -43,6 +46,13 @@ async def crunchyroll_sync_task(
         return
 
     logger.info("Starting Crunchyroll sync%s", " (DRY RUN)" if dry_run else "")
+
+    # Pre-job refresh so the sync starts with a fresh AniList watchlist.
+    try:
+        await watchlist_refresh_task(db, anilist_client)
+    except Exception:
+        logger.exception("Pre-sync watchlist refresh failed (continuing)")
+
     cr_client = CrunchyrollClient(
         email=config.crunchyroll.email,
         password=config.crunchyroll.password,
@@ -57,6 +67,16 @@ async def crunchyroll_sync_task(
         db, anilist_client, title_matcher, cr_client, config, dry_run=dry_run
     )
 
+    # Mid-job refresh: keep the watchlist fresh during long-running syncs
+    # (e.g. multi-page CR scans that exceed the normal refresh cadence).
+    refresh_interval = config.scheduler.watchlist_refresh_interval_minutes
+    mid_job_task = asyncio.create_task(
+        periodic_refresh_during_job(
+            db, anilist_client, interval_minutes=refresh_interval
+        ),
+        name="cr-sync-watchlist-refresh",
+    )
+
     try:
         authenticated = await cr_client.authenticate()
         if not authenticated:
@@ -69,6 +89,11 @@ async def crunchyroll_sync_task(
     except Exception:
         logger.exception("Crunchyroll sync error")
     finally:
+        mid_job_task.cancel()
+        try:
+            await mid_job_task
+        except asyncio.CancelledError:
+            pass
         await cr_client.cleanup()
 
 
@@ -292,9 +317,6 @@ async def main() -> None:
     async def _library_reindex() -> None:
         await library_reindex_task(db, app.state.anilist_client)
 
-    async def _watchlist_refresh() -> None:
-        await watchlist_refresh_task(db, app.state.anilist_client)
-
     async def _jellyfin_watch_sync() -> None:
         cfg = app.state.config
         if not cfg.jellyfin.url or not cfg.jellyfin.api_key:
@@ -302,6 +324,12 @@ async def main() -> None:
         if not cfg.jellyfin.watch_sync_enabled:
             logger.debug("Jellyfin watch sync is disabled — skipping scheduled run")
             return
+        try:
+            await watchlist_refresh_task(db, app.state.anilist_client)
+        except Exception:
+            logger.exception(
+                "Pre-job watchlist refresh failed for Jellyfin sync (continuing)"
+            )
         from src.Clients.JellyfinClient import JellyfinClient as _JF
 
         jf = _JF(url=cfg.jellyfin.url, api_key=cfg.jellyfin.api_key)
@@ -320,6 +348,12 @@ async def main() -> None:
         if not cfg.plex.watch_sync_enabled:
             logger.debug("Plex watch sync is disabled — skipping scheduled run")
             return
+        try:
+            await watchlist_refresh_task(db, app.state.anilist_client)
+        except Exception:
+            logger.exception(
+                "Pre-job watchlist refresh failed for Plex sync (continuing)"
+            )
         from src.Clients.PlexClient import PlexClient as _Plex
 
         plex = _Plex(url=cfg.plex.url, token=cfg.plex.token)
@@ -467,7 +501,9 @@ async def main() -> None:
         download_sync_func=_download_sync,
         download_sync_interval_minutes=config.download_sync.sync_interval_minutes,
         library_reindex_func=_library_reindex,
-        watchlist_refresh_func=_watchlist_refresh,
+        # Watchlist refresh is now driven by activity + pre/mid-job hooks,
+        # not a cron interval. See watchlist_activity_loop in App.py.
+        watchlist_refresh_func=None,
         jellyfin_watch_sync_func=_jellyfin_watch_sync,
         plex_watch_sync_func=_plex_watch_sync,
     )
