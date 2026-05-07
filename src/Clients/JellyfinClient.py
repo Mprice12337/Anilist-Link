@@ -513,6 +513,48 @@ class JellyfinClient:
             logger.debug("Error stopping scan task", exc_info=True)
         return task_id
 
+    async def _wait_for_scan_settled(
+        self,
+        settle_seconds: float = 10.0,
+        max_wait: float = 300.0,
+        poll_interval: float = 2.0,
+    ) -> bool:
+        """Wait until the RefreshLibrary task has been Idle for *settle_seconds*
+        continuously, or until *max_wait* elapses.
+
+        Item refreshes triggered via ``/Items/{id}/Refresh`` are processed
+        under the same RefreshLibrary scheduled task, so this is a reliable
+        signal that the in-flight refresh queue has drained.
+        """
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + max_wait
+        settled_at: float | None = None
+
+        while True:
+            now = loop.time()
+            if now > deadline:
+                logger.warning(
+                    "Jellyfin scan did not settle within %.0fs — "
+                    "proceeding with cleanup anyway",
+                    max_wait,
+                )
+                return False
+
+            try:
+                is_running = await self.is_library_scanning()
+            except Exception:
+                is_running = False
+
+            if is_running:
+                settled_at = None
+            else:
+                if settled_at is None:
+                    settled_at = now
+                elif now - settled_at >= settle_seconds:
+                    return True
+
+            await asyncio.sleep(poll_interval)
+
     async def delete_virtual_seasons(self, library_ids: list[str] | None = None) -> int:
         """Delete all virtual season items from the specified libraries.
 
@@ -521,16 +563,20 @@ class JellyfinClient:
         They duplicate the real season folders and cannot be prevented
         via NFO locks.
 
-        To avoid a race condition with Jellyfin's ProviderManager refresh
-        queue (which recreates virtual items moments after deletion), this
-        method stops the scan task first, waits for the refresh queue to
-        drain, deletes the items, then lets the task resume on its own.
+        Waits for Jellyfin's RefreshLibrary task to be continuously Idle
+        before collecting items, so callers that just triggered a batch
+        of per-item metadata refreshes don't race with in-flight
+        ProviderManager work that would recreate virtuals after delete.
 
         Returns the number of items deleted.
         """
         if not library_ids:
             logger.debug("delete_virtual_seasons: no library IDs provided")
             return 0
+
+        # Wait for any in-flight metadata refreshes to drain so the set of
+        # virtual seasons we collect is stable.
+        await self._wait_for_scan_settled()
 
         # Phase 1: Collect virtual season IDs
         virtual_ids: list[str] = []
@@ -561,17 +607,16 @@ class JellyfinClient:
 
         if not virtual_ids:
             logger.info(
-                "Virtual season cleanup: nothing to delete" " across %d libraries",
+                "Virtual season cleanup: nothing to delete across %d libraries",
                 len(library_ids),
             )
             return 0
 
-        # Phase 2: Stop the scan task so the refresh queue drains
+        # Stop the scan task as a safety net so externally-triggered scans
+        # (e.g. Jellyfin's own scheduler) don't recreate virtuals mid-delete.
         await self._stop_scan_task()
-        # Give the refresh queue a moment to finish processing
-        await asyncio.sleep(3)
 
-        # Phase 3: Delete the virtual items
+        # Phase 2: Delete the virtual items
         deleted = 0
         for item_id in virtual_ids:
             try:
