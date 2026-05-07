@@ -543,3 +543,201 @@ class TestDetectSeasonFromEntry:
             103, romaji="Kimetsu no Yaiba", english="Demon Slayer Season 3"
         )
         assert TitleMatcher._detect_season_from_entry(entry) == 3
+
+
+# ======================================================================
+# 5. TitleMatcher.build_season_structure
+# ======================================================================
+
+
+class TestBuildSeasonStructure:
+    """Tests for build_season_structure season grouping and primary detection."""
+
+    def setup_method(self) -> None:
+        self.matcher = TitleMatcher()
+
+    def test_picks_correct_primary_among_substring_collisions(self) -> None:
+        """Regression: 'Kaiju No. 8' must beat 'minute! kaiju no. 8'.
+
+        Both groups' titles contain the search title as a substring, so a
+        binary primary flag plus dict-iteration order would pick the wrong
+        one. The fix scores primary candidates by similarity.
+        """
+        candidates = [
+            _make_candidate(
+                1,
+                romaji="Kaijuu 8-gou",
+                english="Kaiju No. 8",
+                episodes=12,
+                season_year=2024,
+                year=2024,
+                month=4,
+            ),
+            _make_candidate(
+                2,
+                romaji="Kaijuu 8-gou 2nd Season",
+                english="Kaiju No. 8 Season 2",
+                episodes=12,
+                season_year=2025,
+                year=2025,
+                month=7,
+            ),
+            _make_candidate(
+                3,
+                romaji="minute! Kaijuu 8-gou",
+                english="minute! Kaiju No. 8",
+                episodes=31,
+                season_year=2024,
+                year=2024,
+                month=4,
+            ),
+        ]
+        structure = self.matcher.build_season_structure(candidates, "Kaiju No. 8")
+        assert 1 in structure
+        # Primary group must be the real Kaiju No. 8, not the "minute!" spinoff.
+        assert structure[1]["id"] == 1
+        assert "minute" not in structure[1]["title"].lower()
+
+    def test_primary_match_via_english_title_when_romaji_differs(self) -> None:
+        """When the AniList romaji differs from the search title, the english
+        title or synonyms should still flag the entry as a primary match.
+        """
+        candidates = [
+            _make_candidate(
+                1,
+                romaji="Tsue to Tsurugi no Wistoria",
+                english="Wistoria: Wand and Sword",
+                episodes=12,
+                season_year=2024,
+                year=2024,
+                month=7,
+            ),
+            _make_candidate(
+                2,
+                romaji="Tsue to Tsurugi no Wistoria Season 2",
+                english="Wistoria: Wand and Sword Season 2",
+                episodes=None,  # currently airing
+                season_year=2026,
+                year=2026,
+                month=4,
+            ),
+        ]
+        structure = self.matcher.build_season_structure(
+            candidates, "Wistoria: Wand and Sword"
+        )
+        assert 1 in structure and 2 in structure
+        assert structure[1]["id"] == 1
+        assert structure[2]["id"] == 2
+
+
+# ======================================================================
+# 6. TitleMatcher.determine_correct_entry_and_episode
+# ======================================================================
+
+
+class TestDetermineCorrectEntryAndEpisode:
+    """Tests for absolute-vs-relative episode mapping."""
+
+    @staticmethod
+    def _make_structure(
+        seasons: list[tuple[int, str, int | None]],
+    ) -> dict[int, dict]:
+        """Build a season_structure dict from (season_num, title, episodes)."""
+        struct: dict[int, dict] = {}
+        for sn, title, eps in seasons:
+            entry = _make_candidate(sn * 100, romaji=title, episodes=eps)
+            struct[sn] = {
+                "entry": entry,
+                "episodes": eps,
+                "title": title,
+                "similarity": 1.0,
+                "id": entry["id"],
+                "release_order": 20240000 + sn,
+            }
+        return struct
+
+    def test_direct_match_when_episode_fits(self) -> None:
+        """Normal case: cr_episode within S1 max → return cr_season directly."""
+        struct = self._make_structure(
+            [(1, "Aldnoah.Zero", 12), (2, "Aldnoah.Zero Part 2", 12)]
+        )
+        entry, season, episode = TitleMatcher.determine_correct_entry_and_episode(
+            "Aldnoah.Zero", cr_season=1, cr_episode=5, season_structure=struct
+        )
+        assert entry is not None
+        assert season == 1
+        assert episode == 5
+
+    def test_absolute_numbering_cr_season_one(self) -> None:
+        """Regression: Aldnoah.Zero S1E16 (absolute) should map to S2E4."""
+        struct = self._make_structure(
+            [(1, "Aldnoah.Zero", 12), (2, "Aldnoah.Zero Part 2", 12)]
+        )
+        entry, season, episode = TitleMatcher.determine_correct_entry_and_episode(
+            "Aldnoah.Zero", cr_season=1, cr_episode=16, season_structure=struct
+        )
+        assert entry is not None
+        assert season == 2
+        assert episode == 4
+
+    def test_absolute_with_unknown_target_season_episodes(self) -> None:
+        """Regression: Wistoria S2E15 (absolute, S2 episodes None) → S2E3."""
+        struct = self._make_structure(
+            [
+                (1, "Tsue to Tsurugi no Wistoria", 12),
+                (2, "Tsue to Tsurugi no Wistoria Season 2", None),
+            ]
+        )
+        entry, season, episode = TitleMatcher.determine_correct_entry_and_episode(
+            "Wistoria: Wand and Sword",
+            cr_season=2,
+            cr_episode=15,
+            season_structure=struct,
+        )
+        assert entry is not None
+        assert season == 2
+        assert episode == 3
+
+    def test_relative_numbering_with_unknown_target_episodes(self) -> None:
+        """When cr_episode is small and target season eps unknown, trust direct."""
+        struct = self._make_structure(
+            [
+                (1, "Tsue to Tsurugi no Wistoria", 12),
+                (2, "Tsue to Tsurugi no Wistoria Season 2", None),
+            ]
+        )
+        entry, season, episode = TitleMatcher.determine_correct_entry_and_episode(
+            "Wistoria: Wand and Sword",
+            cr_season=2,
+            cr_episode=3,
+            season_structure=struct,
+        )
+        assert entry is not None
+        assert season == 2
+        assert episode == 3
+
+    def test_three_seasons_absolute(self) -> None:
+        """Absolute episode 30 with S1=12, S2=12, S3=12 → S3E6."""
+        struct = self._make_structure(
+            [(1, "Show", 12), (2, "Show Season 2", 12), (3, "Show Season 3", 12)]
+        )
+        entry, season, episode = TitleMatcher.determine_correct_entry_and_episode(
+            "Show", cr_season=1, cr_episode=30, season_structure=struct
+        )
+        assert season == 3
+        assert episode == 6
+
+    def test_empty_structure_returns_none(self) -> None:
+        result = TitleMatcher.determine_correct_entry_and_episode(
+            "Anything", cr_season=1, cr_episode=1, season_structure={}
+        )
+        assert result == (None, 0, 0)
+
+    def test_season_one_fallback_when_cr_season_missing(self) -> None:
+        """If cr_season isn't in structure and no absolute mapping fits, fall back."""
+        struct = self._make_structure([(1, "Show", 12)])
+        entry, season, episode = TitleMatcher.determine_correct_entry_and_episode(
+            "Show", cr_season=5, cr_episode=3, season_structure=struct
+        )
+        assert season == 1
+        assert episode == 3

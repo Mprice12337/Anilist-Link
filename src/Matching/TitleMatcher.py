@@ -323,10 +323,20 @@ class TitleMatcher:
 
             result_base = extract_base_series_title(result_title)
 
-            is_primary_match = (
-                no_space_title in result_title.lower().replace(" ", "")
-                or base_title.lower() in result_base.lower()
-            )
+            # Primary match: any of the entry's titles (romaji/english/native/synonyms)
+            # matches the search title. Checking only the primary romaji misses cases
+            # where AniList's romaji differs from the user-facing English title used
+            # in CR/Plex search (e.g. "Kaijuu 8-gou" vs "Kaiju No. 8").
+            is_primary_match = False
+            for tt in _extract_titles(result):
+                tt_no_space = tt.lower().replace(" ", "")
+                if no_space_title and no_space_title in tt_no_space:
+                    is_primary_match = True
+                    break
+                tt_base = extract_base_series_title(tt).lower()
+                if base_title.lower() and base_title.lower() in tt_base:
+                    is_primary_match = True
+                    break
 
             if result_base not in series_groups:
                 series_groups[result_base] = {
@@ -339,13 +349,22 @@ class TitleMatcher:
             if is_primary_match:
                 series_groups[result_base]["is_primary"] = True
 
-        # Find the primary group
+        # Find the primary group. When multiple groups are flagged as primary
+        # (e.g. "Kaiju No. 8" and "minute! kaiju no. 8" both contain the search
+        # title), score by similarity to the search title and pick the best one.
         primary_group: list[dict[str, Any]] | None = None
-        for group_name, group_data in series_groups.items():
-            if group_data["is_primary"]:
-                primary_group = group_data["entries"]
-                logger.debug("Found primary series group: %s", group_name)
-                break
+        primary_candidates = [
+            (name, data) for name, data in series_groups.items() if data["is_primary"]
+        ]
+        if primary_candidates:
+            best_name, best_data = max(
+                primary_candidates,
+                key=lambda nd: self.calculate_title_similarity(
+                    series_title, {"title": {"romaji": nd[0]}}
+                ),
+            )
+            primary_group = best_data["entries"]
+            logger.debug("Found primary series group: %s", best_name)
 
         if not primary_group:
             primary_group = []
@@ -513,85 +532,86 @@ class TitleMatcher:
     ) -> tuple[dict[str, Any] | None, int, int]:
         """Map a CR season+episode to the correct AniList entry.
 
+        Detects absolute-episode numbering (where CR reports a running count
+        across seasons rather than per-season) and converts to per-season.
+        Handles seasons with unknown episode counts (e.g. currently airing S2)
+        by allocating remaining absolute episodes to them.
+
         Returns ``(entry, season_num, episode_num)`` or ``(None, 0, 0)``.
         """
-        if cr_season > 1 and season_structure:
-            base_title_normalized = series_title.lower().replace(" ", "")
+        if not season_structure:
+            return None, 0, 0
 
-            best_entry: dict[str, Any] | None = None
-            best_similarity = 0.0
+        sorted_seasons = sorted(season_structure.keys())
 
-            for season_num, season_data in season_structure.items():
-                entry_title = season_data["title"].lower().replace(" ", "")
+        target_season_eps: int | None = None
+        if cr_season in season_structure:
+            target_season_eps = season_structure[cr_season].get("episodes")
 
-                if (
-                    base_title_normalized in entry_title
-                    or entry_title in base_title_normalized
-                ):
-                    similarity = season_data.get("similarity", 0)
-                    max_episodes = season_data["episodes"] or 999
+        earlier_seasons_total = sum(
+            (season_structure[sn].get("episodes") or 0)
+            for sn in sorted_seasons
+            if sn < cr_season
+        )
 
-                    if season_num == 1 and cr_episode > max_episodes:
-                        continue
+        # Detect absolute numbering:
+        # - cr_episode exceeds the target season's known max, or
+        # - target season eps unknown but cr_episode exceeds all earlier known seasons
+        is_absolute = False
+        if target_season_eps and cr_episode > target_season_eps:
+            is_absolute = True
+        elif (
+            target_season_eps is None
+            and earlier_seasons_total > 0
+            and cr_episode > earlier_seasons_total
+        ):
+            is_absolute = True
 
-                    if similarity > best_similarity:
-                        best_similarity = similarity
-                        best_entry = season_data["entry"]
+        if is_absolute:
+            cumulative = 0
+            for sn in sorted_seasons:
+                sd = season_structure[sn]
+                season_eps = sd.get("episodes")
 
-                        if cr_episode <= max_episodes:
-                            logger.info(
-                                "Found matching series: %s - using as season %d",
-                                season_data["title"],
-                                season_num,
-                            )
-                            return best_entry, season_num, cr_episode
-
-            # Try cumulative episode conversion
-            should_try_cumulative = False
-            if cr_season in season_structure:
-                target_season_eps = season_structure[cr_season].get("episodes") or 999
-                if cr_episode > target_season_eps:
-                    should_try_cumulative = True
-                    logger.debug(
-                        "Episode %d exceeds S%d max (%d), trying cumulative mapping",
-                        cr_episode,
-                        cr_season,
-                        target_season_eps,
-                    )
-
-            if best_entry or should_try_cumulative:
-                cumulative_episodes = 0
-                sorted_seasons = sorted(season_structure.keys())
-
-                for sn in sorted_seasons:
-                    sd = season_structure[sn]
-                    season_episodes = sd["episodes"] or 0
-
-                    if cr_episode <= cumulative_episodes + season_episodes:
-                        episode_in_season = cr_episode - cumulative_episodes
+                if season_eps:
+                    if cr_episode <= cumulative + season_eps:
+                        episode_in_season = cr_episode - cumulative
                         if episode_in_season > 0:
                             logger.info(
-                                "Episode %d maps to Season %d Episode %d",
+                                "Episode %d (absolute) maps to S%dE%d",
                                 cr_episode,
                                 sn,
                                 episode_in_season,
                             )
                             return sd["entry"], sn, episode_in_season
-
-                    cumulative_episodes += season_episodes
+                    cumulative += season_eps
+                else:
+                    # Unknown episode count — allocate the remainder here.
+                    episode_in_season = cr_episode - cumulative
+                    if episode_in_season > 0:
+                        logger.info(
+                            "Episode %d (absolute) maps to S%dE%d "
+                            "(unknown season size)",
+                            cr_episode,
+                            sn,
+                            episode_in_season,
+                        )
+                        return sd["entry"], sn, episode_in_season
 
         # Direct season lookup
         if cr_season in season_structure:
             sd = season_structure[cr_season]
-            max_episodes = sd["episodes"] or cr_episode
-            capped_episode = min(cr_episode, max_episodes)
-            logger.warning(
-                "Could not map episode %d, using S%dE%d",
-                cr_episode,
-                cr_season,
-                capped_episode,
-            )
-            return sd["entry"], cr_season, capped_episode
+            if target_season_eps:
+                capped_episode = min(cr_episode, target_season_eps)
+                if cr_episode > target_season_eps:
+                    logger.warning(
+                        "Could not map episode %d, using S%dE%d",
+                        cr_episode,
+                        cr_season,
+                        capped_episode,
+                    )
+                return sd["entry"], cr_season, capped_episode
+            return sd["entry"], cr_season, cr_episode
 
         # Season 1 fallback
         if 1 in season_structure:
