@@ -436,8 +436,10 @@
         <td>
           <button type="button" class="btn btn-secondary btn-sm"
                   id="undo-btn-{{ entry.id }}"
+                  data-log-id="{{ entry.id }}"
+                  data-show-title="{{ entry.show_title or '' }}"
                   {% if entry.undone_at %}disabled{% endif %}
-                  onclick="event.stopPropagation(); undoEntry({{ entry.id }}, {{ entry.show_title | tojson }})">
+                  onclick="event.stopPropagation(); undoEntry(this.dataset.logId, this.dataset.showTitle)">
             Undo
           </button>
         </td>
