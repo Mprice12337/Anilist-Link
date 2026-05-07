@@ -444,23 +444,47 @@ class WatchSyncer:
             best_match: dict[str, Any] | None = None
             best_similarity = 0.0
 
+            # Allowed AniList formats for short-form / movie entries. OVAs
+            # are included because CR labels sequel OVAs (e.g. "Aldnoah.Zero:
+            # Ame no Danshou") with is_movie=True and the OVA entry on
+            # AniList has format=OVA.
+            allowed_formats = {"MOVIE", "SPECIAL", "OVA", "ONA"}
+
             for query in search_queries:
                 results = await self._anilist.search_anime(query)
                 if not results:
                     continue
                 for result in results:
                     fmt = (result.get("format", "") or "").upper()
-                    if fmt not in ["MOVIE", "SPECIAL"]:
+                    if fmt not in allowed_formats:
                         continue
 
-                    similarity = self._matcher.calculate_title_similarity(
+                    series_sim = self._matcher.calculate_title_similarity(
                         series_title, result
                     )
+
+                    # When CR provides a specific season_title (the actual
+                    # OVA/movie name), prefer that as the ranking signal —
+                    # using max() lets a generic series-name match swamp
+                    # the specific signal and pick the wrong entry (e.g.
+                    # the recap movie "(Re+)" beating the sequel OVA).
                     if movie_title and movie_title != series_title:
-                        movie_sim = self._matcher.calculate_title_similarity(
+                        specific_sim = self._matcher.calculate_title_similarity(
                             movie_title, result
                         )
-                        similarity = max(similarity, movie_sim)
+                        # Require the candidate to also be in the right
+                        # franchise, not a same-named unrelated movie.
+                        if series_sim < 0.5:
+                            continue
+                        similarity = specific_sim
+                    else:
+                        similarity = series_sim
+
+                    # Light format-priority bonus: prefer MOVIE > OVA > SPECIAL
+                    # when similarities are otherwise close, since CR
+                    # usually labels actual movies as is_movie=True.
+                    if fmt == "MOVIE":
+                        similarity += 0.05
 
                     if similarity > best_similarity and similarity >= 0.75:
                         best_similarity = similarity

@@ -137,15 +137,20 @@ def create_app(
 
     # Activity tracking middleware. Marks the dashboard as "recently
     # active" on user-driven requests so the adaptive watchlist loop
-    # only polls AniList while someone is using the UI. /api/progress
-    # is excluded because the floating progress widget polls it every
-    # 2s — counting that as activity would defeat the dormant detection.
+    # only polls AniList while someone is using the UI. Background polls
+    # from base.html (/api/progress every 2s, /api/notifications every
+    # 5s) are excluded so a tab left open while the user is AFK still
+    # transitions to dormant.
+    _BACKGROUND_POLL_PATHS = {
+        "/api/progress",
+        "/api/notifications",
+        "/health",
+    }
+
     @app.middleware("http")
     async def _track_activity(request: Request, call_next):  # type: ignore[no-untyped-def]
         path = request.url.path
-        if not (
-            path.startswith("/static") or path == "/api/progress" or path == "/health"
-        ):
+        if not (path.startswith("/static") or path in _BACKGROUND_POLL_PATHS):
             app.state.activity_tracker.mark_active()
         return await call_next(request)
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import httpx
 
@@ -12,6 +13,17 @@ from src.Database.Connection import DatabaseManager
 from src.Web.ActivityTracker import ActivityTracker
 
 logger = logging.getLogger(__name__)
+
+# Module-level timestamp (monotonic) of the last successful refresh. Lets
+# pre-job, mid-job, and activity-loop callers coordinate so we never
+# double-refresh within a single staleness window.
+_last_refresh_at: float = 0.0
+
+
+def _seconds_since_last_refresh() -> float:
+    if _last_refresh_at == 0.0:
+        return float("inf")
+    return time.monotonic() - _last_refresh_at
 
 
 async def _refresh_user(
@@ -33,8 +45,23 @@ async def _refresh_user(
 async def watchlist_refresh_task(
     db: DatabaseManager,
     anilist_client: AniListClient,
+    *,
+    max_age_seconds: float | None = None,
 ) -> None:
-    """Refresh the local AniList watchlist cache for all linked users."""
+    """Refresh the local AniList watchlist cache for all linked users.
+
+    When *max_age_seconds* is set, the refresh is skipped entirely if the
+    cache was refreshed more recently than that. Used by pre-job hooks
+    and the activity loop to coordinate without redundant requests.
+    """
+    if max_age_seconds is not None and _seconds_since_last_refresh() < max_age_seconds:
+        logger.debug(
+            "Watchlist refresh skipped — last refresh was %.0fs ago (max %.0fs)",
+            _seconds_since_last_refresh(),
+            max_age_seconds,
+        )
+        return
+
     users = await db.get_users_by_service("anilist")
     if not users:
         logger.debug("Watchlist refresh skipped — no AniList accounts linked")
@@ -58,6 +85,9 @@ async def watchlist_refresh_task(
             )
 
     await asyncio.gather(*(_safe_refresh(u) for u in users))
+
+    global _last_refresh_at
+    _last_refresh_at = time.monotonic()
 
 
 async def watchlist_activity_loop(
@@ -96,7 +126,11 @@ async def watchlist_activity_loop(
             continue
 
         try:
-            await watchlist_refresh_task(db, anilist_client)
+            # Coordinate with pre-job hooks: if a job just refreshed, no
+            # need to do it again immediately.
+            await watchlist_refresh_task(
+                db, anilist_client, max_age_seconds=interval_s * 0.8
+            )
         except Exception:
             logger.exception("Watchlist refresh loop iteration failed")
 
