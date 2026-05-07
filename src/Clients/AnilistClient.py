@@ -244,6 +244,13 @@ class RateLimiter:
         self._lock = asyncio.Lock()
         # Exposed for external reads (e.g. rate_limit_remaining property)
         self._remaining: int = int(capacity)
+        # Monotonic time at which AniList's fixed-window quota resets.
+        # AniList isn't actually a token bucket — `remaining` stays at the
+        # current value until X-RateLimit-Reset elapses, then jumps back to
+        # `limit`. We track that boundary so local refill never lets a
+        # caller fire a request before the server's window has actually
+        # reopened.
+        self._reset_at_monotonic: float | None = None
 
     def update_from_headers(self, headers: httpx.Headers) -> None:
         """Adapt capacity/refill when AniList changes its rate limit."""
@@ -269,6 +276,18 @@ class RateLimiter:
             if self._tokens > self._remaining:
                 self._tokens = float(self._remaining)
 
+        raw_reset = headers.get("X-RateLimit-Reset")
+        if raw_reset is not None:
+            try:
+                reset_epoch = float(raw_reset)
+                seconds_until_reset = reset_epoch - time.time()
+                if seconds_until_reset > 0:
+                    self._reset_at_monotonic = time.monotonic() + seconds_until_reset
+                else:
+                    self._reset_at_monotonic = None
+            except (ValueError, TypeError):
+                pass
+
         logger.debug(
             "Rate headers: limit=%d, remaining=%d, tokens=%.1f, refill=%.2f/s",
             self._limit,
@@ -289,14 +308,30 @@ class RateLimiter:
         async with self._lock:
             self._refill()
 
-            if self._tokens < min_tokens:
-                deficit = min_tokens - self._tokens
-                wait = deficit / self._refill_rate
+            while self._tokens < min_tokens:
+                # Two wait regimes:
+                # 1) Inside a known-exhausted server window — wait until
+                #    X-RateLimit-Reset, since the server won't let any more
+                #    requests through regardless of how full our bucket is.
+                # 2) No window info (or window already passed) — fall back
+                #    to plain token-bucket math.
+                now = time.monotonic()
+                if (
+                    self._reset_at_monotonic is not None
+                    and now < self._reset_at_monotonic
+                ):
+                    wait = self._reset_at_monotonic - now + 0.5
+                    reason = "server window reset"
+                else:
+                    deficit = min_tokens - self._tokens
+                    wait = deficit / self._refill_rate
+                    reason = "bucket refill"
                 logger.info(
-                    "Rate limiter: %s waiting %.1fs "
+                    "Rate limiter: %s waiting %.1fs for %s "
                     "(tokens=%.1f, need=%.0f, refill=%.2f/s)",
                     "auth" if high_priority else "scan",
                     wait,
+                    reason,
                     self._tokens,
                     min_tokens,
                     self._refill_rate,
@@ -305,16 +340,35 @@ class RateLimiter:
                 self._refill()
 
             self._tokens -= 1.0
+            # Track local remaining too so concurrent acquires within the
+            # same window stay honest before the next response updates us.
+            if self._remaining > 0:
+                self._remaining -= 1
 
     def _refill(self) -> None:
-        """Add tokens based on elapsed time since last refill."""
+        """Add tokens based on elapsed time since last refill.
+
+        Honors the server's fixed-window reset boundary: while the window
+        is still open, tokens cannot exceed `_remaining`; once the reset
+        time passes, the bucket snaps back to full capacity.
+        """
         now = time.monotonic()
         elapsed = now - self._last_refill
-        self._tokens = min(
-            self._capacity,
-            self._tokens + elapsed * self._refill_rate,
-        )
         self._last_refill = now
+
+        # Window has reset — restore full capacity, clear the marker.
+        if self._reset_at_monotonic is not None and now >= self._reset_at_monotonic:
+            self._tokens = self._capacity
+            self._remaining = self._limit
+            self._reset_at_monotonic = None
+            return
+
+        refilled = self._tokens + elapsed * self._refill_rate
+        cap = self._capacity
+        if self._reset_at_monotonic is not None:
+            # Don't outrun the server's fixed-window counter.
+            cap = min(cap, float(self._remaining))
+        self._tokens = min(cap, refilled)
 
 
 # ---------------------------------------------------------------------------
@@ -679,9 +733,12 @@ class AniListClient:
                     if self.on_rate_limit_wait:
                         self.on_rate_limit_wait(retry_after)
                     await asyncio.sleep(retry_after)
-                    # After sleeping, restore token bucket so acquire()
-                    # doesn't double-wait.
+                    # After sleeping past Retry-After the server window has
+                    # reset; restore the bucket and clear the reset marker
+                    # so acquire() doesn't double-wait on the old boundary.
                     self._limiter._tokens = self._limiter._capacity
+                    self._limiter._remaining = self._limiter._limit
+                    self._limiter._reset_at_monotonic = None
                     self._limiter._last_refill = time.monotonic()
                     continue
 

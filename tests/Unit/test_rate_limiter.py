@@ -164,3 +164,84 @@ class TestSleepOnLowTokens:
             await rl.acquire(high_priority=True)
             assert len(sleep_durations) > 0
             assert sleep_durations[0] > 0
+
+
+@pytest.mark.asyncio
+class TestFixedWindowReset:
+    """Regression: AniList uses fixed-window rate limiting. The bucket
+    must not let requests through before X-RateLimit-Reset elapses."""
+
+    async def test_reset_header_caps_refill_until_window_closes(self) -> None:
+        """While the server window is open and remaining=0, refill is capped."""
+        rl = RateLimiter(capacity=30.0)
+        reset_in_seconds = 27
+        future_epoch = time.time() + reset_in_seconds
+        rl.update_from_headers(
+            _make_headers(
+                **{
+                    "X-RateLimit-Limit": "30",
+                    "X-RateLimit-Remaining": "0",
+                    "X-RateLimit-Reset": str(int(future_epoch)),
+                }
+            )
+        )
+        # Bucket synced down to 0
+        assert rl._tokens == 0.0
+        # Simulate ~10 seconds of elapsed time
+        rl._last_refill -= 10.0
+        rl._refill()
+        # Without the fix, tokens would be ~5.0 (10s × 0.5/s).
+        # With the fix, tokens stay at 0 until the reset window closes.
+        assert rl._tokens == 0.0
+
+    async def test_acquire_waits_for_reset_when_window_exhausted(self) -> None:
+        rl = RateLimiter(capacity=30.0)
+        reset_in_seconds = 25
+        future_epoch = time.time() + reset_in_seconds
+        rl.update_from_headers(
+            _make_headers(
+                **{
+                    "X-RateLimit-Limit": "30",
+                    "X-RateLimit-Remaining": "0",
+                    "X-RateLimit-Reset": str(int(future_epoch)),
+                }
+            )
+        )
+
+        sleep_durations: list[float] = []
+
+        async def fake_sleep(duration: float) -> None:
+            sleep_durations.append(duration)
+            # Advance the limiter's clock so the reset window appears to close.
+            rl._reset_at_monotonic = None
+            rl._tokens = rl._capacity
+            rl._remaining = rl._limit
+
+        with patch("asyncio.sleep", side_effect=fake_sleep):
+            await rl.acquire(high_priority=False)
+
+        # First wait should be roughly the reset duration, not the bucket
+        # refill duration (which would be ~8s for 4 tokens at 0.5/s).
+        # Allow 1.5s of slack for int() truncation of the epoch + clock skew.
+        assert sleep_durations
+        assert sleep_durations[0] >= reset_in_seconds - 1.5
+        assert sleep_durations[0] > 15.0  # well above bucket-refill wait of ~8s
+
+    async def test_window_resets_after_boundary_elapses(self) -> None:
+        rl = RateLimiter(capacity=30.0)
+        rl.update_from_headers(
+            _make_headers(
+                **{
+                    "X-RateLimit-Limit": "30",
+                    "X-RateLimit-Remaining": "0",
+                    # Reset already in the past
+                    "X-RateLimit-Reset": str(int(time.time()) - 1),
+                }
+            )
+        )
+        # Reset already passed → marker cleared
+        assert rl._reset_at_monotonic is None
+        # Refill should now restore full capacity normally
+        rl._last_refill -= 60.0
+        rl._refill()
+        assert rl._tokens == rl._capacity
