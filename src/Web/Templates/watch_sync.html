@@ -207,7 +207,7 @@
   <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.75rem">
     <div style="display:flex;align-items:center;gap:0.75rem">
       <h2 style="margin:0;font-size:1.1rem">Sync History</h2>
-      <span class="text-muted" style="font-size:0.85rem">(last 100 per source)</span>
+      <span class="text-muted" style="font-size:0.85rem">(last 100 per source, merged by date)</span>
     </div>
     <div style="display:flex;gap:0.5rem;align-items:center">
       <select id="history-source-filter" class="form-input" style="height:2rem;font-size:0.82rem;min-width:120px"
@@ -220,7 +220,7 @@
     </div>
   </div>
   <div class="card-body" style="padding:0">
-    {% if sync_log or cr_sync_log %}
+    {% if merged_log %}
     <div style="overflow-x:auto">
       <table class="data-table" style="margin:0">
         <thead>
@@ -234,18 +234,20 @@
           </tr>
         </thead>
         <tbody id="sync-log-tbody">
-          {# ── Plex / Jellyfin entries ── #}
-          {% for entry in sync_log %}
-          <tr id="log-row-{{ entry.id }}" class="sync-history-row" data-source="{{ entry.source }}"
-              data-entry-idx="ws-{{ loop.index0 }}" style="cursor:pointer;{% if entry.undone_at %}opacity:0.55;{% endif %}"
-              onclick="openSyncDetail('ws-{{ loop.index0 }}')">
+          {% for entry in merged_log %}
+          {% set is_cr = entry.source == 'crunchyroll' %}
+          {% set row_id = (is_cr and 'cr-log-row-' or 'log-row-') ~ entry.id %}
+          {% set entry_key = (is_cr and 'cr-' or 'ws-') ~ entry.id %}
+          <tr id="{{ row_id }}" class="sync-history-row" data-source="{{ entry.source }}"
+              data-entry-idx="{{ entry_key }}" style="cursor:pointer;{% if entry.undone_at %}opacity:0.55;{% endif %}"
+              onclick="openSyncDetail('{{ entry_key }}')">
             <td style="white-space:nowrap">
               {% if entry.direction == 'to_media' %}
               <span class="direction-arrow" title="AniList → {{ entry.source|title }}">↓</span>
               {% else %}
               <span class="direction-arrow" title="{{ entry.source|title }} → AniList">↑</span>
               {% endif %}
-              <span class="badge {% if entry.source == 'plex' %}badge-orange{% else %}badge-blue{% endif %}">
+              <span class="badge {% if entry.source == 'plex' %}badge-orange{% elif entry.source == 'jellyfin' %}badge-blue{% else %}badge-cr{% endif %}">
                 {{ entry.source|title }}
               </span>
             </td>
@@ -269,49 +271,16 @@
               {% if entry.direction == 'to_media' %}
               {% elif entry.undone_at %}
               <span class="text-muted" style="font-size:0.8rem">Undone</span>
+              {% elif is_cr %}
+              <button class="btn btn-sm btn-danger"
+                      onclick="event.stopPropagation(); undoCrEntry({{ entry.id }})"
+                      id="cr-undo-btn-{{ entry.id }}">
+                Undo
+              </button>
               {% else %}
               <button class="btn btn-sm btn-danger"
                       onclick="event.stopPropagation(); undoEntry({{ entry.id }})"
                       id="undo-btn-{{ entry.id }}">
-                Undo
-              </button>
-              {% endif %}
-            </td>
-          </tr>
-          {% endfor %}
-
-          {# ── Crunchyroll entries ── #}
-          {% for entry in cr_sync_log %}
-          <tr id="cr-log-row-{{ entry.id }}" class="sync-history-row" data-source="crunchyroll"
-              data-entry-idx="cr-{{ loop.index0 }}" style="cursor:pointer;{% if entry.undone_at %}opacity:0.55;{% endif %}"
-              onclick="openSyncDetail('cr-{{ loop.index0 }}')">
-            <td style="white-space:nowrap">
-              <span class="direction-arrow" title="Crunchyroll → AniList">↑</span>
-              <span class="badge badge-cr">Crunchyroll</span>
-            </td>
-            <td class="sync-title-cell">
-              {{ render_title(entry, title_display, entry.show_title or "—") }}
-            </td>
-            <td style="white-space:nowrap">
-              {% if entry.before_status %}
-              <span class="text-muted">{{ entry.before_status }}</span> ep {{ entry.before_progress }}
-              {% else %}
-              <span class="text-muted">new</span>
-              {% endif %}
-            </td>
-            <td style="white-space:nowrap">
-              <strong>{{ entry.after_status }}</strong> ep {{ entry.after_progress }}
-            </td>
-            <td style="white-space:nowrap;font-size:0.8rem" class="text-muted">
-              {{ entry.applied_at[:16] if entry.applied_at else '—' }}
-            </td>
-            <td>
-              {% if entry.undone_at %}
-              <span class="text-muted" style="font-size:0.8rem">Undone</span>
-              {% else %}
-              <button class="btn btn-sm btn-danger"
-                      onclick="event.stopPropagation(); undoCrEntry({{ entry.id }})"
-                      id="cr-undo-btn-{{ entry.id }}">
                 Undo
               </button>
               {% endif %}
@@ -435,9 +404,12 @@
   "use strict";
 
   // ── Entry data for media detail modal ─────────────────────────────── //
+  // Keyed by "<source-prefix>-<entry.id>" matching the row's entry-idx
+  // attribute. The merged-history loop renders rows in date order across
+  // sources, so we can't index by a flat array position any more.
   var _wsEntries = {
     {% for entry in sync_log %}
-    "ws-{{ loop.index0 }}": {{ {
+    "ws-{{ entry.id }}": {{ {
       "anilist_id": entry.anilist_id,
       "anilist_title": entry.show_title,
       "title_romaji": entry.title_romaji or entry.show_title,
@@ -455,7 +427,7 @@
     } | tojson }},
     {% endfor %}
     {% for entry in cr_sync_log %}
-    "cr-{{ loop.index0 }}": {{ {
+    "cr-{{ entry.id }}": {{ {
       "anilist_id": entry.anilist_id,
       "anilist_title": entry.show_title,
       "title_romaji": entry.title_romaji or entry.show_title,

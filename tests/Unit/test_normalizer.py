@@ -216,7 +216,10 @@ class TestExtractBaseSeriesTitle:
                 "Re:Zero kara Hajimeru Isekai Seikatsu 2nd Season Part 2",
                 "Re:Zero kara Hajimeru Isekai Seikatsu",
             ),
-            ("Re:Zero kara Hajimeru Isekai Seikatsu", "Re:Zero kara Hajimeru Isekai Seikatsu"),
+            (
+                "Re:Zero kara Hajimeru Isekai Seikatsu",
+                "Re:Zero kara Hajimeru Isekai Seikatsu",
+            ),
             ("Steins;Gate 0", "Steins;Gate 0"),
         ],
     )

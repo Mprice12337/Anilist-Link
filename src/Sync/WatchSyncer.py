@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from src.Clients.AnilistClient import AniListClient
@@ -20,6 +21,25 @@ from src.Matching.TitleMatcher import TitleMatcher, get_primary_title
 from src.Utils.Config import AppConfig
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class CrunchyrollSyncProgress:
+    """Tracks progress of an in-flight CR→AniList apply sync.
+
+    Read by ``GET /api/progress`` so the floating progress widget can
+    show the user that a CR sync is running. The auto-approve "Sync Now"
+    button on /watch-sync was previously invisible — only the logs
+    showed it, which made the dashboard look idle for the duration.
+    """
+
+    status: str = "pending"  # pending | authenticating | scanning | complete | error
+    current_page: int = 0
+    max_pages: int = 0
+    entries_found: int = 0
+    updates: int = 0
+    detail: str = ""
+    error: str = ""
 
 
 class WatchSyncer:
@@ -33,6 +53,7 @@ class WatchSyncer:
         cr_client: CrunchyrollClient,
         config: AppConfig,
         dry_run: bool = False,
+        progress: CrunchyrollSyncProgress | None = None,
     ) -> None:
         self._db = db
         self._anilist = anilist_client
@@ -40,6 +61,7 @@ class WatchSyncer:
         self._cr = cr_client
         self._config = config
         self._dry_run = dry_run
+        self._progress = progress
 
         self._sync_results: dict[str, int] = {}
         self._season_structure_cache: dict[str, dict[int, dict[str, Any]]] = {}
@@ -86,17 +108,32 @@ class WatchSyncer:
         total_processed = 0
         consecutive_high_skip_pages = 0
 
+        if self._progress:
+            self._progress.status = "scanning"
+            self._progress.max_pages = max_pages
+
         while page_num < max_pages:
             page_num += 1
             logger.info("Processing page %d...", page_num)
+            if self._progress:
+                self._progress.current_page = page_num
+                self._progress.detail = f"Fetching page {page_num} from Crunchyroll…"
 
             episodes = await self._cr.get_watch_history_page(page_num)
             if not episodes:
                 logger.info("No more episodes to process")
                 break
 
+            if self._progress:
+                self._progress.entries_found += len(episodes)
+                self._progress.detail = (
+                    f"Page {page_num} — processing {len(episodes)} episodes"
+                )
+
             page_stats = await self._process_page_episodes(episodes, users)
             total_processed += len(episodes)
+            if self._progress:
+                self._progress.updates += page_stats["successful_updates"]
 
             total_items = (
                 page_stats["successful_updates"]

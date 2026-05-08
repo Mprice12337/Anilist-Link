@@ -25,7 +25,7 @@ from src.Sync.WatchlistRefresh import (
     periodic_refresh_during_job,
     watchlist_refresh_task,
 )
-from src.Sync.WatchSyncer import WatchSyncer
+from src.Sync.WatchSyncer import CrunchyrollSyncProgress, WatchSyncer
 from src.Utils.Config import AppConfig, load_config, load_config_from_db_settings
 from src.Utils.Logging import get_logger, setup_logging
 from src.Web.App import create_app
@@ -39,6 +39,7 @@ async def crunchyroll_sync_task(
     db: DatabaseManager,
     anilist_client: AniListClient,
     dry_run: bool = False,
+    progress: CrunchyrollSyncProgress | None = None,
 ) -> None:
     """Run a single Crunchyroll → AniList sync cycle."""
     if not config.crunchyroll.email:
@@ -46,6 +47,9 @@ async def crunchyroll_sync_task(
         return
 
     logger.info("Starting Crunchyroll sync%s", " (DRY RUN)" if dry_run else "")
+    if progress:
+        progress.status = "authenticating"
+        progress.detail = "Refreshing AniList watchlist…"
 
     # Pre-job refresh so the sync starts with a fresh AniList watchlist.
     try:
@@ -64,7 +68,13 @@ async def crunchyroll_sync_task(
 
     title_matcher = create_title_matcher()
     syncer = WatchSyncer(
-        db, anilist_client, title_matcher, cr_client, config, dry_run=dry_run
+        db,
+        anilist_client,
+        title_matcher,
+        cr_client,
+        config,
+        dry_run=dry_run,
+        progress=progress,
     )
 
     # Mid-job refresh: keep the watchlist fresh during long-running syncs
@@ -78,16 +88,27 @@ async def crunchyroll_sync_task(
     )
 
     try:
+        if progress:
+            progress.detail = "Authenticating with Crunchyroll…"
         authenticated = await cr_client.authenticate()
         if not authenticated:
             logger.error("Crunchyroll authentication failed")
+            if progress:
+                progress.status = "error"
+                progress.error = "Crunchyroll authentication failed"
             return
 
         await syncer.run_sync()
         if not dry_run:
             await watchlist_refresh_task(db, anilist_client)
-    except Exception:
+        if progress:
+            progress.status = "complete"
+            progress.detail = f"Sync complete — {progress.updates} update(s) applied"
+    except Exception as exc:
         logger.exception("Crunchyroll sync error")
+        if progress:
+            progress.status = "error"
+            progress.error = str(exc)
     finally:
         mid_job_task.cancel()
         try:
@@ -273,7 +294,7 @@ async def main() -> None:
     config = load_config()
     setup_logging(config.debug, config.log_path)
 
-    logger.info("Anilist-Link v0.1.0 starting")
+    logger.info("Anilist-Link v1.0.2 starting")
     logger.info("Debug mode: %s", config.debug)
 
     # Phase 2: initialize database and run migrations
@@ -304,7 +325,9 @@ async def main() -> None:
             logger.debug("Crunchyroll auto-sync is disabled — skipping scheduled run")
             return
         if cfg.crunchyroll.auto_approve:
-            await crunchyroll_sync_task(cfg, db, app.state.anilist_client)
+            # Reuse the progress-tracked wrapper so the floating widget
+            # also surfaces scheduled syncs.
+            await app.state.cr_sync_task()
         else:
             await crunchyroll_preview_task(cfg, db, app.state.anilist_client)
 
@@ -508,10 +531,26 @@ async def main() -> None:
         plex_watch_sync_func=_plex_watch_sync,
     )
 
-    # Expose callables for ad-hoc triggering (used by manual-run endpoints)
-    app.state.cr_sync_task = lambda dry_run=False: crunchyroll_sync_task(
-        app.state.config, db, app.state.anilist_client, dry_run=dry_run
-    )
+    # Expose callables for ad-hoc triggering (used by manual-run endpoints).
+    # Wrap the apply path so each invocation publishes its own
+    # CrunchyrollSyncProgress object on app.state — read by /api/progress
+    # to drive the floating progress widget.
+    async def _cr_sync_with_progress(dry_run: bool = False) -> None:
+        progress = CrunchyrollSyncProgress()
+        app.state.cr_sync_progress = progress
+        try:
+            await crunchyroll_sync_task(
+                app.state.config,
+                db,
+                app.state.anilist_client,
+                dry_run=dry_run,
+                progress=progress,
+            )
+        finally:
+            if progress.status not in ("error", "complete"):
+                progress.status = "complete"
+
+    app.state.cr_sync_task = _cr_sync_with_progress
     app.state.cr_preview_task = lambda: crunchyroll_preview_task(
         app.state.config, db, app.state.anilist_client
     )

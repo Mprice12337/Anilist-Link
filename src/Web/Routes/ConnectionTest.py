@@ -383,6 +383,39 @@ async def get_progress(request: Request) -> JSONResponse:
             }
         )
 
+    # Crunchyroll apply sync (auto-approve "Sync Now" from /watch-sync, plus
+    # scheduled cr_sync_task runs).
+    cr_sync = getattr(app_state, "cr_sync_progress", None)
+    if cr_sync and getattr(cr_sync, "status", "") not in (
+        "",
+        "complete",
+        "error",
+    ):
+        page = getattr(cr_sync, "current_page", 0)
+        max_pages = getattr(cr_sync, "max_pages", 0)
+        # Authentication phase has no page number yet — show indeterminate.
+        if cr_sync.status == "authenticating" or not max_pages:
+            pct = 5 if cr_sync.status == "authenticating" else 0
+            status_label = (
+                "Authenticating…" if cr_sync.status == "authenticating" else "Starting…"
+            )
+        else:
+            pct = int(page / max_pages * 100) if max_pages else 0
+            status_label = f"Page {page}/{max_pages}"
+        tasks.append(
+            {
+                "id": "cr_sync",
+                "type": "CR Sync",
+                "label": "Crunchyroll → AniList",
+                "status": status_label,
+                "percent": pct,
+                "detail": (
+                    getattr(cr_sync, "detail", "")
+                    or f"{getattr(cr_sync, 'updates', 0)} update(s) so far"
+                ),
+            }
+        )
+
     # Mark tasks cancellable if their id matches a registered cancellable task.
     # The convention is that a coroutine passed ``task_key=<id>`` to
     # spawn_background_task uses the same id as its /api/progress entry.

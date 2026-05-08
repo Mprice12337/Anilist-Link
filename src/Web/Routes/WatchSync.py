@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -388,6 +389,23 @@ async def watch_sync_page(request: Request):  # type: ignore[return]
     sync_log = await _enrich_log_entries(db, sync_log)
     cr_sync_log = await _enrich_log_entries(db, cr_sync_log)
 
+    # Merge into a single history list sorted by applied_at descending,
+    # so Plex/Jellyfin/Crunchyroll entries interleave by chronology
+    # instead of being grouped by source.
+    merged_log: list[dict[str, Any]] = []
+    for entry in sync_log:
+        # watch_sync_log entries already have entry["source"] in {"plex","jellyfin"}
+        # and entry["direction"] in {"to_media","from_media"}.
+        merged_log.append(entry)
+    for entry in cr_sync_log:
+        # cr_sync_log has no source/direction columns — synthesize them so
+        # the template can render every row with one shared loop.
+        ce = dict(entry)
+        ce["source"] = "crunchyroll"
+        ce["direction"] = "from_media"
+        merged_log.append(ce)
+    merged_log.sort(key=lambda e: e.get("applied_at") or "", reverse=True)
+
     title_display = await db.get_setting("app.title_display") or "romaji"
 
     return templates.TemplateResponse(
@@ -406,6 +424,7 @@ async def watch_sync_page(request: Request):  # type: ignore[return]
             "cr_configured": cr_configured,
             "cr_auto_approve": cr_auto_approve,
             "cr_sync_log": cr_sync_log,
+            "merged_log": merged_log,
             "title_display": title_display,
         },
     )
